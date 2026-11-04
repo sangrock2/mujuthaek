@@ -56,7 +56,8 @@ SPECS = (
     ),
     ToolSpec(
         "validate_item",
-        "고친 항목을 넣어 검증기를 돌리고 그 항목에 남는 문제를 돌려줍니다. item_json은 항목 JSON, quotes는 항목이 쓴 인용(ref·text)입니다.",
+        "고친 항목을 넣어 검증기를 돌리고 그 항목에 남는 문제를 돌려줍니다. item_json은 바꿀 칸만 적은 JSON(나머지는 처음 값), "
+        "quotes는 새로 쓴 인용(ref·text)입니다.",
         _object(
             {
                 "item_json": {"type": "string"},
@@ -66,7 +67,8 @@ SPECS = (
     ),
     ToolSpec(
         "submit_fix",
-        "고친 항목을 제출하고 끝냅니다. 원문으로 확인하지 못했으면 give_up에 이유를 적고 item_json은 빈 글자로 둡니다(처음 값이 유지됩니다).",
+        "고친 항목을 제출하고 끝냅니다. item_json은 바꿀 칸만 적은 JSON입니다(나머지는 처음 값). "
+        "원문으로 확인하지 못했으면 give_up에 이유를 적고 item_json은 빈 글자로 둡니다(처음 값이 유지됩니다).",
         _object(
             {
                 "item_json": {"type": "string"},
@@ -76,6 +78,7 @@ SPECS = (
         ),
     ),
 )
+FINAL_SPECS = tuple(spec for spec in SPECS if spec.name == "submit_fix")  # 마지막 차례에 쓸 수 있는 도구
 
 # validate_item이 부르는 검사: (항목, 인용 목록) → 그 항목에 남는 문제 문구들
 ItemCheck = Callable[[Any, list[dict[str, str]]], list[str]]
@@ -90,18 +93,30 @@ class Submission:
 
 @dataclass
 class RepairTools:
-    """한 항목을 고치는 동안 쓰는 도구 묶음입니다. 원문 색인은 처음 쓸 때 한 번 만듭니다."""
+    """한 항목을 고치는 동안 쓰는 도구 묶음입니다. 원문 색인은 처음 쓸 때 한 번 만듭니다.
+
+    base_item·base_quotes(2026-11-05 첫 비교: 큰 공급 묶음·자격 항목을 통째로 다시 내다 다른 칸을 깨뜨려 버려짐):
+      item_json은 바꿀 칸만 적은 조각이어도 되고, 처음 항목에 덮어써 합칩니다(객체는 칸마다, 목록·값은 통째로).
+      합친 항목이 가리키는 처음 인용(quoteRefs)은 제출 인용에 자동으로 붙입니다.
+    known_codes: 처음부터 있던 문제 코드. 제출한 항목에 처음에 없던 문제가 생기면 한 번은 받지 않고 문제를 돌려줘 고칠 기회를 줍니다
+      (마지막 차례면 그대로 받습니다. 채택은 어차피 recheck.adopt가 정합니다).
+    final: 마지막 차례. 이때는 submit_fix만 쓸 수 있습니다(검색만 하다 끝나지 않게)."""
 
     material: ExtractionMaterial
     check: ItemCheck
+    base_item: Any | None = None
+    base_quotes: dict[str, str] = field(default_factory=dict)
+    known_codes: frozenset[str] = frozenset()
+    final: bool = False
     submission: Submission | None = None
     calls: dict[str, int] = field(default_factory=dict)  # 도구별 호출 수(기록용)
+    rejected_submissions: int = 0  # 새 문제로 한 번 돌려보낸 제출 수(기록용)
     _index: NormalizedText | None = None
     _pages: tuple[list[int], list[int], list[int]] | None = None
 
     @property
     def specs(self) -> tuple[ToolSpec, ...]:
-        return SPECS
+        return FINAL_SPECS if self.final else SPECS
 
     def run(self, call: ToolCall) -> str:
         """도구 하나를 실행해 JSON 글자를 돌려줍니다. 어떤 입력에도 예외를 내지 않습니다."""
@@ -109,6 +124,8 @@ class RepairTools:
         handler = getattr(self, "_" + call.name, None)
         if call.name not in {spec.name for spec in SPECS} or handler is None:
             return _error("UNKNOWN_TOOL", f"없는 도구입니다: {call.name[:40]}")
+        if call.name not in {spec.name for spec in self.specs}:
+            return _error("FINAL_TURN", "마지막 차례입니다. submit_fix로 고친 항목을 내거나 give_up에 이유를 적습니다.")
         try:
             args = json.loads(call.arguments)
         except ValueError:
@@ -159,20 +176,37 @@ class RepairTools:
         return {"found": False, "near": self._near(quote)}
 
     def _validate_item(self, item_json: str, quotes: list[dict[str, str]]) -> dict[str, Any]:
-        item = _parse_item(item_json)
-        if isinstance(item, str):
-            return {"error": "BAD_ITEM", "message": item}
-        return {"problems": self.check(item, _clean_quotes(quotes))[:10]}
+        merged = self._merged(item_json, quotes)
+        if isinstance(merged, str):
+            return {"error": "BAD_ITEM", "message": merged}
+        return {"problems": self.check(*merged)[:10]}
 
     def _submit_fix(self, item_json: str, quotes: list[dict[str, str]], give_up: str) -> dict[str, Any]:
         if give_up and give_up.strip():
             self.submission = Submission(None, [], give_up.strip()[:300])
             return {"received": True}
-        item = _parse_item(item_json)
-        if isinstance(item, str):
-            return {"error": "BAD_ITEM", "message": item}
-        self.submission = Submission(item, _clean_quotes(quotes))
+        merged = self._merged(item_json, quotes)
+        if isinstance(merged, str):
+            return {"error": "BAD_ITEM", "message": merged}
+        item, all_quotes = merged
+        new = [p for p in self.check(item, all_quotes) if problem_code(p) not in self.known_codes]
+        if new and not self.final and self.rejected_submissions == 0:
+            self.rejected_submissions += 1
+            message = "제출한 항목에 처음에 없던 문제가 생겼습니다. 고쳐서 다시 내거나, 원문으로 확인하지 못했으면 give_up합니다."
+            return {"received": False, "error": "NEW_PROBLEMS", "problems": new[:5], "message": message}
+        self.submission = Submission(item, all_quotes)
         return {"received": True}
+
+    def _merged(self, item_json: str, quotes: list[dict[str, str]]) -> tuple[Any, list[dict[str, str]]] | str:
+        """제출 조각을 처음 항목에 합치고, 합친 항목이 가리키는 처음 인용을 붙입니다. 잘못되면 이유 글자."""
+        patch = _parse_item(item_json)
+        if isinstance(patch, str):
+            return patch
+        item = _merge(self.base_item, patch) if isinstance(self.base_item, dict) else patch
+        cleaned = _clean_quotes(quotes)
+        given = {q["ref"] for q in cleaned}
+        inherited = [{"ref": ref, "text": self.base_quotes[ref]} for ref in _refs(item) if ref not in given and ref in self.base_quotes]
+        return item, [*cleaned, *inherited]
 
     # ── 내부 ──────────────────────────────────────────────────────────────
 
@@ -239,6 +273,33 @@ def item_check(
         return problems
 
     return check
+
+
+def _merge(base: Any, patch: Any) -> Any:
+    """객체는 칸마다 덮어쓰고(없는 칸은 처음 값 유지), 목록·값은 통째로 바꿉니다."""
+    if isinstance(base, dict) and isinstance(patch, dict):
+        return {**base, **{key: _merge(base.get(key), value) for key, value in patch.items()}}
+    return patch
+
+
+def _refs(node: Any) -> list[str]:
+    """항목 안의 모든 quoteRefs(중첩 포함), 처음 나온 순서."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "quoteRefs" and isinstance(value, list):
+                found += [r for r in value if isinstance(r, str)]
+            else:
+                found += _refs(value)
+    elif isinstance(node, list):
+        for value in node:
+            found += _refs(value)
+    return list(dict.fromkeys(found))
+
+
+def problem_code(problem: str) -> str:
+    """문제 문구의 앞 코드(「CODE /위치: 설명」 또는 「CODE: 설명」)."""
+    return problem.split(" ", 1)[0].split(":", 1)[0]
 
 
 def _parse_item(item_json: str) -> Any:
