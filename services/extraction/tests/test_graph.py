@@ -1,17 +1,14 @@
-"""기존 경로(legacy)와 그래프 경로(graph)가 같은 결과를 내는지 확인합니다 (AI 추출 에이전트화 1단계 완료 기준).
+"""추출 그래프: 상황별로 어느 길로 끝나는지와 분기를 확인합니다. 녹화 응답만 씁니다.
 
-같은 녹화 응답으로 두 방식을 각각 돌려 Outcome 전체를 비교합니다. 걸린 시간처럼 실행마다 달라지는 값만 뺍니다.
+기존 순차 경로(_process)와 결과가 같음은 지우기 전 비교 시험(#2)으로 확인했습니다. 아래 기대값은 그때 두 경로가 같이 낸 값입니다.
 """
 
-import copy
 import json
-from dataclasses import asdict
 
 import pytest
 from helpers import example, to_ai
-from test_pipeline import answers, new_event, raw_event, run
+from test_pipeline import answers, raw_event, run
 
-from mujuthaek_extraction.engine import extraction_engine
 from mujuthaek_extraction.graph import GRAPH
 from mujuthaek_extraction.graph.build import _after_recheck
 from mujuthaek_extraction.model import ModelError, RecordedModel
@@ -66,47 +63,38 @@ def _models(name):
     return NoticeModels(RecordedModel({}), None)
 
 
+# 상황 → (이벤트, 상태, 발행 검수 상태, 모델 호출 수, 수정 기록 첫 줄)
 SCENARIOS = {
-    "clean": lambda: raw_event(),
-    "fallback": lambda: raw_event(),
-    "all_down": lambda: raw_event(),
-    "recheck_accepted": lambda: raw_event(),
-    "recheck_rejected": lambda: raw_event(),
-    "rejected": lambda: raw_event(rawPostId="not-a-uuid"),
-    "unsupported": lambda: raw_event(field="BUSINESS_SPACE"),
-    "waiting_source": lambda: raw_event(textKey="text/virtual/1/v1.txt"),
+    "clean": (lambda: raw_event(), "COMPLETED", "AUTO_PASSED", 5, None),
+    "fallback": (lambda: raw_event(), "COMPLETED", "AUTO_PASSED", 5, None),
+    "all_down": (lambda: raw_event(), "FAILED", None, 1, None),
+    "recheck_accepted": (lambda: raw_event(), "COMPLETED", "AUTO_PASSED", 6, "재확인 채택: eligibility/"),
+    "recheck_rejected": (lambda: raw_event(), "PARTIAL", "PARTIALLY_PASSED", 6, "재확인 미채택: eligibility/"),
+    "rejected": (lambda: raw_event(rawPostId="not-a-uuid"), "REJECTED", None, 0, None),
+    "unsupported": (lambda: raw_event(field="BUSINESS_SPACE"), "UNSUPPORTED", None, 0, None),
+    "waiting_source": (lambda: raw_event(textKey="text/virtual/1/v1.txt"), "WAITING_SOURCE", None, 0, None),
 }
 
 
-def _comparable(outcome):
-    """실행마다 달라지는 값(걸린 시간)만 빼고 Outcome 전체를 비교할 수 있게 만듭니다."""
-    data = asdict(outcome)
-    usage = copy.deepcopy(data.pop("usage"))
-    usage.pop("totalSeconds", None)
-    usage["stages"] = sorted(usage.get("stages", {}))
-    usage.get("totals", {}).pop("callSeconds", None)
-    for call in usage.get("calls", []):
-        call.pop("seconds", None)
-    return data, usage
-
-
 @pytest.mark.parametrize("scenario", SCENARIOS)
-def test_graph_engine_gives_the_same_outcome_as_legacy(scenario, monkeypatch):
-    results = {}
-    for engine in ("legacy", "graph"):
-        monkeypatch.setenv("EXTRACTION_ENGINE", engine)
-        results[engine] = _comparable(run(SCENARIOS[scenario](), _models(scenario)))
-    assert results["graph"] == results["legacy"]
+def test_each_situation_ends_on_its_path(scenario):
+    event, status, review_status, attempts, first_repair = SCENARIOS[scenario]
+    outcome = run(event(), _models(scenario))
+    assert outcome.status == status
+    assert ((outcome.event or {}).get("payload") or {}).get("reviewStatus") == review_status
+    assert len(outcome.attempts) == attempts
+    if first_repair is None:
+        assert outcome.repairs == []
+    else:
+        assert outcome.repairs[0].startswith(first_repair)
+    assert outcome.usage["stages"]  # 단계 시간 기록이 그래프에서도 남음
 
 
-def test_recheck_scenarios_really_recheck(monkeypatch):
-    # 위 비교가 재확인 경로를 실제로 지나는지 확인합니다(채택·미채택 둘 다)
-    monkeypatch.setenv("EXTRACTION_ENGINE", "graph")
+def test_recheck_results_are_recorded():
     accepted = run(raw_event(), _models("recheck_accepted"))
     rejected = run(raw_event(), _models("recheck_rejected"))
     assert accepted.usage["recheck"]["accepted"] is True
     assert rejected.usage["recheck"]["accepted"] is False
-    assert any(r.startswith("재확인 미채택") for r in rejected.repairs)
 
 
 def test_contract_errors_route_to_quarantine():
@@ -116,21 +104,6 @@ def test_contract_errors_route_to_quarantine():
     assert _after_recheck({"report": broken}) == "quarantine"
 
 
-def test_graph_has_the_pipeline_nodes_in_order():
+def test_graph_has_the_pipeline_nodes():
     nodes = set(GRAPH.get_graph().nodes)
     assert {"intake", "image_reading", "extract", "assemble_verify", "recheck", "quarantine", "annotate", "publish", "finish"} <= nodes
-
-
-def test_engine_setting(monkeypatch):
-    monkeypatch.delenv("EXTRACTION_ENGINE", raising=False)
-    assert extraction_engine() == "graph"
-    monkeypatch.setenv("EXTRACTION_ENGINE", "legacy")
-    assert extraction_engine() == "legacy"
-    monkeypatch.setenv("EXTRACTION_ENGINE", "agent")
-    with pytest.raises(ValueError):
-        extraction_engine()
-
-
-def test_new_event_helper_is_shared():
-    # 비교가 같은 이벤트 ID·시각을 쓰는지(새로 만드는 값이 결과에 섞이지 않게)
-    assert new_event("t", "p", {})["eventId"] == new_event("t", "p", {})["eventId"]
