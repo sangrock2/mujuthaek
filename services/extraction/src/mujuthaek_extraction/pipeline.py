@@ -25,6 +25,7 @@ from mujuthaek_extraction.assemble.assembler import AssemblyInput, assemble
 from mujuthaek_extraction.assemble.quarantine import quarantine
 from mujuthaek_extraction.assemble.regions import SOURCE_SIDO, RegionCodeTable
 from mujuthaek_extraction.contracts import tools
+from mujuthaek_extraction.engine import GRAPH, extraction_engine
 from mujuthaek_extraction.extract import ExtractionRun, run_extraction
 from mujuthaek_extraction.image_reading import read_image_tables
 from mujuthaek_extraction.intake import ApiReferenceProvider, IntakeResult, IntakeStatus, SourceReader, build_intake
@@ -155,7 +156,12 @@ def process(
         names,
     )
     rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger)
-    outcome = _process(raw_event, rt, method)
+    if extraction_engine() == GRAPH:
+        from mujuthaek_extraction.graph import run_graph  # graph가 이 모듈을 가져다 쓰므로 실행할 때 가져옵니다
+
+        outcome = run_graph(raw_event, rt, method)
+    else:
+        outcome = _process(raw_event, rt, method)
     outcome.usage = usage.summary()
     return outcome
 
