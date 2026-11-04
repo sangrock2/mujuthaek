@@ -20,7 +20,7 @@ from mujuthaek_extraction.extract import CallAttempt, ExtractionRun
 from mujuthaek_extraction.intake.model import ExtractionMaterial
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ToolTurn, supports_tools
 from mujuthaek_extraction.recheck import BATCH, RecheckAnswer
-from mujuthaek_extraction.repair.tools import RepairTools, Submission, item_check
+from mujuthaek_extraction.repair.tools import RepairTools, Submission, item_check, problem_code
 from mujuthaek_extraction.rules.base import FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
 
@@ -36,12 +36,16 @@ INSTRUCTIONS = """# 할 일
 # 규칙
 - 근거는 공고 원문뿐입니다. 원문에서 확인하지 못한 값은 만들지 않습니다. 확인하지 못하면 submit_fix의 give_up에 이유를 적습니다(처음 값이 유지됩니다).
 - 인용은 원문에 글자 그대로 이어져 나오는 구간입니다. 제출 전에 인용마다 check_quote로 확인합니다.
-- 고친 항목은 공통 지시의 출력 형식 그대로, 같은 섹션·같은 id로 냅니다. 근거는 quoteRefs에 적고, 그 ref와 인용문을 quotes에 함께 냅니다.
-- 문제가 근거(인용)만이면 인용만 고치고 조건의 뜻(대상·종류·조건식·예외)은 바꾸지 않습니다.
-- 낼 항목이 정해지면 validate_item으로 남은 문제를 확인할 수 있습니다. 문제가 남아도 원문에 맞으면 그대로 냅니다(채택은 프로그램이 정합니다).
+- item_json에는 바꿀 칸만 적습니다(공통 지시의 출력 형식, 같은 id). 적지 않은 칸은 처음 값 그대로이고, 목록 칸은 통째로 바뀝니다.
+  항목 전체를 다시 쓰지 않습니다(다른 칸을 깨뜨리기 쉽습니다).
+- 새 인용은 quotes에 n1, n2처럼 새 ref로 적고 quoteRefs에서 그 ref를 가리킵니다. 처음 인용 ref는 그대로 둬도 됩니다.
+- 문제가 근거(인용)만이면 인용(quoteRefs)만 고치고 조건의 뜻(대상·종류·조건식·예외)은 바꾸지 않습니다.
+- 제출 전에 validate_item으로 남은 문제를 확인합니다. 제출한 항목에 처음에 없던 문제가 생기면 한 번 되돌려 받으니 고치거나 포기합니다.
+  처음부터 있던 문제가 남아도 원문에 맞으면 그대로 냅니다(채택은 프로그램이 정합니다).
+- 도구 결과의 turnsLeft는 남은 차례입니다. 같은 검색을 되풀이하지 말고, 남은 차례가 적으면 제출하거나 포기합니다. 마지막 차례에는 submit_fix만 쓸 수 있습니다.
 
 # 도구를 쓰는 순서 예
-search_source로 위치를 찾고 → 필요하면 read_page로 앞뒤를 읽고 → check_quote로 인용을 확인하고 → submit_fix."""
+search_source로 위치를 찾고 → 필요하면 read_page로 앞뒤를 읽고 → check_quote로 인용을 확인하고 → validate_item → submit_fix."""
 
 
 def recheck_strategy() -> str:
@@ -59,9 +63,10 @@ class ItemLog:
     turns: int = 0
     tools: dict[str, int] = field(default_factory=dict)
     outcome: str = ""  # SUBMITTED · GAVE_UP · TURN_LIMIT · NO_TOOL_CALL · MODEL_ERROR · BUDGET · NOT_STARTED
+    returned: int = 0  # 처음에 없던 문제가 생겨 돌려보낸 제출 수
 
     def summary(self) -> dict[str, Any]:
-        return {"target": self.target, "turns": self.turns, "tools": dict(self.tools), "outcome": self.outcome}
+        return {"target": self.target, "turns": self.turns, "tools": dict(self.tools), "outcome": self.outcome, "returned": self.returned}
 
 
 class AgentStrategy:
@@ -122,7 +127,14 @@ class AgentStrategy:
         log: ItemLog,
     ) -> Submission | None:
         section, item_id = target["section"], target["id"]
-        tools = RepairTools(material, item_check(parts, evaluate, section, item_id, material.text_document_id))
+        base_item, base_quotes = _original(parts, section, item_id)
+        tools = RepairTools(
+            material,
+            item_check(parts, evaluate, section, item_id, material.text_document_id),
+            base_item=base_item,
+            base_quotes=base_quotes,
+            known_codes=frozenset(problem_code(p) for p in target["problems"]),
+        )
         context = {"고칠 항목": target, "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": structure_summary(parts[0])}
         base = ModelRequest(
             prompt_version=f"{rules.field}/{rules.prompt_version}/repair",
@@ -138,7 +150,8 @@ class AgentStrategy:
         log.outcome = "TURN_LIMIT"
         for turn in range(1, MAX_TURNS + 1):
             name = f"repair:{log.target}:turn{turn}"
-            request = replace(base, call_name=name, turns=tuple(turns))
+            tools.final = turn == MAX_TURNS  # 마지막 차례는 제출(또는 포기)만 할 수 있습니다
+            request = replace(base, call_name=name, turns=tuple(turns), tools=tools.specs)
             try:
                 response = model.complete(request)
             except ModelError as error:
@@ -151,7 +164,7 @@ class AgentStrategy:
             if not response.tool_calls:
                 log.outcome = "NO_TOOL_CALL"
                 break
-            results = tuple(tools.run(call) for call in response.tool_calls)
+            results = tuple(_with_turns_left(tools.run(call), MAX_TURNS - turn) for call in response.tool_calls)
             calls = [{"name": c.name, "arguments": c.arguments} for c in response.tool_calls]
             run.raw_responses.append((name, json.dumps({"toolCalls": calls}, ensure_ascii=False)))
             turns.append(ToolTurn(response.tool_calls, results))
@@ -159,7 +172,35 @@ class AgentStrategy:
                 log.outcome = "GAVE_UP" if tools.submission.item is None else "SUBMITTED"
                 break
         log.tools = dict(tools.calls)
+        log.returned = tools.rejected_submissions
         return tools.submission
+
+
+def _original(parts: list[dict[str, Any]], section: str, item_id: str | None) -> tuple[Any, dict[str, str]]:
+    """처음 추출한 항목(AI 출력 형식)과 그 조각의 인용 목록(ref → 글). 제출 조각을 합칠 바탕입니다."""
+    for part in parts:
+        if not isinstance(part, dict) or section not in part:
+            continue
+        quotes = {q["ref"]: q["text"] for q in part.get("quotes") or [] if isinstance(q, dict) and "ref" in q and "text" in q}
+        if section == "notice":
+            return part.get("notice"), quotes
+        item = next((x for x in part.get(section) or [] if isinstance(x, dict) and x.get("id") == item_id), None)
+        return item, quotes
+    return None, {}
+
+
+def _with_turns_left(result: str, left: int) -> str:
+    """도구 결과에 남은 차례를 붙입니다(남은 차례가 적으면 제출을 서두르게)."""
+    try:
+        value = json.loads(result)
+    except ValueError:
+        return result
+    if not isinstance(value, dict):
+        return result
+    value["turnsLeft"] = left
+    if left == 1:
+        value["notice"] = "다음 차례가 마지막입니다. 다음에는 submit_fix로 내거나 give_up에 이유를 적습니다."
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _attempt(request: ModelRequest, response: Any, error: ModelError | None) -> CallAttempt:
