@@ -630,6 +630,46 @@ def recheck_problems(
     return result
 
 
+def recheck_rounds(
+    rules: FieldRules,
+    material: ExtractionMaterial,
+    model: ExtractionModel,
+    parts: list[dict[str, Any]],
+    evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
+    strategies: tuple[RecheckStrategy, ...],
+    **run_options: Any,
+) -> RecheckResult:
+    """재확인을 여러 라운드로: 앞 라운드에서 채택한 결과 위에서 남은 문제만 다음 전략으로 다시 봅니다(2026-11-05).
+    실측(공고 4건): 묶음 재확인은 일정·자격처럼 한 번에 고칠 수 있는 항목을, 에이전트는 묶음이 못 고친 항목 일부를 고쳤습니다.
+    라운드마다 채택은 같은 검증기(adopt)가 정하므로, 뒤 라운드가 앞 라운드에서 받은 것을 나쁘게 바꿀 수 없습니다."""
+    current: RecheckResult | None = None
+    rechecked: list[str] = []
+    adopted: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    run = ExtractionRun()
+    accepted = False
+    agent = None
+    for number, strategy in enumerate(strategies, start=1):
+        result = recheck_problems(rules, material, model, current.parts if current else parts, evaluate, strategy=strategy, **run_options)
+        if current is None:
+            current = result
+        if result.run is not None:
+            run.attempts += result.run.attempts
+            run.raw_responses += result.run.raw_responses
+            run.failed_calls += result.run.failed_calls
+        rechecked += [r for r in result.rechecked if r not in rechecked]
+        if result.accepted:
+            accepted = True
+            adopted += [f"{number}:{a}" for a in result.adopted_sections] or [f"{number}:전체"]
+            current = result
+        rejected += [(f"{number}:{scope}", reason) for scope, reason in result.rejected]
+        agent = result.agent or agent
+        if not result.rechecked:
+            break  # 남은 문제가 없으면 다음 라운드를 부르지 않습니다
+    assert current is not None
+    return RecheckResult(current.parts, current.report, rechecked, accepted, run if run.attempts else None, tuple(adopted), tuple(rejected), agent)
+
+
 def adopt(
     parts: list[dict[str, Any]],
     first: VerificationReport,

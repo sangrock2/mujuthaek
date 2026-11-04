@@ -98,3 +98,32 @@ def test_example_material_is_searchable():
     _, source, _, _ = setup()
     quote = data["evidence"][0]["quote"]
     assert call(RepairTools(source.material, no_check), "check_quote", quote=quote)["found"] is True
+
+
+def test_search_hit_gives_an_in_page_position_that_read_page_accepts():
+    tools = RepairTools(material(PAGED), no_check)
+    hit = call(tools, "search_source", query="주민등록등본", limit=1)["hits"][0]
+    assert hit["page"] == 2 and "start" not in hit  # 원문 전체 위치는 주지 않습니다(쪽 안 위치와 헷갈렸음)
+    page = call(tools, "read_page", page=hit["page"], from_char=hit["pageChar"])
+    assert "주민등록등본" in page["text"]
+
+
+def test_reading_past_the_page_end_explains_the_position():
+    tools = RepairTools(material(PAGED), no_check)
+    wrong = call(tools, "read_page", page=1, from_char=8627)
+    assert wrong["error"] == "OUT_OF_PAGE" and "pageChar" in wrong["message"]
+
+
+def test_long_page_is_read_in_chunks_with_next_char():
+    text = "--- 1쪽 ---\n" + "가" * 4000
+    tools = RepairTools(material(text), no_check)
+    first = call(tools, "read_page", page=1, from_char=0)
+    second = call(tools, "read_page", page=1, from_char=first["next_char"])
+    assert first["more"] and second["from_char"] == first["next_char"]
+
+
+def test_near_suggestions_skip_short_lines():
+    text = "--- 1쪽 ---\n-\n- 출산자녀수 가산 항목 및 비율 : 출산자녀 2인 이상 20%p 가산, 출산자녀 1인 10%p 가산\n"
+    tools = RepairTools(material(text), no_check)
+    near = call(tools, "check_quote", quote="- 출산자녀수 가산 항목 및 비율 : 출산자녀 1인 10%p 가산")["near"]
+    assert near and all(len(n["text"]) > 1 for n in near) and near[0]["text"].startswith("- 출산자녀수")
