@@ -46,22 +46,57 @@ def test_agent_finds_the_quote_and_its_fix_is_adopted_by_the_verifier():
     result, _, _ = run_agent(model)
     assert result.accepted and result.report.passed
     log = result.agent["items"][0]
-    assert log == {"target": f"eligibility/{item_id}", "turns": 3, "tools": {"search_source": 1, "check_quote": 1, "submit_fix": 1}, "outcome": "SUBMITTED"}
+    expected = {"target": f"eligibility/{item_id}", "turns": 3, "tools": {"search_source": 1, "check_quote": 1, "submit_fix": 1}}
+    assert log == {**expected, "outcome": "SUBMITTED", "returned": 0}
     assert result.summary()["agent"] == result.agent
-    # 둘째 차례 요청에 앞선 차례(도구 호출과 결과)가 붙고, 도구 목록이 함께 갑니다
+    # 둘째 차례 요청에 앞선 차례(도구 호출과 결과·남은 차례)가 붙고, 도구 목록이 함께 갑니다
     second = model.requests[1]
-    assert len(second.turns) == 1 and json.loads(second.turns[0].results[0])["total"] >= 1
+    first_result = json.loads(second.turns[0].results[0])
+    assert len(second.turns) == 1 and first_result["total"] >= 1 and first_result["turnsLeft"] == MAX_TURNS - 1
     assert {t.name for t in second.tools} == {"search_source", "read_page", "check_quote", "validate_item", "submit_fix"}
 
 
-def test_worse_fix_is_not_adopted():
+def test_worse_fix_is_sent_back_once_then_not_adopted():
     data, *_ = setup()
     item_id = data["eligibility"][1]["id"]
     worse = {**fixed_item(data), "quoteRefs": ["x"]}
-    model = RecordedModel(script(item_id, turn("submit_fix", item_json=json.dumps(worse), quotes=[{"ref": "x", "text": "원문에 없는 글"}], give_up="")))
+    bad = turn("submit_fix", item_json=json.dumps(worse), quotes=[{"ref": "x", "text": "원문에 없는 글"}], give_up="")
+    model = RecordedModel(script(item_id, bad, bad))
     result, _, parts = run_agent(model)
-    assert not result.accepted and result.parts == parts
-    assert result.agent["items"][0]["outcome"] == "SUBMITTED"
+    returned = json.loads(model.requests[1].turns[0].results[0])
+    assert returned["received"] is False and returned["error"] == "NEW_PROBLEMS" and returned["problems"]
+    assert not result.accepted and result.parts == parts  # 두 번째로 내면 받지만 채택은 검증기가 거절
+    assert result.agent["items"][0]["outcome"] == "SUBMITTED" and result.agent["items"][0]["returned"] == 1
+
+
+def test_only_changed_fields_are_submitted_and_original_quotes_follow():
+    data, source, parts, evaluate = setup()
+    item_id, quote = data["eligibility"][1]["id"], data["evidence"][0]["quote"]
+    # 칸 하나(quoteRefs)만 내도 나머지 칸은 처음 값이고 채택됩니다
+    patch = turn("submit_fix", item_json=json.dumps({"quoteRefs": ["n1"]}), quotes=[{"ref": "n1", "text": quote}], give_up="")
+    model = RecordedModel(script(item_id, patch))
+    result, _, _ = run_agent(model)
+    original = parts[0]["eligibility"][1]
+    adopted = next(x for x in result.parts[0]["eligibility"] if x["id"] == item_id)
+    assert result.accepted and without_refs(adopted) == without_refs(original)  # 인용 참조 이름만 바뀜(처음 인용은 함께 붙음)
+
+
+def without_refs(node):
+    if isinstance(node, dict):
+        return {k: without_refs(v) for k, v in node.items() if k != "quoteRefs"}
+    if isinstance(node, list):
+        return [without_refs(x) for x in node]
+    return node
+
+
+def test_last_turn_allows_only_submit():
+    data, *_ = setup()
+    item_id = data["eligibility"][1]["id"]
+    model = RecordedModel(script(item_id, *[turn("search_source", query="무주택", limit=1) for _ in range(MAX_TURNS)]))
+    run_agent(model)
+    assert [t.name for t in model.requests[-1].tools] == ["submit_fix"]
+    assert json.loads(model.requests[-1].turns[-1].results[0])["turnsLeft"] == 1
+    assert "마지막" in json.loads(model.requests[-1].turns[-1].results[0])["notice"]
 
 
 def test_giving_up_keeps_the_first_result():
@@ -78,7 +113,8 @@ def test_turn_limit_stops_the_conversation():
     item_id = data["eligibility"][1]["id"]
     model = RecordedModel(script(item_id, *[turn("search_source", query="무주택", limit=1) for _ in range(MAX_TURNS)]))
     result, _, _ = run_agent(model)
-    assert result.agent["items"][0] == {"target": f"eligibility/{item_id}", "turns": MAX_TURNS, "tools": {"search_source": MAX_TURNS}, "outcome": "TURN_LIMIT"}
+    log = result.agent["items"][0]
+    assert log == {"target": f"eligibility/{item_id}", "turns": MAX_TURNS, "tools": {"search_source": MAX_TURNS}, "outcome": "TURN_LIMIT", "returned": 0}
     assert not result.accepted
 
 
