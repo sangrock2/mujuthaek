@@ -24,7 +24,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from mujuthaek_extraction.assemble.ai_output import SECTIONS
 from mujuthaek_extraction.assemble.details import CLEARED, KST, document_name_key, times_in
@@ -480,16 +480,8 @@ def ordered_problems(problems: dict[tuple[str, str | None], list[str]]) -> list[
     return whole + items
 
 
-def recheck_problems(
-    rules: FieldRules,
-    material: ExtractionMaterial,
-    model: ExtractionModel,
-    parts: list[dict[str, Any]],
-    evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
-    **run_options: Any,
-) -> RecheckResult:
-    """evaluate: 응답 조각들 → 결합·검증 결과. 처음 결과와 재확인 결과를 같은 함수로 판단합니다."""
-    first = evaluate(parts)
+def select_targets(parts: list[dict[str, Any]], first: VerificationReport) -> tuple[list[dict[str, Any]], list[str]]:
+    """다시 볼 항목(최대 MAX_ITEMS개, 합쳐 MAX_TARGET_CHARS자)과 그 섹션들을 고릅니다. 검증 문제 항목과 근거를 못 찾아 빠진 항목입니다."""
     problems = problem_items(first)
     # 근거를 못 찾아 아예 빠진 항목도 섹션과 상관없이 다시 봅니다 (가격·공급 같은 필수 데이터가 조용히 빠지지 않게).
     # 빠지면 이슈가 목록 전체를 가리켜 위에서 찾을 수 없습니다. 자격 조건을 먼저 봅니다.
@@ -527,41 +519,122 @@ def recheck_problems(
         targets.append(target)
         if section not in sections:
             sections.append(section)
-    if not targets:
-        return RecheckResult(parts, first, [], False, None)
+    return targets, sections
 
-    call = CallSpec(
-        name="recheck",
-        sections=tuple(s for s in SECTIONS if s in sections),
-        instructions=INSTRUCTIONS
-        + "\n\n# 다시 확인할 항목\n"
-        + json.dumps(targets, ensure_ascii=False, indent=1),  # 줄 단위로(한 줄이 너무 길면 모델이 읽지 못함)
-        uses_structure=True,
-        max_output_tokens=48_000,  # 실측: 큰 공고(인천 4358)에서 24,000토큰으로 잘림(내용 6.7만 자, 반복 아님). 정상 종료 최대 14,261
-    )
-    one_call = FieldRules(rules.field, rules.prompt_version, rules.prompt_path, (call,))
-    run = run_extraction(one_call, material, model, structure=structure_summary(parts[0]), **run_options)
-    rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
-    if run.failed_calls:
-        reason = "재확인 호출 실패: " + "; ".join(why for _, why in run.failed_calls)
-        return RecheckResult(parts, first, rechecked, False, run, rejected=(("전체", reason),))
-    # 수정 호출 뒤에도 형식 위반이 남은 응답(extract가 첫 응답을 살려 넘김)은 고친 결과가 아니므로 섞지 않습니다(검토 2026-10-16)
-    schema = one_call.build_request(call, material, structure_summary(parts[0])).output_schema
-    response, format_rejected = run.parts[0], []
-    if schema_errors(response, schema) is not None:
+
+@dataclass
+class RecheckAnswer:
+    """재확인 답 받기의 결과입니다. response가 None이면 받을 답이 없어(호출 실패·형식 위반) 처음 결과를 그대로 씁니다.
+    형식 위반 섹션을 뺐으면 targets·sections도 줄어든 것이고, rejected에 뺀 이유를 담습니다."""
+
+    response: dict[str, Any] | None
+    run: ExtractionRun | None
+    targets: list[dict[str, Any]]
+    sections: list[str]
+    rejected: tuple[tuple[str, str], ...] = ()
+
+
+class RecheckStrategy(Protocol):
+    """다시 볼 항목의 고친 답을 받는 방법입니다. 받은 답을 채택할지는 전략이 아니라 adopt(같은 검증기)가 정합니다."""
+
+    def answer(
+        self,
+        rules: FieldRules,
+        material: ExtractionMaterial,
+        model: ExtractionModel,
+        parts: list[dict[str, Any]],
+        targets: list[dict[str, Any]],
+        sections: list[str],
+        **run_options: Any,
+    ) -> RecheckAnswer: ...
+
+
+class BatchStrategy:
+    """다시 볼 항목을 한 번의 호출로 묶어 묻습니다(2026-10-15부터의 방식)."""
+
+    def answer(
+        self,
+        rules: FieldRules,
+        material: ExtractionMaterial,
+        model: ExtractionModel,
+        parts: list[dict[str, Any]],
+        targets: list[dict[str, Any]],
+        sections: list[str],
+        **run_options: Any,
+    ) -> RecheckAnswer:
+        call = CallSpec(
+            name="recheck",
+            sections=tuple(s for s in SECTIONS if s in sections),
+            instructions=INSTRUCTIONS
+            + "\n\n# 다시 확인할 항목\n"
+            + json.dumps(targets, ensure_ascii=False, indent=1),  # 줄 단위로(한 줄이 너무 길면 모델이 읽지 못함)
+            uses_structure=True,
+            max_output_tokens=48_000,  # 실측: 큰 공고(인천 4358)에서 24,000토큰으로 잘림(내용 6.7만 자, 반복 아님). 정상 종료 최대 14,261
+        )
+        one_call = FieldRules(rules.field, rules.prompt_version, rules.prompt_path, (call,))
+        run = run_extraction(one_call, material, model, structure=structure_summary(parts[0]), **run_options)
+        if run.failed_calls:
+            reason = "재확인 호출 실패: " + "; ".join(why for _, why in run.failed_calls)
+            return RecheckAnswer(None, run, targets, sections, (("전체", reason),))
+        # 수정 호출 뒤에도 형식 위반이 남은 응답(extract가 첫 응답을 살려 넘김)은 고친 결과가 아니므로 섞지 않습니다(검토 2026-10-16)
+        schema = one_call.build_request(call, material, structure_summary(parts[0])).output_schema
+        response = run.parts[0]
+        if schema_errors(response, schema) is None:
+            return RecheckAnswer(response, run, targets, sections)
         # 형식 위반이 있는 섹션만 빼고 나머지 섹션은 시험합니다(2026-10-24 다섯 번째 채점: 재확인 5건 중 2건이 일부 형식 위반으로 통째 버려짐).
         # 인용 목록처럼 섹션 밖 칸이 틀렸으면 모두 버립니다
         broken = _broken_sections(response, schema)
         if broken is None or not set(sections) - broken:
-            return RecheckResult(parts, first, rechecked, False, run, rejected=(("전체", "재확인 응답 형식 위반"),))
-        response = {key: value for key, value in response.items() if key not in broken}
-        format_rejected = [(section, "재확인 응답 형식 위반") for section in sections if section in broken]
-        sections = [section for section in sections if section not in broken]
-        targets = [t for t in targets if t["section"] not in broken]
-    answer = _keep_verified_dates(parts, _keep_meaning(parts, response, targets))
+            return RecheckAnswer(None, run, targets, sections, (("전체", "재확인 응답 형식 위반"),))
+        kept = [section for section in sections if section not in broken]
+        return RecheckAnswer(
+            {key: value for key, value in response.items() if key not in broken},
+            run,
+            [t for t in targets if t["section"] not in broken],
+            kept,
+            tuple((section, "재확인 응답 형식 위반") for section in sections if section in broken),
+        )
+
+
+BATCH = BatchStrategy()
+
+
+def recheck_problems(
+    rules: FieldRules,
+    material: ExtractionMaterial,
+    model: ExtractionModel,
+    parts: list[dict[str, Any]],
+    evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
+    strategy: RecheckStrategy = BATCH,
+    **run_options: Any,
+) -> RecheckResult:
+    """evaluate: 응답 조각들 → 결합·검증 결과. 처음 결과와 재확인 결과를 같은 함수로 판단합니다.
+    순서: 다시 볼 항목 고르기(select_targets) → 고친 답 받기(strategy) → 채택 판단(adopt)."""
+    first = evaluate(parts)
+    targets, sections = select_targets(parts, first)
+    if not targets:
+        return RecheckResult(parts, first, [], False, None)
+    rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
+    answer = strategy.answer(rules, material, model, parts, targets, sections, **run_options)
+    if answer.response is None:
+        return RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
+    return adopt(parts, first, answer, rechecked, evaluate)
+
+
+def adopt(
+    parts: list[dict[str, Any]],
+    first: VerificationReport,
+    answer: RecheckAnswer,
+    rechecked: list[str],
+    evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
+) -> RecheckResult:
+    """받은 답을 합쳐 다시 검증하고, 나빠진 것 없이 나아졌을 때만 받습니다(전체 → 섹션별 → 항목별 순서로 시험).
+    채택은 이 함수만 정합니다. 답을 낸 쪽(AI)의 자기 보고로 통과되는 경로는 없습니다."""
+    targets, sections, run, format_rejected = answer.targets, answer.sections, answer.run, list(answer.rejected)
+    fixed = _keep_verified_dates(parts, _keep_meaning(parts, answer.response, targets))
     whole = tuple(t["section"] for t in targets if t["id"] is None and t["section"] != "notice")
     sent = sent_scope(targets)
-    merged = merge_recheck(parts, answer, whole, sent)
+    merged = merge_recheck(parts, fixed, whole, sent)
     second = evaluate(merged)
     if _improved(first, second, sections) and not _lost_values(first, second):
         return RecheckResult(merged, second, rechecked, True, run, rejected=tuple(format_rejected))
@@ -575,10 +648,10 @@ def recheck_problems(
         still: list[str] = []
         reasons: dict[str, str] = {}
         for section in waiting:
-            if section not in answer:
+            if section not in fixed:
                 reasons[section] = "재확인 응답에 그 섹션이 없음"
                 continue
-            only = {key: value for key, value in answer.items() if key not in SECTIONS or key == section}
+            only = {key: value for key, value in fixed.items() if key not in SECTIONS or key == section}
             trial = merge_recheck(current, only, tuple(s for s in whole if s == section), sent)
             trial_report = evaluate(trial)
             if _improved(report, trial_report, [section]) and not _lost_values(report, trial_report):
@@ -595,17 +668,17 @@ def recheck_problems(
     # 섹션째 거절된 섹션은 항목마다 따로 봅니다(2026-10-24 일곱 번째 채점: 재확인 답이 빠진 서류 4개를 원문 인용으로 맞게 되살렸는데,
     # 같은 섹션의 다른 항목 문제가 줄지 않아 섹션째 버려짐). 항목 하나만 합쳐 어디에도 새 문제가 없고 문제가 줄며 값이 줄지 않으면 받습니다
     for section in waiting:
-        if section == "notice" or not isinstance(answer.get(section), list):
+        if section == "notice" or not isinstance(fixed.get(section), list):
             continue
         existing = {item.get("id") for part in current if isinstance(part.get(section), list) for item in part[section] if isinstance(item, dict)}
         wanted = sent["items"].get(section, set())
-        for item in answer[section]:
+        for item in fixed[section]:
             if not isinstance(item, dict) or "id" not in item:
                 continue
             added = section in whole and item["id"] not in existing
             if item["id"] not in wanted and not added:
                 continue
-            only = {key: value for key, value in answer.items() if key not in SECTIONS} | {section: [item]}
+            only = {key: value for key, value in fixed.items() if key not in SECTIONS} | {section: [item]}
             single = {"items": {section: {item["id"]}}, "notice": set()}
             trial = merge_recheck(current, only, (section,) if added else (), single)
             trial_report = evaluate(trial)
