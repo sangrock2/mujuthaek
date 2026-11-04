@@ -20,7 +20,7 @@ from mujuthaek_extraction.extract import CallAttempt, ExtractionRun
 from mujuthaek_extraction.intake.model import ExtractionMaterial
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ToolTurn, supports_tools
 from mujuthaek_extraction.recheck import BATCH, RecheckAnswer
-from mujuthaek_extraction.repair.tools import RepairTools, Submission, item_check, problem_code
+from mujuthaek_extraction.repair.tools import RepairTools, Submission, item_check, item_refs, problem_code
 from mujuthaek_extraction.rules.base import FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
 
@@ -38,7 +38,10 @@ INSTRUCTIONS = """# 할 일
 - 인용은 원문에 글자 그대로 이어져 나오는 구간입니다. 제출 전에 인용마다 check_quote로 확인합니다.
 - item_json에는 바꿀 칸만 적습니다(공통 지시의 출력 형식, 같은 id). 적지 않은 칸은 처음 값 그대로이고, 목록 칸은 통째로 바뀝니다.
   항목 전체를 다시 쓰지 않습니다(다른 칸을 깨뜨리기 쉽습니다).
-- 새 인용은 quotes에 n1, n2처럼 새 ref로 적고 quoteRefs에서 그 ref를 가리킵니다. 처음 인용 ref는 그대로 둬도 됩니다.
+- 「고칠 항목」의 item이 제출할 모양 그대로입니다. 근거는 항목 안의 quoteRefs(ref 목록)로만 가리킵니다.
+  인용문 글자는 항목 밖 submit_fix의 quotes(ref·text)에 적습니다. 항목 안에 quotes 칸을 만들거나 quoteRefs에 인용문 글자를 넣지 않습니다.
+- 새 인용은 n1, n2처럼 새 ref로 적습니다. 「고칠 항목」의 quotes에 있는 처음 인용 ref는 그대로 둬도 됩니다.
+- item_json은 올바른 JSON 객체 글자입니다(따옴표·괄호를 닫습니다).
 - 문제가 근거(인용)만이면 인용(quoteRefs)만 고치고 조건의 뜻(대상·종류·조건식·예외)은 바꾸지 않습니다.
 - 제출 전에 validate_item으로 남은 문제를 확인합니다. 제출한 항목에 처음에 없던 문제가 생기면 한 번 되돌려 받으니 고치거나 포기합니다.
   처음부터 있던 문제가 남아도 원문에 맞으면 그대로 냅니다(채택은 프로그램이 정합니다).
@@ -48,10 +51,13 @@ INSTRUCTIONS = """# 할 일
 search_source로 위치를 찾고 → 필요하면 read_page로 앞뒤를 읽고 → check_quote로 인용을 확인하고 → validate_item → submit_fix."""
 
 
+STRATEGIES = ("batch", "agent", "hybrid")  # hybrid: 묶음 재확인 뒤 남은 문제만 에이전트로(recheck.recheck_rounds)
+
+
 def recheck_strategy() -> str:
     strategy = os.getenv(STRATEGY_ENV, "batch")
-    if strategy not in ("batch", "agent"):
-        raise ValueError(f"{STRATEGY_ENV}는 batch·agent 중 하나여야 합니다: {strategy!r}")
+    if strategy not in STRATEGIES:
+        raise ValueError(f"{STRATEGY_ENV}는 {'·'.join(STRATEGIES)} 중 하나여야 합니다: {strategy!r}")
     return strategy
 
 
@@ -135,7 +141,10 @@ class AgentStrategy:
             base_quotes=base_quotes,
             known_codes=frozenset(problem_code(p) for p in target["problems"]),
         )
-        context = {"고칠 항목": target, "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": structure_summary(parts[0])}
+        context = {
+            "고칠 항목": _target_view(target, base_item, base_quotes),
+            "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": structure_summary(parts[0]),
+        }
         base = ModelRequest(
             prompt_version=f"{rules.field}/{rules.prompt_version}/repair",
             call_name="",
@@ -166,7 +175,9 @@ class AgentStrategy:
                 break
             results = tuple(_with_turns_left(tools.run(call), MAX_TURNS - turn) for call in response.tool_calls)
             calls = [{"name": c.name, "arguments": c.arguments} for c in response.tool_calls]
-            run.raw_responses.append((name, json.dumps({"toolCalls": calls}, ensure_ascii=False)))
+            # 도구 결과도 앞부분만 남깁니다(왜 돌려보냈는지·무엇을 찾았는지 다시 돌리지 않고 보려고). 원문 조각이라 길이를 줄입니다
+            record = {"toolCalls": calls, "results": [r[:600] for r in results]}
+            run.raw_responses.append((name, json.dumps(record, ensure_ascii=False)))
             turns.append(ToolTurn(response.tool_calls, results))
             if tools.submission is not None:
                 log.outcome = "GAVE_UP" if tools.submission.item is None else "SUBMITTED"
@@ -187,6 +198,21 @@ def _original(parts: list[dict[str, Any]], section: str, item_id: str | None) ->
         item = next((x for x in part.get(section) or [] if isinstance(x, dict) and x.get("id") == item_id), None)
         return item, quotes
     return None, {}
+
+
+def _target_view(target: dict[str, Any], base_item: Any, base_quotes: dict[str, str]) -> dict[str, Any]:
+    """에이전트에게 보여 줄 고칠 항목: 제출할 때와 같은 모양(AI 출력 형식, 근거는 quoteRefs)과 그 ref의 인용문을 따로 둡니다.
+    묶음 재확인처럼 인용문을 항목 안에 끼워 보여 주면, 에이전트가 그 모양을 따라 항목 안에 quotes 칸을 만들어 형식이 깨졌습니다(2026-11-05 실측)."""
+    if not isinstance(base_item, dict):
+        return target  # 처음 항목을 찾지 못하면 묶음 재확인과 같은 모양으로
+    refs = item_refs(base_item)
+    return {
+        "section": target["section"],
+        "id": target["id"],
+        "problems": target["problems"],
+        "item": base_item,
+        "quotes": [{"ref": ref, "text": base_quotes[ref]} for ref in refs if ref in base_quotes],
+    }
 
 
 def _with_turns_left(result: str, left: int) -> str:

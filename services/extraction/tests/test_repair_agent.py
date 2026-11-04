@@ -184,3 +184,34 @@ def test_pipeline_uses_the_agent_when_set(monkeypatch):
     assert outcome.status == "COMPLETED" and outcome.usage["recheck"]["accepted"] is True
     assert outcome.usage["recheck"]["agent"]["items"][0]["outcome"] == "SUBMITTED"
     assert any(a["call_name"] == f"repair:eligibility/{item_id}:turn1" for a in outcome.attempts)
+
+
+def test_agent_sees_the_item_in_the_shape_it_submits():
+    data, *_ = setup()
+    item_id = data["eligibility"][1]["id"]
+    model = RecordedModel(script(item_id, turn("submit_fix", item_json="", quotes=[], give_up="확인 못 함")))
+    _, _, parts = run_agent(model)
+    shown = json.loads(model.requests[0].user)["고칠 항목"]
+    assert shown["item"] == parts[0]["eligibility"][1]  # 처음 항목 그대로(근거는 quoteRefs)
+    assert {q["ref"] for q in shown["quotes"]} >= set(parts[0]["eligibility"][1]["quoteRefs"]) - {"fake"}
+    assert "quotes" not in shown["item"]
+
+
+def test_hybrid_runs_the_agent_only_on_what_batch_left(monkeypatch):
+    from test_graph import _broken_answers
+    from test_pipeline import raw_event, run
+
+    from mujuthaek_extraction.model.factory import NoticeModels
+
+    data = example("housing")
+    item_id, quote = data["eligibility"][1]["id"], data["evidence"][0]["quote"]
+    calls, part = _broken_answers()
+    calls["recheck"] = [answer(part["eligibility"][1], part["quotes"])]  # 묶음 재확인은 못 고침
+    calls[f"repair:eligibility/{item_id}:turn1"] = [
+        turn("submit_fix", item_json=json.dumps({"quoteRefs": ["n1"]}), quotes=[{"ref": "n1", "text": quote}], give_up="")
+    ]
+    monkeypatch.setenv("EXTRACTION_RECHECK_STRATEGY", "hybrid")
+    outcome = run(raw_event(), NoticeModels(RecordedModel(calls), None))
+    recheck = outcome.usage["recheck"]
+    assert outcome.status == "COMPLETED" and recheck["accepted"] is True and recheck["adoptedSections"] == ["2:전체"]
+    assert [a["call_name"] for a in outcome.attempts][-2:] == ["recheck", f"repair:eligibility/{item_id}:turn1"]

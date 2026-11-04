@@ -2,10 +2,11 @@
 
 import json
 
+from helpers import to_ai
 from test_recheck import answer, setup
 
 from mujuthaek_extraction.model import RecordedModel
-from mujuthaek_extraction.recheck import BATCH, RecheckAnswer, recheck_problems, select_targets
+from mujuthaek_extraction.recheck import BATCH, RecheckAnswer, recheck_problems, recheck_rounds, select_targets
 from mujuthaek_extraction.rules.housing_notice import RULES
 
 
@@ -50,3 +51,27 @@ def test_strategy_without_answer_keeps_first_result():
 
 def test_batch_is_the_default_strategy():
     assert recheck_problems.__defaults__[0] is BATCH
+
+
+def _fixed_answer(data):
+    fixed = json.loads(json.dumps(to_ai(data["eligibility"][1])).replace('"e1"', '"q1"'))
+    return json.loads(answer(fixed, [{"ref": "q1", "documentId": "text1", "text": data["evidence"][0]["quote"]}]))
+
+
+def test_rounds_stop_when_the_first_round_fixes_everything():
+    data, source, parts, evaluate = setup()
+    first, second = FixedAnswer(_fixed_answer(data)), FixedAnswer({"quotes": []})
+    rounds = recheck_rounds(RULES, source.material, RecordedModel({}), parts, evaluate, (first, second))
+    assert rounds.accepted and rounds.adopted_sections == ("1:전체",) and second.seen is None
+
+
+def test_second_round_fixes_what_the_first_left_and_records_both():
+    class NoAnswer:
+        def answer(self, rules, material, model, parts, targets, sections, **run_options):
+            return RecheckAnswer(None, None, targets, sections, (("전체", "답 없음"),))
+
+    data, source, parts, evaluate = setup()
+    second = FixedAnswer(_fixed_answer(data))
+    rounds = recheck_rounds(RULES, source.material, RecordedModel({}), parts, evaluate, (NoAnswer(), second))
+    assert rounds.accepted and rounds.adopted_sections == ("2:전체",) and rounds.report.passed
+    assert ("1:전체", "답 없음") in rounds.rejected and rounds.rechecked == ["eligibility/" + data["eligibility"][1]["id"]]

@@ -34,7 +34,7 @@ from mujuthaek_extraction.model.factory import ModelFactory, NoticeModels
 from mujuthaek_extraction.usage import MeteredModel, UsageRecorder
 from mujuthaek_platform.events import new_event
 
-STRATEGIES = ("batch", "agent")
+STRATEGIES = ("batch", "agent")  # 기본 비교 대상. --strategies로 바꿈(예: batch,agent,hybrid)
 
 
 def metered(models: NoticeModels, usage: UsageRecorder) -> NoticeModels:
@@ -121,24 +121,27 @@ def main() -> None:
     parser.add_argument("--env-file", type=Path, help="유료 API 키를 읽을 파일(값은 출력하지 않음)")
     parser.add_argument("--total-budget-usd", type=float, required=True)
     parser.add_argument("--reuse", action="store_true", help="저장한 첫 추출을 다시 씀(추출 비용 없음)")
+    parser.add_argument("--strategies", default=",".join(STRATEGIES), help="쉼표로 구분한 재확인 전략(batch·agent·hybrid)")
     parser.add_argument("--confirm-spend", action="store_true")
     args = parser.parse_args()
+    strategies = tuple(s.strip() for s in args.strategies.split(",") if s.strip())
 
     settings = Settings.from_env()
     if args.env_file is not None:
         settings = dataclasses.replace(settings, env_file=args.env_file)
     factory = ModelFactory(settings)
-    print(f"모델: {factory.describe()}, 공고 {len(args.board)}건 × 전략 {len(STRATEGIES)}, 전체 상한 ${args.total_budget_usd:.2f}")
+    print(f"모델: {factory.describe()}, 공고 {len(args.board)}건 × 전략 {'·'.join(strategies)}, 전체 상한 ${args.total_budget_usd:.2f}")
     if not args.confirm_spend:
         print("미리보기입니다. --confirm-spend로 실행합니다.")
         return
     regions = RegionCodeTable.from_csv(settings.region_table, settings.region_table_date)
     total, rows = 0.0, []
     for board in args.board:
-        if total + settings.notice_budget_usd * (1 + len(STRATEGIES)) > args.total_budget_usd:
+        source, notice_id = board.split(":", 1)
+        saved = args.reuse and (args.out / f"{source}-{notice_id}" / "extraction.pkl").exists()
+        if total + settings.notice_budget_usd * (len(strategies) + (0 if saved else 1)) > args.total_budget_usd:
             print(f"전체 상한에 닿을 수 있어 멈춥니다(지금 ${total:.4f}). 남은 공고: {board} 외")
             break
-        source, notice_id = board.split(":", 1)
         case = board_case(args.board_root, source, notice_id)
         case.event["payload"]["reprocess"] = False
         data = extract_once(case, factory, regions, args.out / case.name, args.reuse)
@@ -147,7 +150,7 @@ def main() -> None:
         reused = args.reuse and (args.out / case.name / "extraction.pkl").exists()
         total += 0.0 if reused else data["costUsd"]
         row: dict[str, Any] = {"notice": case.name, "extractionCostUsd": round(data["costUsd"], 4), "reused": reused}
-        for strategy in STRATEGIES:
+        for strategy in strategies:
             outcome, cost = recheck_with(strategy, case, data, factory, regions)
             total += cost
             folder = args.out / strategy / case.name
@@ -160,6 +163,8 @@ def main() -> None:
                 "candidate": outcome.candidate,
                 "usage": outcome.usage,
                 "recheckCostUsd": cost,
+                # 재확인 응답 원문(에이전트는 차례마다 도구 호출과 입력). 왜 채택·포기했는지 다시 돌리지 않고 보려고 남깁니다
+                "recheckResponses": [r for r in outcome.responses if r[0] == "recheck" or r[0].startswith("repair:")],
             }
             (folder / "outcome.json").write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
             recheck = (outcome.usage or {}).get("recheck") or {}

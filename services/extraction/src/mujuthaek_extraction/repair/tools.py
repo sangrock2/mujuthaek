@@ -46,7 +46,8 @@ SPECS = (
     ),
     ToolSpec(
         "read_page",
-        "PDF 원문의 한 쪽 글자를 읽습니다. 찾은 구간의 앞뒤 문맥이 더 필요할 때 씁니다. 긴 쪽은 from_char부터 이어 읽습니다.",
+        "PDF 원문의 한 쪽 글자를 읽습니다. 찾은 구간의 앞뒤 문맥이 더 필요할 때 씁니다. from_char는 그 쪽 안의 위치입니다"
+        "(search_source 결과의 pageChar, 처음부터면 0). 긴 쪽은 결과의 next_char로 이어 읽습니다.",
         _object({"page": {"type": "integer"}, "from_char": {"type": "integer"}}),
     ),
     ToolSpec(
@@ -163,8 +164,11 @@ class RepairTools:
             pieces.append(text[start:end])
         whole = "".join(pieces)
         offset = max(0, int(from_char or 0))
+        if offset >= len(whole):  # 원문 전체 위치(start)를 쪽 안 위치로 잘못 넣은 경우가 많습니다(2026-11-05 실측)
+            return {"error": "OUT_OF_PAGE", "message": f"{page}쪽은 {len(whole)}자입니다. from_char는 쪽 안 위치(pageChar)이고, 처음부터면 0입니다."}
         chunk = whole[offset : offset + PAGE_CHARS]
-        return {"page": page, "from_char": offset, "text": chunk, "more": offset + len(chunk) < len(whole)}
+        more = offset + len(chunk) < len(whole)
+        return {"page": page, "from_char": offset, "text": chunk, "more": more, **({"next_char": offset + len(chunk)} if more else {})}
 
     def _check_quote(self, quote: str) -> dict[str, Any]:
         quote = (quote or "").strip()
@@ -205,7 +209,7 @@ class RepairTools:
         item = _merge(self.base_item, patch) if isinstance(self.base_item, dict) else patch
         cleaned = _clean_quotes(quotes)
         given = {q["ref"] for q in cleaned}
-        inherited = [{"ref": ref, "text": self.base_quotes[ref]} for ref in _refs(item) if ref not in given and ref in self.base_quotes]
+        inherited = [{"ref": ref, "text": self.base_quotes[ref]} for ref in item_refs(item) if ref not in given and ref in self.base_quotes]
         return item, [*cleaned, *inherited]
 
     # ── 내부 ──────────────────────────────────────────────────────────────
@@ -233,13 +237,24 @@ class RepairTools:
         return numbers[at]
 
     def _hit(self, start: int, end: int) -> dict[str, Any]:
+        """찾은 구간: 쪽 번호와 그 쪽 안 위치(read_page의 from_char로 바로 씀), 앞뒤 글자."""
         text = self.material.text
-        return {"page": self._page_at(start), "start": start, "end": end, "snippet": text[max(0, start - SNIPPET_CHARS) : end + SNIPPET_CHARS]}
+        page = self._page_at(start)
+        hit: dict[str, Any] = {"page": page}
+        if page is not None:
+            positions, numbers, _ = self._page_marks()
+            page_start = positions[bisect.bisect_right(positions, start) - 1]
+            hit["pageChar"] = max(0, start - page_start - SNIPPET_CHARS)  # 앞 문맥부터 읽게 조금 앞에서
+        hit["snippet"] = text[max(0, start - SNIPPET_CHARS) : end + SNIPPET_CHARS]
+        return hit
 
     def _near(self, quote: str) -> list[dict[str, Any]]:
         """원문 줄(이웃한 두 줄 묶음 포함) 가운데 인용문과 가장 비슷한 것 3개."""
         lines = [line for line in self.material.text.split("\n") if line.strip()]
         windows = [*lines, *(a + "\n" + b for a, b in zip(lines, lines[1:], strict=False))]
+        # 짧은 줄(「-」 같은 글머리)은 부분 일치 점수가 100이 되어 쓸모없는 제안이 됩니다(2026-11-05 실측). 인용 길이의 1/3보다 짧으면 뺍니다
+        shortest = max(10, len(quote) // 3)
+        windows = [w for w in windows if len(w.strip()) >= shortest]
         scored = sorted(((fuzz.partial_ratio(quote, w), w) for w in windows), key=lambda pair: -pair[0])
         near = []
         for score, window in scored:
@@ -282,7 +297,7 @@ def _merge(base: Any, patch: Any) -> Any:
     return patch
 
 
-def _refs(node: Any) -> list[str]:
+def item_refs(node: Any) -> list[str]:
     """항목 안의 모든 quoteRefs(중첩 포함), 처음 나온 순서."""
     found: list[str] = []
     if isinstance(node, dict):
@@ -290,10 +305,10 @@ def _refs(node: Any) -> list[str]:
             if key == "quoteRefs" and isinstance(value, list):
                 found += [r for r in value if isinstance(r, str)]
             else:
-                found += _refs(value)
+                found += item_refs(value)
     elif isinstance(node, list):
         for value in node:
-            found += _refs(value)
+            found += item_refs(value)
     return list(dict.fromkeys(found))
 
 
