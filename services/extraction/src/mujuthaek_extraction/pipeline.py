@@ -25,7 +25,6 @@ from mujuthaek_extraction.assemble.assembler import AssemblyInput, assemble
 from mujuthaek_extraction.assemble.quarantine import quarantine
 from mujuthaek_extraction.assemble.regions import SOURCE_SIDO, RegionCodeTable
 from mujuthaek_extraction.contracts import tools
-from mujuthaek_extraction.engine import GRAPH, extraction_engine
 from mujuthaek_extraction.extract import ExtractionRun, run_extraction
 from mujuthaek_extraction.image_reading import read_image_tables
 from mujuthaek_extraction.intake import ApiReferenceProvider, IntakeResult, IntakeStatus, SourceReader, build_intake
@@ -33,7 +32,7 @@ from mujuthaek_extraction.intake.adapter import PDF_TEXT_DOCUMENT_ID
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 from mujuthaek_extraction.judgment import build_judgment
 from mujuthaek_extraction.judgment.pages import attach_locator_pages, evidence_pages
-from mujuthaek_extraction.method import LEGACY, STRUCTURED, extraction_method
+from mujuthaek_extraction.method import LEGACY, STRUCTURED
 from mujuthaek_extraction.model.base import ExtractionModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel, extract_with_fallback
@@ -156,18 +155,15 @@ def process(
         names,
     )
     rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger)
-    if extraction_engine() == GRAPH:
-        from mujuthaek_extraction.graph import run_graph  # graph가 이 모듈을 가져다 쓰므로 실행할 때 가져옵니다
+    from mujuthaek_extraction.graph import run_graph  # graph가 이 모듈의 단계 함수를 가져다 쓰므로 실행할 때 가져옵니다
 
-        outcome = run_graph(raw_event, rt, method)
-    else:
-        outcome = _process(raw_event, rt, method)
+    outcome = run_graph(raw_event, rt, method)
     outcome.usage = usage.summary()
     return outcome
 
 
 # ── 처리 단계 ──────────────────────────────────────────────────────────────────────────────────────────────
-# 아래 함수들은 _process가 차례로 부르는 단계입니다. 그래프 실행(graph/)도 같은 함수를 노드로 씁니다.
+# 아래 함수들은 추출 그래프(graph/build.py)의 노드가 부르는 단계입니다. 순서·분기는 그래프가 정합니다.
 
 
 @dataclass(frozen=True)
@@ -378,24 +374,3 @@ def finish(
     if repairs:
         log.info("자동 수정", extra={"rawPostId": raw.get("rawPostId"), "repairs": repairs[:20]})
     return Outcome(status, event, report.candidate, reasons, model_used, rt.cost(), attempts, responses=responses, repairs=repairs, pdf_pages=pdf_pages)
-
-
-def _process(raw_event: dict[str, Any], rt: Runtime, method: str | None) -> Outcome:
-    method = method or extraction_method()
-    intake = read_intake(raw_event, method, rt)
-    if not intake.ready:
-        return not_ready_outcome(intake)
-    rules = RULES_BY_METHOD[method].get(intake.raw.field)
-    if rules is None:
-        return unsupported_outcome(intake.raw.field)
-    material, context, image_run = read_images(intake.material, intake.context, rt)
-    extracted = extract_parts(rules, material, rt)
-    first = first_report(extracted, material, context, rt)
-    if first is None:
-        return extraction_failed_outcome(extracted, image_run, material, rt)
-    recheck, repairs = recheck_step(rules, material, context, extracted, first, rt)
-    report, quarantine_actions = quarantine_step(recheck.report, recheck, material, context, rt)
-    repairs += quarantine_actions
-    note_changes(report, extracted, recheck, quarantine_actions)
-    publication = publish_step(report, raw_event, material, rt)
-    return finish(raw_event, report, recheck, publication, extracted, image_run, repairs, material, rt)
