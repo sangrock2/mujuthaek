@@ -37,7 +37,8 @@ from mujuthaek_extraction.model.base import ExtractionModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel, extract_with_fallback
 from mujuthaek_extraction.publish import completed_payload
-from mujuthaek_extraction.recheck import RecheckResult, lost_by_recheck, recheck_problems
+from mujuthaek_extraction.recheck import BATCH, RecheckResult, lost_by_recheck, recheck_problems
+from mujuthaek_extraction.repair.agent import AGENT, recheck_strategy
 from mujuthaek_extraction.rules import discover
 from mujuthaek_extraction.rules.base import FieldRules
 from mujuthaek_extraction.usage import MeteredModel, UsageRecorder
@@ -292,10 +293,17 @@ def recheck_step(
     first: VerificationReport,
     rt: Runtime,
 ) -> tuple[RecheckResult, list[str]]:
-    """문제 항목을 AI에 한 번 더 보여 줍니다(오류 종류와 무관하게 검사기 문구를 그대로 전달). 재확인 결과와 수정 기록을 돌려줍니다."""
+    """문제 항목을 AI에 한 번 더 보여 줍니다(오류 종류와 무관하게 검사기 문구를 그대로 전달). 재확인 결과와 수정 기록을 돌려줍니다.
+    답 받는 방법은 설정 EXTRACTION_RECHECK_STRATEGY: batch(기본, 한 번에 묶어 묻기) 또는 agent(항목마다 도구를 쓰는 에이전트)."""
+    strategy = AGENT if recheck_strategy() == "agent" else BATCH
     with rt.usage.stage("recheck"):
         recheck = recheck_problems(
-            rules, material, extracted.recheck_model, extracted.run.parts, lambda parts: evaluate_parts(parts, material, context, rt) or first
+            rules,
+            material,
+            extracted.recheck_model,
+            extracted.run.parts,
+            lambda parts: evaluate_parts(parts, material, context, rt) or first,
+            strategy=strategy,
         )
     repairs = [f"재확인 {'채택' if recheck.accepted else '미채택'}: {', '.join(recheck.rechecked)}"] if recheck.rechecked else []
     # 섹션별 채택·거절 이유를 작업 기록(usage.recheck)과 로그에 남깁니다(2026-10-24: 평가에서 어느 섹션을 왜 버렸는지 볼 수 있게)
