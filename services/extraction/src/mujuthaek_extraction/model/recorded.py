@@ -9,7 +9,10 @@ from mujuthaek_extraction.model.base import ModelError, ModelRequest, ModelRespo
 
 
 class RecordedModel:
-    """호출 이름별로 정해 둔 응답·오류를 차례로 내주고, 받은 요청을 기록하는 테스트용 모델입니다."""
+    """호출 이름별로 정해 둔 응답·오류를 차례로 내주고, 받은 요청을 기록하는 테스트용 모델입니다.
+    도구 호출 응답은 ModelResponse(tool_calls=...)로 녹화해 둡니다."""
+
+    supports_tools = True
 
     def __init__(self, script: dict[str, list[ModelResponse | ModelError | str]], model_id: str = "recorded"):
         """script: 호출 이름 → 그 호출에 차례로 돌려줄 응답(문자열이면 정상 종료 응답)이나 던질 오류."""

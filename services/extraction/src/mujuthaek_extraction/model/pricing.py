@@ -71,6 +71,7 @@ class Budget:
         chars = len(request.system) + len(request.user) + len(request.instructions) + IMAGE_TOKENS * len(request.images)
         # 출력 형식(JSON 스키마)도 입력으로 함께 보냅니다. 공유 형식을 쓰면 더 큰 쪽이 가므로 둘 중 큰 것을 셉니다(검토 2026-10-20)
         chars += max((len(json.dumps(s, ensure_ascii=False)) for s in (request.output_schema, request.shared_schema) if s), default=0)
+        chars += request.tool_chars()  # 도구 설명과 앞선 차례(도구 호출·결과)도 입력으로 갑니다
         return (chars * price.cache_write + request.max_output_tokens * price.output) / 1_000_000
 
     def _fits(self, worst: float) -> bool:

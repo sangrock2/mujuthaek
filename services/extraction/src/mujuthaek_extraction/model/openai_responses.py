@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from mujuthaek_extraction.model.base import ModelError, ModelRequest, ModelResponse, StopReason
+from mujuthaek_extraction.model.base import ModelError, ModelRequest, ModelResponse, StopReason, ToolCall
 from mujuthaek_extraction.model.call_cache import canonical, response_code_hash, sha256_text
 from mujuthaek_extraction.model.strict_schema import drop_null_optionals, to_strict
 from mujuthaek_extraction.model.strict_schema import keep_own as _keep_own
@@ -69,7 +69,9 @@ def _strict(schema: dict[str, Any]) -> tuple[dict[str, Any], frozenset[str]]:
 
 
 class OpenAIResponsesModel:
-    """OpenAI Responses API에 엄격 JSON 스키마로 요청하는 유료 추출 모델입니다."""
+    """OpenAI Responses API에 엄격 JSON 스키마로 요청하는 유료 추출 모델입니다. 도구 호출(function)도 보냅니다(재확인 에이전트)."""
+
+    supports_tools = True
 
     def __init__(
         self,
@@ -151,6 +153,19 @@ class OpenAIResponsesModel:
                 }
             },
         }
+        if request.tools:
+            # 도구를 쓰는 요청(재확인 에이전트): 차례마다 도구 하나를 반드시 부르게 하고, 답은 도구(제출)로만 받습니다
+            body["tools"] = [
+                {"type": "function", "name": t.name, "description": t.description, "parameters": to_strict(t.parameters)[0], "strict": True}
+                for t in request.tools
+            ]
+            body["tool_choice"] = "required"
+            body["parallel_tool_calls"] = False
+            del body["text"]
+        for turn in request.turns:  # 앞선 차례: 모델의 도구 호출과 우리가 돌려준 결과. 서버 보관(store) 없이 매번 함께 보냅니다
+            for call, output in zip(turn.calls, turn.results, strict=True):
+                body["input"].append({"type": "function_call", "call_id": call.call_id, "name": call.name, "arguments": call.arguments})
+                body["input"].append({"type": "function_call_output", "call_id": call.call_id, "output": output})
         if shared:
             body["prompt_cache_options"] = {"mode": "explicit"}
             # 같은 공고의 호출을 같은 캐시로 보내는 열쇠(원문 해시). 실측: 같은 원문인데 일정 호출에서 캐시를 다시 씀
@@ -273,8 +288,11 @@ class OpenAIResponsesModel:
         """Responses API 응답에서 출력 글자·종료 사유·토큰 사용량을 꺼내 ModelResponse로 돌려줍니다."""
         usage = result.get("usage") or {}
         details = usage.get("input_tokens_details") or {}
-        texts, refused = [], False
+        texts, refused, calls = [], False, []
         for item in result.get("output") or []:
+            if item.get("type") == "function_call":
+                calls.append(ToolCall(str(item.get("call_id") or item.get("id") or ""), str(item.get("name") or ""), item.get("arguments") or "{}"))
+                continue
             if item.get("type") != "message":
                 continue
             for content in item.get("content") or []:
@@ -310,4 +328,5 @@ class OpenAIResponsesModel:
             cache_write_tokens=details.get("cache_write_tokens"),
             usage=usage,
             reasoning_tokens=(usage.get("output_tokens_details") or {}).get("reasoning_tokens"),
+            tool_calls=tuple(calls),
         )

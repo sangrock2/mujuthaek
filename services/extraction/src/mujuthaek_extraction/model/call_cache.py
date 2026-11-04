@@ -54,8 +54,15 @@ def sha256_text(text: str) -> str:
 
 
 def request_fingerprint(request: ModelRequest) -> dict[str, Any]:
-    """요청의 모든 칸. 그림은 바이트 대신 해시로 넣습니다."""
+    """요청의 모든 칸. 그림은 바이트 대신 해시로 넣습니다.
+    도구·앞선 차례는 있을 때만 넣습니다(도구 없는 기존 호출의 열쇠가 그대로 유지되게). 도구 호출 응답은 JSON 답이 아니라
+    reusable이 저장하지 않습니다."""
+    tools = {
+        "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in request.tools],
+        "turns": [{"calls": [[c.call_id, c.name, c.arguments] for c in turn.calls], "results": list(turn.results)} for turn in request.turns],
+    }
     return {
+        **({"toolUse": tools} if request.tools or request.turns else {}),
         "callName": request.call_name,
         "promptVersion": request.prompt_version,
         "system": request.system,
@@ -74,7 +81,7 @@ def cache_key(request: ModelRequest, identity: dict[str, Any]) -> str:
 
 def reusable(request: ModelRequest, response: ModelResponse) -> bool:
     """다시 써도 되는 응답인지: 정상 종료 + JSON 객체 + 그 호출의 출력 형식 통과."""
-    if response.stop_reason is not StopReason.END or response.cache_hit:
+    if response.stop_reason is not StopReason.END or response.cache_hit or response.tool_calls:
         return False
     try:
         value = json.loads(response.raw_text)
