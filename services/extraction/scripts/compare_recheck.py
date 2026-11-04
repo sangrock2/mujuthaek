@@ -45,8 +45,20 @@ def metered(models: NoticeModels, usage: UsageRecorder) -> NoticeModels:
 
 
 def runtime(factory: ModelFactory, reader, regions, api) -> tuple[pipeline.Runtime, UsageRecorder]:
+    """운영 워커와 같은 설정(섹션 병렬 호출 수·간격)으로 실행 문맥을 만듭니다."""
     usage = UsageRecorder()
-    rt = pipeline.Runtime(metered(factory.for_notice(), usage), usage, reader, regions, lambda: datetime.now(UTC), new_event, api)
+    settings = factory.settings
+    rt = pipeline.Runtime(
+        metered(factory.for_notice(), usage),
+        usage,
+        reader,
+        regions,
+        lambda: datetime.now(UTC),
+        new_event,
+        api,
+        parallel_calls=settings.parallel_calls,
+        parallel_stagger=settings.parallel_stagger_seconds,
+    )
     return rt, usage
 
 
