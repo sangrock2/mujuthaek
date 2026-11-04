@@ -123,9 +123,9 @@ def test_graph_has_the_pipeline_nodes_in_order():
 
 def test_engine_setting(monkeypatch):
     monkeypatch.delenv("EXTRACTION_ENGINE", raising=False)
-    assert extraction_engine() == "legacy"
-    monkeypatch.setenv("EXTRACTION_ENGINE", "graph")
     assert extraction_engine() == "graph"
+    monkeypatch.setenv("EXTRACTION_ENGINE", "legacy")
+    assert extraction_engine() == "legacy"
     monkeypatch.setenv("EXTRACTION_ENGINE", "agent")
     with pytest.raises(ValueError):
         extraction_engine()
