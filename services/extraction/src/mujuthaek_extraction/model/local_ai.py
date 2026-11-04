@@ -22,6 +22,8 @@ from mujuthaek_extraction.model.strict_schema import drop_null_optionals, to_str
 class LocalChatModel:
     """OpenAI 호환 /chat/completions 로컬 AI 서버에 엄격 JSON 스키마로 요청하는 추출 모델입니다."""
 
+    supports_tools = False  # 도구 호출은 아직 보내지 않습니다(재확인은 한 번에 묶어 묻기로 돌아감)
+
     def __init__(
         self,
         base_url: str | None,
