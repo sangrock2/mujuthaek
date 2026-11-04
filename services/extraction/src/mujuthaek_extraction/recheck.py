@@ -116,17 +116,19 @@ class RecheckResult:
     # 채택하지 않은 범위와 이유(2026-10-24 세 번째 채점: 어느 섹션을 왜 버렸는지 결과에 없어 평가에서 추정해야 했음).
     # (「전체」 또는 섹션 이름, 이유: 새로 생긴 (코드, 위치) 목록이나 「줄어든 문제 없음」)
     rejected: tuple[tuple[str, str], ...] = ()
+    agent: dict[str, Any] | None = None  # 재확인 에이전트의 항목별 기록(차례·도구·결말). 묶음 재확인이면 None
 
     def summary(self) -> dict[str, Any] | None:
         """작업 기록(usage)·로그에 남길 재확인 요약. 다시 본 항목이 없으면 None."""
         if not self.rechecked:
             return None
-        return {
+        summary = {
             "rechecked": list(self.rechecked),
             "accepted": self.accepted,
             "adoptedSections": list(self.adopted_sections),
             "rejected": [{"scope": scope, "reason": reason} for scope, reason in self.rejected],
         }
+        return {**summary, "agent": self.agent} if self.agent is not None else summary
 
 
 def _item_key(candidate: dict[str, Any], pointer: str) -> tuple[str, str | None] | None:
@@ -532,10 +534,12 @@ class RecheckAnswer:
     targets: list[dict[str, Any]]
     sections: list[str]
     rejected: tuple[tuple[str, str], ...] = ()
+    agent: dict[str, Any] | None = None  # 답을 받은 과정의 기록(에이전트 전략만)
 
 
 class RecheckStrategy(Protocol):
-    """다시 볼 항목의 고친 답을 받는 방법입니다. 받은 답을 채택할지는 전략이 아니라 adopt(같은 검증기)가 정합니다."""
+    """다시 볼 항목의 고친 답을 받는 방법입니다. 받은 답을 채택할지는 전략이 아니라 adopt(같은 검증기)가 정합니다.
+    evaluate는 답을 내기 전에 스스로 확인할 때만 씁니다(에이전트의 validate_item). 채택 판단에는 쓰지 않습니다."""
 
     def answer(
         self,
@@ -545,6 +549,7 @@ class RecheckStrategy(Protocol):
         parts: list[dict[str, Any]],
         targets: list[dict[str, Any]],
         sections: list[str],
+        evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None] | None = None,
         **run_options: Any,
     ) -> RecheckAnswer: ...
 
@@ -560,6 +565,7 @@ class BatchStrategy:
         parts: list[dict[str, Any]],
         targets: list[dict[str, Any]],
         sections: list[str],
+        evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None] | None = None,
         **run_options: Any,
     ) -> RecheckAnswer:
         call = CallSpec(
@@ -615,10 +621,13 @@ def recheck_problems(
     if not targets:
         return RecheckResult(parts, first, [], False, None)
     rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
-    answer = strategy.answer(rules, material, model, parts, targets, sections, **run_options)
+    answer = strategy.answer(rules, material, model, parts, targets, sections, evaluate=evaluate, **run_options)
     if answer.response is None:
-        return RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
-    return adopt(parts, first, answer, rechecked, evaluate)
+        result = RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
+    else:
+        result = adopt(parts, first, answer, rechecked, evaluate)
+    result.agent = answer.agent
+    return result
 
 
 def adopt(
