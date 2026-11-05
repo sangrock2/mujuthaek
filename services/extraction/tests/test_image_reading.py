@@ -19,7 +19,8 @@ TABLE = "| 호실 | 전용면적 | 보증금 | 월임대료 |\n| 202호 | 26.71 
 def pictured(monkeypatch):
     monkeypatch.setattr(image_reading, "image_pages", lambda data: ((1, 0.32),) if data == b"pdf" else ())
     monkeypatch.setattr(image_reading, "_render", lambda data, page: b"png")
-    monkeypatch.setattr(image_reading, "_render_tiles", lambda data, page: [b"png-top", b"png-bottom"])
+    monkeypatch.setattr(image_reading, "_render_tiles", lambda data, page: [b"png-top", b"png-middle", b"png-bottom"])
+    monkeypatch.setattr(image_reading, "_ocr_numbers", lambda data, page: None)  # OCR 시험은 따로(아래)
     material = ExtractionMaterial("--- 1쪽 ---\n m 임대조건", "pdf-text", (), None, (MaterialFile("file-1", "공고.pdf", b"pdf", "pdf"),))
     context = TrustedContext({}, (), ({"id": "pdf-text", "kind": "TEXT", "name": "첨부 PDF에서 읽은 글자", "sha256": "old"},), "SKIPPED_NO_API_REFERENCE", None)
     return material, context
@@ -157,5 +158,25 @@ def test_second_reading_uses_larger_tiles_and_joins_them_back(pictured):
     model = RecordedModel({"image_text": [answer(TABLE)], "image_text_check": [pages]})
     new_material, _, _ = image_reading.read_image_tables(material, context, model)
     check = model.requests[1]
-    assert [i.data for i in check.images] == [b"png-top", b"png-bottom"] and "위 부분" in check.user and "아래 부분" in check.user
+    assert [i.data for i in check.images] == [b"png-top", b"png-middle", b"png-bottom"]
+    assert "위 부분" in check.user and "가운데 부분" in check.user and "아래 부분" in check.user
     assert "불일치" not in new_material.text  # 두 조각을 이어 붙이면 처음 판독과 같음
+
+
+def test_rows_are_compared_by_cells_so_spacing_or_a_missing_label_is_not_a_dispute():
+    from collections import Counter
+
+    first = "| 청년안테나 (상암로81길10) | 201 | 31.69 | 19,240,000 | 250,600 |"
+    assert image_reading._agrees(first, "| 청년안테나(상암로 81길10) | 201 | 31.69 | 19,240,000 | 250,600 |", None)  # 띄어쓰기만 다름
+    assert image_reading._agrees(first, "|  | 201 | 31.69 | 19,240,000 | 250,600 |", None)  # 다시 읽기에서 합친 칸 이름이 빠짐
+    assert not image_reading._agrees(first, "| 청년안테나 (상암로81길10) | 201 | 31.69 | 19,240,000 | 250,500 |", None)  # 숫자가 다름
+    assert not image_reading._agrees(first, "| 청년예가 (천중로50길 43) | 201 | 31.69 | 19,240,000 | 250,600 |", None)  # 단지 이름이 다름
+    # 두 판독이 같게 틀려도(250,500) OCR 숫자에 없으면 불일치
+    wrong = first.replace("250,600", "250,500")
+    ocr = Counter(["201", "31.69", "19240000", "250600"])
+    assert not image_reading._agrees(wrong, wrong, ocr) and image_reading._agrees(first, first, ocr)
+
+
+def test_ocr_is_skipped_when_turned_off(monkeypatch):
+    monkeypatch.setenv("EXTRACTION_IMAGE_OCR", "false")
+    assert image_reading._ocr_numbers(b"not a pdf", 1) is None

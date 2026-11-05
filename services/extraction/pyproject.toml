@@ -15,6 +15,11 @@ dependencies = [
   "rapidfuzz>=3.9,<4",  # 재확인 도구 check_quote가 원문에서 비슷한 줄을 제안 (MIT). 판정은 기존 원문 대조가 합니다
 ]
 
+[project.optional-dependencies]
+ocr = [
+    "rapidocr-onnxruntime>=1.4.4",
+]
+
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
