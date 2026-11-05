@@ -40,7 +40,7 @@ def main() -> None:
     # 전체 상한에 맞추려고 공고당 상한을 낮추면 동시 호출이 최악 비용 예약으로 거절돼(#14, 2026-11-05 에이전트 3건) 결과가 설정 탓으로 나빠짐
     parser.add_argument("--expected-per-notice-usd", type=float, default=0.08, help="다음 공고를 시작할지 정할 때 쓰는 공고당 예상 비용")
     parser.add_argument("--strategy", choices=("batch", "agent"), default="batch", help="재확인 답 받기 방법(EXTRACTION_RECHECK_STRATEGY)")
-    parser.add_argument("--engine", choices=("graph", "agent"), default="graph", help="추출 방식(EXTRACTION_ENGINE): 정해진 단계·에이전트")
+    parser.add_argument("--engine", choices=("graph", "agent", "v2"), default="graph", help="추출 방식(EXTRACTION_ENGINE): 정해진 단계·에이전트·V2")
     parser.add_argument("--call-cache-dir", type=Path, help="성공한 호출을 파일로 저장·재사용(평가용, 같은 첫 추출 위 비교)")
     parser.add_argument("--env-file", type=Path, help="유료 API 키를 읽을 파일(값은 출력하지 않음). 없으면 설정 기본 위치")
     parser.add_argument("--confirm-spend", action="store_true")
