@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from langchain_core.messages import message_to_dict, messages_from_dict
 from langchain_core.outputs import ChatGeneration
 
 from mujuthaek_extraction.v2.llm.budget import CACHE_HIT
+
+PROMPT_CACHE_KEY = re.compile(r"v2-[0-9a-f]{16}")  # model/factory.py가 공고마다 새로 만드는 프롬프트 캐시 열쇠
 
 
 class FileLLMCache(BaseCache):
@@ -49,5 +52,7 @@ class FileLLMCache(BaseCache):
             path.unlink()
 
     def _path(self, prompt: str, llm_string: str) -> Path:
+        # 프롬프트 캐시 열쇠는 실행마다 새로 만드는 값이라 빼고 셉니다(빼지 않으면 같은 공고를 다시 돌려도 한 번도 맞지 않음)
+        llm_string = PROMPT_CACHE_KEY.sub("v2-*", llm_string)
         key = hashlib.sha256(json.dumps([prompt, llm_string], ensure_ascii=False).encode("utf-8")).hexdigest()
         return self.folder / f"{key}.json"

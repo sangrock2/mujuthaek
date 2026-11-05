@@ -1,18 +1,12 @@
-"""V2 문서 모델·읽기 도구: 원문 글자 → 줄·표·행·칸 id, id → 원문 글자(인용이 원문과 늘 같음), 에이전트 도구가 실행 문맥에서 문서를 받음."""
-
-import json
+"""V2 문서 모델: 원문 글자 → 줄·표·행·칸 id, id → 원문 글자(인용이 원문과 늘 같음), 담당 첫 메시지에 넣는 원문 전체(id 포함)."""
 
 import pytest
 from events import raw_event
-from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
 from test_pdf_reader import CELLS, attachment, make_pdf
 
 from mujuthaek_extraction.intake import InMemorySourceReader, build_intake
-from mujuthaek_extraction.v2.context import V2Context
 from mujuthaek_extraction.v2.document import build, parse
-from mujuthaek_extraction.v2.tools.read import READ_TOOLS
 
 TEXT = "\n".join(
     [
@@ -62,19 +56,24 @@ def test_ids_follow_pages_tables_rows_and_cells_and_point_back_to_the_exact_sour
     assert not doc.exists("p9.1") and doc.exists("g1.t1.r0.c1")
 
 
-def test_outline_view_and_search_show_small_pieces_with_ids():
+def test_the_whole_source_is_rendered_with_ids_and_empty_cells_are_left_out():
     doc = parse(TEXT)
-    outline = doc.outline()
-    assert [h["id"] for h in outline["headings"]] == ["p1.2", "p1.3", "p2.1"]
-    assert outline["tables"][0] == {"id": "t1-1", "area": "p1", "rows": 2, "columns": ["구분", "보증금", ""]}
-    assert outline["tables"][1]["firstRow"] == ["a", "b"] and outline["tables"][2]["caption"] == "공급"
-    assert doc.view_lines("p1.3", 3) == [
-        {"id": "p1.3", "text": "■ 소득 : 150% 이하"},
-        {"table": "t1-1", "rows": 2, "columns": ["구분", "보증금", ""]},
-        {"id": "p1.4", "text": "다음 본문"},
+    text = doc.render()
+    assert text.splitlines()[:6] == [
+        "[p1]",
+        "p1.1 공고 제목 줄",
+        "p1.2 1. 신청자격",
+        "p1.3 ■ 소득 : 150% 이하",
+        "[표 t1-1] 열: c0=구분 | c1=보증금",
+        "t1-1.r0 c0=기준 | c1=14,202,000 | c2=105,200",
     ]
-    table = doc.view_table("t1-1", 0, 1)
-    assert table["rows"] == [{"id": "t1-1.r0", "cells": ["기준", "14,202,000", "105,200"]}] and table["more"] is True
+    lines = text.splitlines()
+    assert "t1-1.r1 c0=110%이하 | c1=15,622,000" in lines  # 빈 칸(c2)은 적지 않아 근거로 가리키지 않음
+    assert lines[lines.index("[x1 첨부 엑셀 목록.xlsx]") + 1] == "[표 x1.t1] 공급" and "[g1 그림 판독 3쪽]" in lines
+    assert lines[lines.index("[d2.p1]") + 1] == "d2.p1.1 둘째 문서 줄"
+    assert "↳" not in text and "[열 제목]" not in text  # 프로그램이 붙인 읽기 도움 줄은 원문이 아님
+    # 원문 문장 대조는 V1 검증기와 같은 정규화(공백·표 칸 구분자 무시)
+    assert doc.contains("■ 소득: 150%이하") and doc.contains("기준 14,202,000") and not doc.contains("없는 문장")
     hit = doc.search("14,202,000")[0]
     assert hit["id"] == "t1-1.r0" and hit["cell"] == "t1-1.r0.c1"
     assert doc.search("신청 자격")[0]["id"] == "p1.2"  # 공백은 무시
@@ -98,22 +97,3 @@ class ToolCallingFake(GenericFakeChatModel):
 
     def bind_tools(self, tools, **kwargs):
         return self
-
-
-def test_read_tools_take_the_document_from_the_agent_runtime_context():
-    calls = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "search", "args": {"query": "14,202,000"}, "id": "c1"},
-            {"name": "view_table", "args": {"table": "t1-1", "start": 0, "count": 5}, "id": "c2"},
-            {"name": "view_lines", "args": {"start": "p9.1", "count": 3}, "id": "c3"},
-        ],
-    )
-    model = ToolCallingFake(messages=iter([calls, AIMessage(content="끝")]))
-    agent = create_agent(model, tools=list(READ_TOOLS), context_schema=V2Context)
-    result = agent.invoke({"messages": [HumanMessage("보증금 찾기")]}, context=V2Context(document=parse(TEXT)))
-    tools = {m.tool_call_id: json.loads(m.content) for m in result["messages"] if m.type == "tool"}
-    assert tools["c1"]["hits"][0]["cell"] == "t1-1.r0.c1"
-    assert tools["c2"]["total"] == 2 and tools["c2"]["rows"][1]["id"] == "t1-1.r1"
-    assert tools["c3"]["error"] == "UNKNOWN_ID"
-    assert result["messages"][-1].content == "끝"

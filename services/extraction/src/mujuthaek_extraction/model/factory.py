@@ -55,8 +55,9 @@ class ReplayModel:
         return ModelResponse(raw_text=self.answers[request.call_name], model_id="recorded", stop_reason=StopReason.END)
 
 
-# V2 담당 한 번 호출의 출력 상한(생각 토큰 포함). 항목이 많은 담당이 한 번에 넣다가 잘리면 그 차례 도구 호출을 통째로 잃음
-V2_OUTPUT_TOKENS = 8_000
+# V2 호출 한 번의 기본 출력 상한(생각 토큰 포함). 섹션 담당은 원문 전체를 보고 첫 차례에 맡은 항목을 다 넣으므로
+# V1 섹션 호출의 출력 한도(CallSpec.max_output_tokens, 실측 최대의 약 1.3배)를 그대로 씁니다(잘리면 그 차례 도구 호출을 통째로 잃음)
+V2_OUTPUT_TOKENS = 16_000
 
 
 @dataclass
@@ -123,20 +124,34 @@ class ModelFactory:
         paid: ExtractionModel = BudgetedModel(self._paid, budget)
         if cache is not None:  # 예산 바깥: 다시 쓴 응답은 예산을 쓰지 않습니다
             paid = CachedModel(paid, cache, self._paid.cache_identity, self.settings.openai_model)
-        chat = self._chat_models()
+        chat = self._chat_models(cache)
         if not self.settings.local_ai_url:  # 로컬 AI가 아직 없으면 유료 API를 바로 씁니다 (같은 모델로 두 번 추출하지 않게)
             return NoticeModels(paid, None, budget, {"primary": self.settings.openai_model}, chat)
         return NoticeModels(local, paid, budget, {"primary": "local", "fallback": self.settings.openai_model}, chat)
 
-    def _chat_models(self):
-        """V2 담당별 채팅 모델(LangChain ChatOpenAI). 공고 하나의 담당들이 같은 프롬프트 캐시 열쇠를 씁니다(공통 지시·도구가 같은 앞부분)."""
+    def _chat_models(self, cache: CallCache | None = None):
+        """V2 담당별 채팅 모델(LangChain ChatOpenAI). 공고 하나의 담당들이 같은 프롬프트 캐시 열쇠를 씁니다(공통 지시·도구·원문이 같은 앞부분).
+        light: 기계적인 호출(캐시 데우기)은 낮은 추론 강도로. 평가용 파일 저장소(FileCallCache)를 받으면 V2 채팅 답도 그 아래 v2-chat에 두고
+        같은 요청을 다시 사지 않습니다."""
         import uuid
 
         key = f"v2-{uuid.uuid4().hex[:16]}"
+        folder = getattr(cache, "folder", None)
+        saved: list[Any] = []
 
-        def chat(agent: str) -> Any:
-            from mujuthaek_extraction.v2.llm.models import chat_model  # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
+        def chat(agent: str, *, light: bool = False, max_output_tokens: int | None = None) -> Any:
+            # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
+            from mujuthaek_extraction.v2.llm.cache import FileLLMCache
+            from mujuthaek_extraction.v2.llm.models import chat_model
 
-            return chat_model(self.settings, cache_key=key, max_output_tokens=V2_OUTPUT_TOKENS)
+            if folder is not None and not saved:
+                saved.append(FileLLMCache(Path(folder) / "v2-chat"))
+            return chat_model(
+                self.settings,
+                effort=self.settings.openai_light_effort if light else None,
+                cache_key=key,
+                max_output_tokens=max_output_tokens or V2_OUTPUT_TOKENS,
+                cache=saved[0] if saved else None,
+            )
 
         return chat

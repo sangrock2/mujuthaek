@@ -5,6 +5,10 @@
 - V1 섹션 형식을 펼치고(재귀 3단계) 참조를 풀어 한 덩어리로(V1 엄격 모드 변환과 같은 펼치기)
 - null을 허용하는 칸·목록 칸은 생략 가능(코드가 채움 → 출력이 짧음), 조건부 규칙(if/then)은 빼고 결합기가 원래 형식으로 다시 검사
 - 인용 ref(quoteRefs) 대신 근거(evidence): 항목에는 필수, 하위 객체에는 선택(없으면 위 근거를 이어받음)
+- 원문 문장(originalText)은 선택: 비우면 코드가 첫 근거의 원문으로 채움(옮겨 적다 글자가 달라지는 일 방지)
+
+담당들은 맡은 섹션이 달라도 같은 도구 목록(모든 담당 섹션의 add 도구)을 받습니다. 지시·도구·원문이 같은 앞부분이라 한 번 캐시에 올린 것을
+모든 담당이 다시 읽습니다(2026-11-06 두 번째 실제 실행: 담당마다 도구가 달라 앞부분 2~3만 토큰을 담당마다 따로 캐시에 올림).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ EVIDENCE = {
     },
 }
 DROPPED = ("if", "then", "else", "not")
+ORIGINAL_TEXT = "원문 문장 그대로. 비우면 첫 근거의 원문으로 채웁니다"
 
 
 @lru_cache(maxsize=64)
@@ -56,8 +61,13 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
         return add(runtime.context, section, items)
 
     schema = {"type": "object", "properties": {"items": {"type": "array", "items": item}}, "required": ["items"]}
-    description = f"{section} 항목을 넣습니다(여러 개 한 번에, 15개 안팎씩). 값이 있는 칸만 적고 근거 evidence를 붙입니다."
+    description = f"{section} 항목을 넣습니다(호출 하나에 20개 안팎, 많으면 같은 차례에 여러 번). 값이 있는 칸만 적고 근거 evidence를 붙입니다."
     return StructuredTool.from_function(func=run, name=f"add_{section}", description=description, args_schema=schema)
+
+
+def shared_tools(sections: tuple[str, ...], documents: tuple[str, ...]) -> list[StructuredTool]:
+    """모든 담당 섹션의 add 도구(순서 고정). 담당은 맡은 섹션 것만 쓰고, 다른 섹션에 넣으면 add가 NOT_MY_SECTION으로 거절합니다."""
+    return [add_tool(section, documents) for section in sections]
 
 
 def _relax(node: Any, top: bool = False) -> Any:
@@ -79,6 +89,9 @@ def _relax(node: Any, top: bool = False) -> Any:
         required = [name for name in node.get("required", []) if name in properties and not _optional(properties[name])]
         if had_refs and top:
             required.append("evidence")
+        if top and "originalText" in properties:
+            properties["originalText"] = {**properties["originalText"], "description": ORIGINAL_TEXT}
+            required = [name for name in required if name != "originalText"]
         node["properties"], node["required"] = properties, required
     for key in ("items", "additionalProperties"):
         if isinstance(node.get(key), dict):

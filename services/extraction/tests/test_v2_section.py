@@ -1,4 +1,5 @@
-"""V2 섹션 담당 에이전트: 쓰기 도구가 넣는 즉시 형식·근거를 검사하고, 담당들이 도구로 쌓은 항목이 V1과 같은 결과로 게시됨. 유료 호출 없음."""
+"""V2 섹션 담당 에이전트: 쓰기 도구가 넣는 즉시 형식·근거를 검사하고, 검증 미들웨어가 바뀐 차례마다 결과를 알리고,
+담당들이 같은 앞부분(지시·도구·원문)으로 도구로 쌓은 항목이 V1과 같은 결과로 게시됨. 유료 호출 없음."""
 
 import json
 
@@ -15,6 +16,8 @@ from mujuthaek_extraction.model import RecordedModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2 import graph
+from mujuthaek_extraction.v2.agents import section
+from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.tools.typed import add_tool
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
@@ -49,6 +52,7 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     assert answers[1]["error"] == "NOT_MY_SECTION" and answers[2]["error"] == "UNKNOWN_ITEM"
     assert draft.coverage["schedules"] == {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}
     assert draft.missing_for("schedules") == [{"target": "/schedules/0/startsAt", "reason": "TO_BE_ANNOUNCED", "description": "추후 알려요."}]
+    assert draft.version == 3  # 넣기·상태·누락 기록마다 판이 바뀜(실패한 고치기는 그대로)
     judged = SectionDraft(("eligibility",))
     refused = create_agent(
         ToolCallingFake(
@@ -65,7 +69,69 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     assert json.loads(refused["messages"][2].content)["error"] == "NOT_ALLOWED" and judged.coverage == {}
 
 
-def test_section_agents_add_items_with_typed_tools_and_the_notice_is_published_like_v1(monkeypatch):
+def test_original_text_must_be_the_source_as_written_and_is_filled_when_left_out():
+    condition = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k not in ("quoteRefs", "originalText")})
+    turn = AIMessage(
+        content="",
+        tool_calls=[
+            call("add_eligibility", items=[{**condition, "id": "filled", "evidence": ["p1.3"]}]),
+            call("add_eligibility", items=[{**condition, "id": "rewritten", "originalText": "소득이 150% 이하인 사람", "evidence": ["p1.3"]}]),
+        ],
+    )
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    agent = create_agent(
+        ToolCallingFake(messages=iter([turn, AIMessage(content="끝")])), tools=[add_tool("eligibility", ("text",))], context_schema=SectionContext
+    )
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    answers = {m.tool_call_id: json.loads(m.content) for m in result["messages"] if m.type == "tool"}
+    assert [row["originalText"] for row in draft.items["eligibility"]] == ["■ 소득 : 150% 이하"]  # 비운 것은 첫 근거의 원문으로
+    rejected = answers[turn.tool_calls[1]["id"]]["failed"][0]
+    assert rejected["id"] == "rewritten" and rejected["errors"][0].startswith("/originalText: 원문에 그대로 있는 글이 아닙니다")
+
+
+def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_not_again_otherwise():
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])]),
+        AIMessage(content="", tool_calls=[call("update_item", section="schedules", item_id="nope", changes={})]),  # 실패: 초안 그대로
+        AIMessage(content="끝"),
+    ]
+    checked = []
+    issue = {"code": "VALUE_NOT_IN_QUOTE", "target": "/schedules/0/startsAt", "item": "apply", "description": "값이 인용에 없어요."}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    context.check = lambda: checked.append(draft.version) or [issue]
+    agent = create_agent(
+        ToolCallingFake(messages=iter(turns)),
+        tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+        middleware=[VerifyMiddleware()],
+        context_schema=SectionContext,
+    )
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    reports = [m.content for m in result["messages"] if m.type == "human" and m.content.startswith("# 검증 결과")]
+    assert checked == [1] and len(reports) == 1  # 바뀐 차례 다음에만 한 번
+    assert '"schedules": 1' in reports[0] and "VALUE_NOT_IN_QUOTE" in reports[0] and '"item": "apply"' in reports[0]
+    traced = section._trace(result["messages"])
+    assert "VALUE_NOT_IN_QUOTE" in traced[0]["verify"] and "verify" not in traced[1]
+
+
+def test_format_errors_that_make_the_assembler_drop_items_or_the_whole_answer_are_reported():
+    draft = SectionDraft(("schedules",), items={"schedules": [{"id": "apply"}]})
+    part = {
+        "quotes": [{"ref": "q1", "documentId": "text", "text": ""}],
+        "schedules": [{"id": "apply", "kind": "NOT_A_KIND"}],
+        "coverage": {"schedules": {"status": "EXTRACTED", "reason": None}},
+        "missingFields": [],
+    }
+    found = section._format_problems([part], draft)
+    whole = [f for f in found if f["target"].startswith("/quotes")]
+    assert whole and all("응답 전체를" in f["description"] for f in whole)
+    item = [f for f in found if f["target"].startswith("/schedules/0")]
+    assert item and all(f["item"] == "apply" and "이 항목을" in f["description"] for f in item)
+
+
+def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_notice_is_published_like_v1(monkeypatch):
     monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     recorded = answers()
     # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출)이라 시험에서는 그 결과를 꽂음
@@ -73,8 +139,8 @@ def test_section_agents_add_items_with_typed_tools_and_the_notice_is_published_l
     part = ai_part(example("housing"))
     line = "p1.1"  # 예시 원문은 한 줄이고 예시의 인용은 그 줄 전체
 
-    def items(section):
-        rows = [part[section]] if section == "notice" else part[section]
+    def items(name):
+        rows = [part[name]] if name == "notice" else part[name]
         return [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": [line]} for row in rows]
 
     sections = {
@@ -83,22 +149,39 @@ def test_section_agents_add_items_with_typed_tools_and_the_notice_is_published_l
         "selection": ("selectionRules",),
         "documents": ("requiredDocuments",),
     }
+    prefixes = []
+
+    class Recording(ToolCallingFake):
+        """받은 앞부분(지시·첫 메시지·도구 이름)을 적어 두는 가짜 모델."""
+
+        def bind_tools(self, tools, **kwargs):
+            self.__dict__["tool_names"] = tuple(getattr(t, "name", None) or t["function"]["name"] for t in tools)
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            prefixes.append((messages[0].content, messages[1].content, self.__dict__.get("tool_names", ())))
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     def script(name):
+        if name == section.PRIME:
+            return iter([AIMessage(content="준비")])
         adds = [call(f"add_{s}", **({"item": items(s)[0]} if s == "notice" else {"items": items(s)})) for s in sections[name]]
         usage = {"input_tokens": 1_000, "output_tokens": 100, "total_tokens": 1_100}
-        return iter(
-            [AIMessage(content="", tool_calls=adds, usage_metadata=usage), AIMessage(content="", tool_calls=[call("check")]), AIMessage(content="다 넣었어요.")]
-        )
+        return iter([AIMessage(content="", tool_calls=adds, usage_metadata=usage), AIMessage(content="다 넣었어요.")])
 
     models = NoticeModels(
-        RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=lambda name: ToolCallingFake(messages=script(name))
+        RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=lambda name, **kw: Recording(messages=script(name))
     )
     outcome = run(raw_event(), models)
     assert outcome.status == "COMPLETED" and outcome.error is None
     assert tools().validate(outcome.event, "events/extraction.completed.v1.json") == []
     calls = outcome.usage["v2"]["calls"]
-    assert {c["agent"] for c in calls} == set(sections) and len(calls) == 3 * len(sections)  # 담당마다 모델 호출 3번
+    assert [c["agent"] for c in calls].count(section.PRIME) == 1 and {c["agent"] for c in calls} == {*sections, section.PRIME}
+    assert len(calls) == 2 * len(sections) + 1  # 캐시 데우기 1번 + 담당마다 넣기·끝 2번(검증은 미들웨어가 차례를 쓰지 않고)
+    # 데우기와 모든 담당이 같은 앞부분: 지시·첫 메시지(원문 전체)·도구 목록(모든 담당 섹션의 add 도구 + 쓰기 도구)
+    assert len(set(prefixes)) == 1 and prefixes[0][1].startswith("# 원문") and "p1.1 " in prefixes[0][1]
+    assert prefixes[0][2][:5] == ("add_schedules", "add_guidance", "add_eligibility", "add_selectionRules", "add_requiredDocuments")
     traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
     assert set(traces) == set(sections) and traces["eligibility"]["turns"][0]["calls"][0]["name"] == "add_eligibility"
-    assert json.loads(traces["eligibility"]["turns"][1]["results"][0]["result"])["issueCount"] == 0  # check: 이 담당 섹션 문제 없음
+    assert "남은 문제가 없습니다" in traces["eligibility"]["turns"][0]["verify"]  # 넣은 차례 다음 검증 결과(문제 없음)
+    assert traces["eligibility"]["draft"]["items"]["eligibility"][0]["evidence"] == [line]  # 마지막 초안을 기록
