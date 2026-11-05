@@ -1,7 +1,7 @@
 """재확인 에이전트 전략 (EXTRACTION_RECHECK_STRATEGY=agent).
 
 다시 볼 항목마다 대화 하나를 열어, AI가 도구(repair/tools.py)를 골라 쓰고 submit_fix로 고친 항목을 냅니다.
-- 반복은 이 코드가 합니다: 한 차례 = 모델 호출 한 번(사용량·공고당 비용 상한·장부·캐시를 그대로 지남). 항목당 최대 MAX_TURNS 차례.
+- 반복은 이 코드가 합니다: 한 차례 = 모델 호출 한 번(사용량·공고당 비용 상한·장부·캐시를 그대로 지남). 항목당 최대 max_turns() 차례.
 - 고친 항목들을 지금 재확인 응답과 같은 모양(섹션 → 항목 목록, 인용 목록)으로 모아 돌려주고, 채택은 recheck.adopt가 정합니다.
 - 섹션 전체 문제(빠진 항목 더하기)는 항목 하나를 고치는 일이 아니라서 지금처럼 한 번에 묶어 묻습니다(BatchStrategy).
 - 도구를 지원하지 않는 모델(로컬 AI)이면 전부 BatchStrategy로 돌아갑니다.
@@ -16,22 +16,27 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from mujuthaek_extraction.assemble.quotes import NormalizedText
 from mujuthaek_extraction.extract import CallAttempt, ExtractionRun
 from mujuthaek_extraction.intake.model import ExtractionMaterial
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ToolTurn, supports_tools
 from mujuthaek_extraction.recheck import BATCH, RecheckAnswer
-from mujuthaek_extraction.repair.tools import RepairTools, Submission, item_check, item_refs, problem_code
+from mujuthaek_extraction.repair.tools import FINAL_TOOL, RepairTools, Submission, item_check, item_refs, problem_code
 from mujuthaek_extraction.rules.base import FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
 
-MAX_TURNS = 8  # 항목 하나에 쓰는 모델 차례 상한(도구 호출 수와 같음: 차례마다 도구 하나)
+# 항목 하나에 쓰는 모델 차례 상한(도구 호출 수와 같음: 차례마다 도구 하나). 설정 EXTRACTION_AGENT_MAX_TURNS.
+# 8 → 6(2026-11-05): 기록 30여 항목이 대부분 8차례를 다 썼고 그중 2~4차례가 처음 인용 자리 찾기였음 → 그 자리를 미리 찾아 주고 줄임
+DEFAULT_MAX_TURNS = 6
+TURNS_ENV = "EXTRACTION_AGENT_MAX_TURNS"
+LOCATED_QUOTES = 4  # 미리 찾아 보여 줄 처음 인용 수(입력 길이)
 TURN_OUTPUT_TOKENS = 8_000  # 차례마다 출력 한도. 마지막 제출에 항목 전체가 들어가므로 여유를 둡니다(추론 토큰 포함)
 BUDGET_CODES = frozenset({"BUDGET", "GLOBAL_BUDGET"})
 STRATEGY_ENV = "EXTRACTION_RECHECK_STRATEGY"
 
 INSTRUCTIONS = """# 할 일
 검증에서 문제가 난 항목 하나를 고칩니다. 아래 「고칠 항목」의 문제 설명은 프로그램 검사기가 낸 것입니다.
-도구로 공고 원문을 찾아 읽고 확인한 뒤 submit_fix로 고친 항목을 냅니다. 차례마다 도구 하나를 부릅니다(최대 8차례).
+도구로 공고 원문을 찾아 읽고 확인한 뒤 submit_fix로 고친 항목을 냅니다. 차례마다 도구 하나를 부릅니다(차례 수는 제한됩니다).
 
 # 규칙
 - 근거는 공고 원문뿐입니다. 원문에서 확인하지 못한 값은 만들지 않습니다. 확인하지 못하면 submit_fix의 give_up에 이유를 적습니다(처음 값이 유지됩니다).
@@ -46,13 +51,22 @@ INSTRUCTIONS = """# 할 일
 - 문제가 근거(인용)만이면 인용(quoteRefs)만 고치고 조건의 뜻(대상·종류·조건식·예외)은 바꾸지 않습니다.
 - 제출 전에 validate_item으로 남은 문제를 확인합니다. 제출한 항목에 처음에 없던 문제가 생기면 한 번 되돌려 받으니 고치거나 포기합니다.
   처음부터 있던 문제가 남아도 원문에 맞으면 그대로 냅니다(채택은 프로그램이 정합니다).
+- 「처음 인용의 원문 위치」에 처음 인용이 원문 몇 쪽 어디(pageChar)에 있는지와 앞뒤 글이 있습니다. 그 근처의 일이면 search_source 없이
+  read_page(쪽, pageChar)나 check_quote로 바로 갑니다.
+  확인이 끝났으면 validate_item을 건너뛰고 바로 submit_fix해도 됩니다(새 문제가 생기면 한 번 되돌려 받습니다).
 - 도구 결과의 turnsLeft는 남은 차례입니다. 같은 검색을 되풀이하지 말고, 남은 차례가 적으면 제출하거나 포기합니다. 마지막 차례에는 submit_fix만 쓸 수 있습니다.
 
 # 도구를 쓰는 순서 예
-search_source로 위치를 찾고 → 필요하면 read_page로 앞뒤를 읽고 → check_quote로 인용을 확인하고 → validate_item → submit_fix."""
+(처음 인용 위치를 보고) 필요하면 read_page로 앞뒤를 읽고 → check_quote로 새 인용을 확인하고 → submit_fix.
+처음 인용 근처에 답이 없을 때만 search_source로 다른 위치를 찾습니다."""
 
 
 STRATEGIES = ("batch", "agent", "hybrid")  # hybrid: 묶음 재확인 뒤 남은 문제만 에이전트로(recheck.recheck_rounds)
+
+
+def max_turns() -> int:
+    value = os.getenv(TURNS_ENV, "")
+    return max(2, int(value)) if value.strip().isdigit() else DEFAULT_MAX_TURNS
 
 
 def recheck_strategy() -> str:
@@ -95,6 +109,7 @@ class AgentStrategy:
         items = [t for t in targets if t["id"] is not None or t["section"] == "notice"]
         whole = [t for t in targets if t not in items]
         run, logs = ExtractionRun(), []
+        index = NormalizedText(material.text)  # 원문 색인은 공고의 항목끼리 함께 씁니다
         response: dict[str, Any] = {"quotes": []}
         stop_all = False
         for number, target in enumerate(items, start=1):
@@ -103,7 +118,7 @@ class AgentStrategy:
             if stop_all:
                 log.outcome = "NOT_STARTED"
                 continue
-            submission = self._repair(rules, material, model, parts, target, evaluate, run, log)
+            submission = self._repair(rules, material, model, parts, target, evaluate, run, log, index)
             stop_all = log.outcome == "BUDGET"
             if submission is not None and submission.item is not None:
                 _add(response, target, submission, f"a{number}-", material.text_document_id)
@@ -132,6 +147,7 @@ class AgentStrategy:
         evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None],
         run: ExtractionRun,
         log: ItemLog,
+        index: NormalizedText | None = None,
     ) -> Submission | None:
         section, item_id = target["section"], target["id"]
         base_item, base_quotes = _original(parts, section, item_id)
@@ -141,9 +157,12 @@ class AgentStrategy:
             base_item=base_item,
             base_quotes=base_quotes,
             known_codes=frozenset(problem_code(p) for p in target["problems"]),
+            index=index,
         )
+        first_quotes = [{"ref": ref, "text": base_quotes[ref]} for ref in item_refs(base_item) if ref in base_quotes] if isinstance(base_item, dict) else []
         context = {
             "고칠 항목": _target_view(target, base_item, base_quotes),
+            "처음 인용의 원문 위치": tools.locate(first_quotes[:LOCATED_QUOTES]),
             "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": structure_summary(parts[0]),
         }
         base = ModelRequest(
@@ -158,10 +177,11 @@ class AgentStrategy:
         )
         turns: list[ToolTurn] = []
         log.outcome = "TURN_LIMIT"
-        for turn in range(1, MAX_TURNS + 1):
+        limit = max_turns()
+        for turn in range(1, limit + 1):
             name = f"repair:{log.target}:turn{turn}"
-            tools.final = turn == MAX_TURNS  # 마지막 차례는 제출(또는 포기)만 할 수 있습니다
-            request = replace(base, call_name=name, turns=tuple(turns), tools=tools.specs)
+            tools.final = turn == limit  # 마지막 차례는 제출(또는 포기)만 할 수 있습니다. 도구 목록은 그대로(입력 캐시 유지), 부를 도구만 정합니다
+            request = replace(base, call_name=name, turns=tuple(turns), forced_tool=FINAL_TOOL if tools.final else None)
             try:
                 response = model.complete(request)
             except ModelError as error:
@@ -174,7 +194,7 @@ class AgentStrategy:
             if not response.tool_calls:
                 log.outcome = "NO_TOOL_CALL"
                 break
-            results = tuple(_with_turns_left(tools.run(call), MAX_TURNS - turn) for call in response.tool_calls)
+            results = tuple(_with_turns_left(tools.run(call), limit - turn) for call in response.tool_calls)
             calls = [{"name": c.name, "arguments": c.arguments} for c in response.tool_calls]
             # 도구 결과도 앞부분만 남깁니다(왜 돌려보냈는지·무엇을 찾았는지 다시 돌리지 않고 보려고). 원문 조각이라 길이를 줄입니다
             record = {"toolCalls": calls, "results": [r[:600] for r in results]}
