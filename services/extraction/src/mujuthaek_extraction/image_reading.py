@@ -31,6 +31,11 @@ log = logging.getLogger(__name__)
 RESIDENT_NUMBER = re.compile(r"(?<!\d)\d{6}\s*-\s*[1-8]\d{6}(?!\d)")
 BLOCK_HEAD = "=== 그림 판독 "  # 판독 글자 묶음의 머리 (검증기가 이 묶음 안의 근거를 찾습니다)
 BLOCK_NOTE = "(AI가 그림 속 글자를 옮김, 원문 그림으로 확인 필요)"
+CHECK_CALL = "image_text_check"  # 같은 그림을 따로 한 번 더 읽는 호출(두 판독을 줄마다 맞춰 봄)
+# 두 판독이 다른 줄의 묶음. 줄의 「|」는 「¦」로 바꿔 적어 표 행·인용 위치로 잡히지 않게 합니다(verify/consistency가 되돌려 비교)
+DISPUTED_HEAD = "=== 그림 판독 불일치 (두 번 읽은 글자가 다른 줄) ==="
+DISPUTED_LINE = "불일치 줄: "
+DISPUTED_BAR = "¦"
 MAX_IMAGES = 6  # 한 공고에서 그려 보낼 쪽 수 상한 (비용)
 RESOLUTION = 200  # 그림 영역 해상도(dpi). 120dpi 쪽 전체 그림에서는 표의 작은 숫자(27.02/27.07)가 헷갈렸음
 IMAGE_SHARE = 0.25  # pdf_reader.IMAGE_PAGE_SHARE와 같은 기준으로 자를 그림을 고릅니다
@@ -104,6 +109,48 @@ def bordered(text: str) -> str:
     return "\n".join(lines)
 
 
+def _clean(text: str) -> str:
+    return bordered(RESIDENT_NUMBER.sub("******-*******", redact_secret_values(text.strip())))
+
+
+def _key(line: str) -> str:
+    return "".join(line.split())
+
+
+def _read(model: ExtractionModel, request: ModelRequest, run: ExtractionRun) -> dict[str, Any] | None:
+    """판독 호출 한 번. 실패·잘림·형식 오류면 None(기록은 run에)."""
+    name = request.call_name
+    try:
+        response = model.complete(request)
+    except ModelError as error:
+        run.attempts.append(CallAttempt(name, PROMPT_VERSION, False, None, None, None, None, None, str(error)))
+        run.failed_calls.append((name, str(error)))
+        return None
+    run.attempts.append(
+        CallAttempt(
+            name,
+            PROMPT_VERSION,
+            False,
+            response.model_id,
+            response.stop_reason.value,
+            response.input_tokens,
+            response.output_tokens,
+            response.cached_input_tokens,
+            None,
+            response.cache_write_tokens,
+        )
+    )
+    run.raw_responses.append((name, response.raw_text))
+    try:
+        answer = _parse(response.raw_text) if response.stop_reason is StopReason.END else None
+    except ValueError:
+        answer = None
+    if answer is None or schema_errors(answer, SCHEMA) is not None:
+        run.failed_calls.append((name, "그림 판독 응답을 읽지 못했습니다."))
+        return None
+    return answer
+
+
 def read_image_tables(
     material: ExtractionMaterial, context: TrustedContext, model: ExtractionModel
 ) -> tuple[ExtractionMaterial, TrustedContext, ExtractionRun | None]:
@@ -128,43 +175,27 @@ def read_image_tables(
         max_output_tokens=output_limit("image_text", MAX_OUTPUT_TOKENS),
         images=images,
     )
-    try:
-        response = model.complete(request)
-    except ModelError as error:
-        run.attempts.append(CallAttempt("image_text", PROMPT_VERSION, False, None, None, None, None, None, str(error)))
-        run.failed_calls.append(("image_text", str(error)))
+    answer = _read(model, request, run)
+    if answer is None:
         return material, context, run
-    run.attempts.append(
-        CallAttempt(
-            "image_text",
-            PROMPT_VERSION,
-            False,
-            response.model_id,
-            response.stop_reason.value,
-            response.input_tokens,
-            response.output_tokens,
-            response.cached_input_tokens,
-            None,
-            response.cache_write_tokens,
-        )
-    )
-    run.raw_responses.append(("image_text", response.raw_text))
-    try:
-        answer = _parse(response.raw_text) if response.stop_reason is StopReason.END else None
-    except ValueError:
-        answer = None
-    if answer is None or schema_errors(answer, SCHEMA) is not None:
-        run.failed_calls.append(("image_text", "그림 판독 응답을 읽지 못했습니다."))
-        return material, context, run
+    # 같은 그림을 한 번 더 따로 읽어 줄마다 맞춰 봅니다(2026-11-05: 실행마다 250,600을 250,500으로 읽기도 함 — 한 번 읽은 값은 오독을 걸러 낼 수 없음).
+    # 두 판독이 다른 줄은 불일치 묶음에 적어 두고, 그 줄을 근거로 한 값은 검증기가 사람 확인으로 보냅니다(verify/consistency).
+    # 다시 읽기에 실패하면 모든 줄이 불일치입니다
+    check = _read(model, dataclasses.replace(request, call_name=CHECK_CALL, max_output_tokens=output_limit(CHECK_CALL, MAX_OUTPUT_TOKENS)), run)
+    second = {page["image"]: _clean(page["text"]) for page in (check or {}).get("pages", [])}
 
-    blocks = []
+    blocks, disputed = [], []
     for page in answer["pages"]:
-        index, text = page["image"], RESIDENT_NUMBER.sub("******-*******", redact_secret_values(page["text"].strip()))
+        index, text = page["image"], _clean(page["text"])
         if text and 1 <= index <= len(targets):
             _, name, _, number = targets[index - 1]
-            blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{bordered(text)}")
+            blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{text}")
+            agreed = {_key(line) for line in second.get(index, "").split("\n")}
+            disputed += [line for line in text.split("\n") if line.strip() and _key(line) not in agreed]
     if not blocks:
         return material, context, run
+    if disputed:
+        blocks.append(f"{DISPUTED_HEAD}\n" + "\n".join(DISPUTED_LINE + line.replace("|", DISPUTED_BAR) for line in disputed))
     text = "\n".join([material.text, *blocks])
     documents = copy.deepcopy(list(context.documents))
     for document in documents:

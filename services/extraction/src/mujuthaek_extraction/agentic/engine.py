@@ -22,6 +22,8 @@ from mujuthaek_extraction.verify.verifier import API_OK, SCHEMA, _incomplete, he
 
 ACCEPTED = "AGENT_ACCEPTED"
 HELD = "AGENT_HOLD"
+# 에이전트가 받아들일 수 없는 문제: 원문 그림과 맞춰야 하는데 에이전트는 옮긴 글자만 봅니다(같은 글자를 다시 봐도 판독 오류를 가려낼 수 없음)
+UNACCEPTABLE = frozenset({"IMAGE_READING_DISAGREES"})
 
 
 def make_env(rules: FieldRules, intake: Any, rt: pipeline.Runtime) -> Env:
@@ -51,6 +53,9 @@ def apply_decision(report: VerificationReport, decision: Decision | None) -> dic
     kept = []
     for issue in quality["reviewIssues"]:
         reason = wanted.pop((issue["code"], issue["target"]), None)
+        if reason is not None and issue["code"] in UNACCEPTABLE:
+            record.setdefault("refused", []).append({"code": issue["code"], "target": issue["target"]})
+            reason = None
         if reason is None:
             kept.append(issue)
             continue
