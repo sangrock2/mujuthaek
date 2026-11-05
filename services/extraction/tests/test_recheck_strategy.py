@@ -75,3 +75,16 @@ def test_second_round_fixes_what_the_first_left_and_records_both():
     rounds = recheck_rounds(RULES, source.material, RecordedModel({}), parts, evaluate, (NoAnswer(), second))
     assert rounds.accepted and rounds.adopted_sections == ("2:전체",) and rounds.report.passed
     assert ("1:전체", "답 없음") in rounds.rejected and rounds.rechecked == ["eligibility/" + data["eligibility"][1]["id"]]
+
+
+def test_an_item_that_disappears_counts_as_lost_values():
+    from mujuthaek_extraction.recheck import _lost_values
+    from mujuthaek_extraction.verify import VerificationReport
+
+    def report(groups, eligibility=1):
+        return VerificationReport(candidate={"supplyGroups": groups, "eligibility": [{}] * eligibility}, findings=[], contract_errors=[])
+
+    group = {"id": "g1", "prices": [{}] * 16, "counts": [{}] * 3}
+    assert _lost_values(report([group]), report([])) == ["supplyGroups/g1", "supplyGroups"]  # 묶음째 사라짐
+    assert _lost_values(report([group]), report([group], eligibility=0)) == ["eligibility"]  # 자격 조건이 빠짐
+    assert _lost_values(report([group]), report([group])) == []
