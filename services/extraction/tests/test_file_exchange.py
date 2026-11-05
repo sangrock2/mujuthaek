@@ -89,3 +89,15 @@ def test_file_call_cache_keeps_the_first_answer_across_runs(tmp_path):
     first.put("k", "gpt", "structure", {"rawText": "a"}, None)
     first.put("k", "gpt", "structure", {"rawText": "b"}, None)  # 같은 열쇠는 처음 것을 둡니다
     assert FileCallCache(tmp_path).get("k") == {"rawText": "a"} and FileCallCache(tmp_path).get("x") is None
+
+
+def test_replay_never_reuses_agent_turns(tmp_path):
+    """도구 요청(에이전트 차례)은 앞선 답이 있어도 새로 받습니다(2026-11-05: 총괄 첫 차례를 다시 써서 운영 모델의 다른 첫 판단을 못 봄)."""
+    earlier, now = tmp_path / "earlier", tmp_path / "now"
+    earlier.mkdir()
+    thread = answer_when_asked(earlier, {"tool_calls": [{"name": "search_source", "arguments": {"query": "접수"}}]})
+    FileExchangeModel(earlier, poll_seconds=0.01).complete(request(tools=(SEARCH,)))
+    thread.join()
+    with pytest.raises(ModelError) as waited:
+        FileExchangeModel(now, replay=earlier, timeout_seconds=0.05, poll_seconds=0.01).complete(request(tools=(SEARCH,)))
+    assert waited.value.code == "STANDIN_TIMEOUT"

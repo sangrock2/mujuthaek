@@ -552,3 +552,45 @@ def test_format_errors_show_the_reason_not_the_whole_item():
     item = {"id": "s1", "kind": "SCORING", "points": None, "description": "가" * 400}
     errors = tools_._format_errors("selectionRules", item)
     assert errors and all(len(e) < 300 and not e.split(": ", 1)[1].startswith("{") for e in errors)
+
+
+# ── 유료 측정(2026-11-05, 3건)에서 찾은 결함 ──────────────────────────────────────────────────────
+
+
+def test_holds_are_items_with_a_reason_in_the_source_not_whole_sections():
+    # 총괄이 /supplyGroups·/eligibility·/requiredDocuments를 통째로 「재검수 필요」로 보류해 검수 없이 게시가 64% → 33%
+    from mujuthaek_extraction.agentic.agents import decision_problems
+
+    issue = {"code": "EVIDENCE_AMBIGUOUS", "target": "/schedules/0", "description": "근거가 여러 곳"}
+    env = bare_env()
+    env.evaluate = lambda parts: report_with(issue)
+    real = env.material.text[env.material.text.index("무주택") :][:20]
+    holds = [
+        {"target": "/eligibility", "reason": "완전성 확인 필요", "quote": real},  # 섹션 전체
+        {"target": "/eligibility/0", "reason": "확인 필요", "quote": ""},  # 검증기 문제 없는 항목, 근거 없음
+        {"target": "/eligibility/0", "reason": "예외가 빠짐", "quote": "원문에 없는 글입니다"},
+        {"target": "/eligibility/0", "reason": "예외가 빠짐", "quote": real},
+        {"target": "/schedules/0", "reason": "근거가 여러 곳", "quote": ""},  # 검증기 문제로 이미 보류되는 항목
+    ]
+    problems = decision_problems(env, [], holds)
+    assert [p["index"] for p in problems] == [0, 1, 2] and all(p["kind"] == "hold" for p in problems)
+    assert "섹션 전체" in problems[0]["message"] and "quote" in problems[1]["message"]
+
+
+def test_held_item_keeps_the_agents_quote_for_the_reviewer():
+    report = report_with({"code": "EVIDENCE_AMBIGUOUS", "target": "/schedules/0", "description": "근거가 여러 곳"})
+    apply_decision(report, Decision(hold=[{"target": "/eligibility/0", "reason": "예외가 빠짐", "quote": "무주택세대구성원"}]))
+    held = next(i for i in report.candidate["quality"]["reviewIssues"] if i["code"] == HELD)
+    assert held["target"] == "/eligibility/0" and "예외가 빠짐" in held["description"] and "「무주택세대구성원」" in held["description"]
+
+
+def test_worker_does_not_re_extract_its_section_unless_asked():
+    # gh-809: 다시 맡길 때마다 담당이 extract_section을 다시 불러 고친 것을 지우고 같은 호출 비용을 다시 씀
+    from mujuthaek_extraction.agentic.agents import WorkerTools
+
+    env = bare_env()
+    env.draft.put_parts("eligibility", [{"quotes": [], "eligibility": [{"id": "e1"}], "coverage": {}, "missingFields": []}])
+    tools_ = WorkerTools(env, "eligibility")
+    assert tools_._extract_section()["error"] == "ALREADY_EXTRACTED"
+    assert tools_._extract_section(again=True).get("error") != "ALREADY_EXTRACTED"
+    assert WorkerTools(env, "documents")._extract_section().get("error") != "ALREADY_EXTRACTED"

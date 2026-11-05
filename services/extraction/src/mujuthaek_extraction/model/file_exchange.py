@@ -12,6 +12,8 @@
 
 replay(EXTRACTION_STANDIN_REPLAY_DIR): 앞선 실행 폴더에 같은 요청(경로 빼고 내용이 같고, 그림은 내용이 같음)의 답이 있으면 그 답을 먼저 써 두고
 요청에 replayedFrom을 남깁니다. 고친 흐름을 같은 첫 추출 위에서 다시 시험할 때 대역이 같은 요청에 또 답하지 않게(호출 캐시와 같은 쓰임).
+도구 요청(에이전트 차례)은 다시 쓰지 않습니다: 에이전트의 판단을 매번 새로 받아야 흐름을 시험합니다(2026-11-05: 총괄 첫 차례를 다시 써서
+운영 모델이 extract_all 대신 처음부터 맡기는 행동을 대역 시험에서 못 봄).
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ class FileExchangeModel:
             )
         else:
             body.update(outputSchema=request.output_schema, answerFormat=TEXT_FORMAT)
-        earlier = self._earlier_answer(_key(body, [image.data for image in request.images]))
+        earlier = None if request.tools else self._earlier_answer(_key(body, [image.data for image in request.images]))
         if earlier is not None:
             body["replayedFrom"] = str(earlier)
             answer.write_bytes(earlier.read_bytes())  # 요청보다 먼저 써서 기다리는 요청으로 보이지 않게

@@ -86,7 +86,7 @@ def _turns(env_name: str, default: int) -> int:
 @dataclass
 class Decision:
     accept: list[dict[str, str]] = field(default_factory=list)  # 받아들인 검증기 문제 (code, target, reason)
-    hold: list[dict[str, str]] = field(default_factory=list)  # 총괄이 보류로 지정한 위치 (target, reason)
+    hold: list[dict[str, str]] = field(default_factory=list)  # 총괄이 보류로 지정한 항목 (target, reason, quote)
     note: str = ""
 
 
@@ -351,6 +351,7 @@ WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
 「맡은 섹션」의 작업 초안을 원문에 맞게 고칩니다. 「남은 문제」는 지금 초안에 검증기를 돌린 결과입니다(다시 check하지 않아도 됩니다).
 - upsert_item·remove_item·set_coverage: 원문을 읽고 항목을 직접 넣고·고치고·빼고, 섹션 상태를 정합니다. 문제 항목의 인용 위치부터 read_page로 읽습니다.
 - extract_section: 맡은 섹션을 기존 추출기로 처음부터 다시 뽑습니다(초안의 이 섹션을 바꿈). 모델 호출 1번(약 $0.004, 40~60초).
+  이미 초안이 있으면 again을 true로 둘 때만 다시 뽑습니다(고친 것이 지워지고 호출 비용이 다시 듦).
 - check: 고친 뒤 맡은 섹션에 남은 문제를 다시 봅니다.
 - done: 끝냅니다. summary는 남은 것 → 원문으로 확인해 문제가 아니라고 본 것(근거 쪽·인용) → 고친 것 순서로 짧게 적습니다(길면 뒤가 잘림).
   총괄 에이전트가 이것을 읽고 다음을 정합니다.
@@ -393,7 +394,11 @@ class WorkerTools(Reading):
         section = {"enum": list(self.sections)}
         self.specs = (
             *(s for s in READ_SPECS if s.name != "outline"),  # 차례는 총괄이 봄(담당 첫 차례마다 outline을 불러 비용만 듦)
-            ToolSpec("extract_section", "기존 섹션 추출기를 불러 맡은 섹션 전체를 초안에 넣습니다(초안의 이 섹션을 바꿈).", _object({})),
+            ToolSpec(
+                "extract_section",
+                "기존 섹션 추출기를 불러 맡은 섹션 전체를 초안에 넣습니다(초안의 이 섹션을 바꿈). 이미 초안이 있으면 again이 true일 때만 다시 뽑습니다.",
+                _object({"again": {"type": "boolean"}}),
+            ),
             ToolSpec(
                 "upsert_item",
                 "항목 하나를 넣거나 고칩니다. notice는 객체 하나입니다. quotes는 새로 쓴 인용(ref·text). quoteRefs는 있던 근거에 더해지고, "
@@ -410,7 +415,12 @@ class WorkerTools(Reading):
             ToolSpec("done", "끝냅니다. summary에 남은 일, 문제가 아니라고 본 것(근거), 한 일 순서로 적습니다.", _object({"summary": STRING})),
         )
 
-    def _extract_section(self) -> dict[str, Any]:
+    def _extract_section(self, again: bool = False) -> dict[str, Any]:
+        # 2026-11-05 유료 측정(gh-809): 다시 맡길 때마다 담당이 extract_section을 다시 불러 고친 것을 지우고 같은 호출 비용을 다시 씀
+        # (자격·서류 담당이 각 4번, 그 공고 $0.082 중 $0.053). extract_all이 채운 섹션을 덮어쓰지 않는 것과 같은 원칙
+        if self.name in self.env.draft.filled() and not again:
+            message = "이 섹션 초안이 이미 있습니다. 필요한 곳만 upsert_item으로 고칩니다. 처음부터 다시 뽑으려면 again을 true로(고친 것이 지워짐)."
+            return {"error": "ALREADY_EXTRACTED", "message": message}
         structure = self.env.structure()
         if self.spec.uses_structure and structure is None:
             return {"error": "NO_STRUCTURE", "message": "구조(공고 기본 정보·위치·공급)가 아직 없습니다. 총괄에게 done으로 알립니다."}
@@ -563,18 +573,23 @@ def _cut(text: str, limit: int) -> str:
 SUPERVISOR_INSTRUCTIONS = """# 할 일 (총괄 에이전트)
 공고 하나의 추출을 맡습니다. 결과는 작업 초안이고, finish로 끝내면 그대로 게시 준비가 됩니다. 순서·방법은 스스로 정합니다.
 - 「원문 차례」(outline 결과)는 처음 요청에 있습니다. 필요하면 search_source·read_page·read_table로 더 읽습니다.
-- extract_all: 기존 섹션 추출기를 모든 섹션에 동시에 돌려 초안을 채웁니다(초안을 바꿈). 모델 호출 3~5번을 동시에(약 $0.02, 1~2분).
+- extract_all: 기존 섹션 추출기를 모든 섹션에 동시에 돌려 비어 있는 섹션 초안을 채웁니다(이미 있는 섹션은 그대로). 모델 호출 3~5번을
+  동시에(약 $0.02, 1~2분), 담당 차례 없이 이 한 차례로 끝납니다.
 - 그림 쪽(pictureOnlyPages)의 글자는 read_images를 하기 전에는 원문에 없습니다(약 $0.004, 20~40초).
 - 비용·시간 참고: 담당을 처음 부를 때 약 $0.002, 그 뒤 담당·총괄 차례 1번 약 $0.0004·5~15초. 공고당 비용 상한이 있습니다.
   한 차례에 도구 여럿을 부를 수 있습니다. 같은 담당을 다시 맡기면 그 담당의 앞선 대화를 이어 갑니다.
 - read_images: 글자 없는 그림 쪽(가격표 등이 그림인 경우)의 글자를 옮겨 원문 끝에 붙입니다. outline의 pictureOnlyPages가 있을 때 판단해서 씁니다.
 - delegate: 하위 에이전트(섹션 담당)에 일을 맡깁니다. brief에 무엇을 할지(처음 뽑기, 특정 문제 고치기, 빠진 표 행 더하기 등) 구체적으로 적습니다.
   구조 담당(notice·위치·공급)이 먼저여야 다른 담당이 그 ID를 씁니다. 같은 담당은 최대 3번까지 맡길 수 있습니다.
+  맡긴 담당은 섹션 초안이 비어 있으면 그 섹션을 처음 뽑고(extract_all의 그 섹션 호출과 같은 호출) 그 위에 최대 6차례 일합니다.
+  그래서 처음 뽑기만 맡기면 extract_all보다 담당 차례만큼 더 들고 느립니다. 다시 맡길 때마다 담당 차례가 다시 듭니다.
 - delegate_many: 서로 기대지 않는 담당 여럿을 동시에 맡깁니다(하나씩 맡길 때보다 시간이 줄어듦).
 - check_all: 초안 전체에 검증기를 돌려 남은 문제를 봅니다.
 - finish: 끝냅니다. 검증기 문제 중 원문으로 확인해 문제가 아니라고 판단한 것은 accept에(code·target을 check_all 결과 그대로, reason에 판단,
   quote에 확인한 원문 구간 그대로 — 프로그램이 원문에 있는지·값 문제면 그 값이 quote에 있는지 확인하고, 맞지 않으면 한 번 돌려보냄),
-  확인이 필요한 곳은 hold에 적습니다. accept한 값은 사람 확인 없이 게시되므로 원문으로 확인한 것만 넣습니다. 남긴 문제는 그 범위만 보류됩니다.
+  accept한 값은 사람 확인 없이 게시되므로 원문으로 확인한 것만 넣습니다. 남긴 검증기 문제는 그 항목만 보류됩니다.
+  hold에는 검증기가 못 잡은 문제가 있는 항목만 항목 단위로 적습니다(target 예: /eligibility/3, /supplyGroups/0 — 섹션 전체는 안 됨.
+  섹션을 다 뽑지 못했으면 검증기가 그 섹션을 보류함). quote에 그 문제를 보여 주는 원문 구간을 그대로 적습니다.
   IMAGE_READING_DISAGREES(그림을 두 번 읽은 글자가 다름)는 원문 그림과 맞춰야 해서 받아들일 수 없습니다.
 
 # 규칙
@@ -593,10 +608,17 @@ class SupervisorTools(Reading):
         target = _object({"code": STRING, "target": STRING, "reason": STRING, "quote": STRING})
         self.specs = (
             *READ_SPECS,
-            ToolSpec("extract_all", "기존 섹션 추출기를 모든 섹션에 동시에 돌려 초안을 채웁니다(초안을 바꿈).", _object({})),
+            ToolSpec(
+                "extract_all",
+                "기존 섹션 추출기를 모든 섹션에 동시에 돌려 비어 있는 섹션 초안을 채웁니다(이미 있는 섹션은 그대로, 담당 차례 없이 이 한 차례로 끝남).",
+                _object({}),
+            ),
             ToolSpec("read_images", "글자 없는 그림 쪽을 그림으로 읽어 글자를 원문 끝에 붙입니다(한 번만).", _object({})),
             ToolSpec(
-                "delegate", "하위 에이전트에 일을 맡기고 결과(요약·초안 상태)를 받습니다.", _object({"worker": {"enum": list(env.workers)}, "brief": STRING})
+                "delegate",
+                "하위 에이전트에 일을 맡기고 결과(요약·초안 상태)를 받습니다. 담당은 섹션이 비어 있으면 처음 뽑고 최대 6차례 일합니다"
+                "(처음 뽑기만이면 extract_all이 담당 차례가 없어 더 쌈).",
+                _object({"worker": {"enum": list(env.workers)}, "brief": STRING}),
             ),
             ToolSpec(
                 "delegate_many",
@@ -606,11 +628,12 @@ class SupervisorTools(Reading):
             ToolSpec("check_all", "초안 전체에 검증기를 돌려 남은 문제와 검증기가 낼 상태를 봅니다.", _object({})),
             ToolSpec(
                 "finish",
-                "끝냅니다. accept: 받아들인 검증기 문제(code·target·reason·quote — quote는 확인한 원문 구간 그대로), hold: 보류할 위치(target·reason).",
+                "끝냅니다. accept: 받아들인 검증기 문제(code·target·reason·quote — quote는 확인한 원문 구간 그대로), "
+                "hold: 검증기가 못 잡은 문제가 있는 항목(target은 항목 단위, reason, quote는 그 문제를 보여 주는 원문 구간).",
                 _object(
                     {
                         "accept": {"type": "array", "items": target},
-                        "hold": {"type": "array", "items": _object({"target": STRING, "reason": STRING})},
+                        "hold": {"type": "array", "items": _object({"target": STRING, "reason": STRING, "quote": STRING})},
                         "note": STRING,
                     }
                 ),
@@ -701,7 +724,7 @@ class SupervisorTools(Reading):
         def clean(rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
             return [{k: str(r.get(k, ""))[:300] for k in keys} for r in rows or [] if isinstance(r, dict)]
 
-        accept, hold = clean(accept, ("code", "target", "reason", "quote")), clean(hold, ("target", "reason"))
+        accept, hold = clean(accept, ("code", "target", "reason", "quote")), clean(hold, ("target", "reason", "quote"))
         problems = decision_problems(self.env, accept, hold)
         if problems and not self.returned and not self.final:
             # 결정 오류를 조용히 버리지 않고 한 번 돌려보내 고치게 합니다(2026-11-05 점검, 재확인 submit_fix 되돌리기와 같은 방식)
@@ -723,10 +746,12 @@ DIGITS = re.compile(r"\d")
 
 
 def decision_problems(env: Env, accept: list[dict[str, str]], hold: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """총괄 결정의 잘못: 지금 없는 문제·받아들일 수 없는 문제·원문에 없는 인용·인용에 없는 값(받아들이기), 보류할 수 없는 위치(보류).
+    """총괄 결정의 잘못: 지금 없는 문제·받아들일 수 없는 문제·원문에 없는 인용·인용에 없는 값(받아들이기),
+    보류할 수 없는 위치·섹션 전체·근거 없는 항목(보류).
     받아들이기는 공개 판단을 에이전트에게 맡기되(사용자 결정 2026-11-05), 근거가 확인된 것만 받습니다."""
     from mujuthaek_extraction.agentic.engine import UNACCEPTABLE, _pointer  # engine이 이 모듈을 가져다 써서 실행할 때 가져옵니다
     from mujuthaek_extraction.contracts import tools as contract_tools
+    from mujuthaek_extraction.verify.verifier import held_target
 
     report = env.evaluate(env.draft.as_parts())
     if report is None:
@@ -753,12 +778,28 @@ def decision_problems(env: Env, accept: list[dict[str, str]], hold: list[dict[st
                 reason = f"값 {value}이(가) quote에 없습니다. 그 값이 적힌 원문 구간을 quote로 냅니다."
         if reason:
             problems.append({"kind": "accept", "index": index, "code": code, "target": target, "message": reason})
+    # 보류는 항목 단위로, 검증기가 못 잡은 문제면 그 문제를 보여 주는 원문과 함께(2026-11-05 유료 측정: 총괄이 /supplyGroups·/eligibility·
+    # /requiredDocuments를 통째로 「재검수 필요」로 보류해 검수 없이 게시가 64% → 33%. 덜 뽑힌 섹션은 검증기가 이미 섹션으로 보류함)
+    issue_items = {found[0] for issue in candidate["quality"]["reviewIssues"] if (found := held_target(candidate, issue["target"]))}
     for index, row in enumerate(hold):
-        if _pointer(candidate, row["target"]) is None:
-            problems.append(
-                {"kind": "hold", "index": index, "target": row["target"], "message": "보류할 수 있는 위치가 아닙니다(예: /eligibility/3, /supplyGroups)."}
-            )
+        target = _pointer(candidate, row["target"])
+        found = held_target(candidate, target) if target else None
+        quote = row.get("quote", "").strip()
+        reason = None
+        if found is None:
+            reason = "보류할 수 있는 위치가 아닙니다(항목 단위로: /eligibility/3, /supplyGroups/0)."
+        elif found[1] != "ITEM":
+            reason = "섹션 전체는 보류하지 않습니다. 문제가 있는 항목(예: /eligibility/3)을 적습니다(섹션을 다 뽑지 못했으면 검증기가 그 섹션을 보류합니다)."
+        elif not _covers(issue_items, found[0]) and not (quote and env.reader._check_quote(quote).get("found")):
+            reason = "검증기 문제가 없는 항목은 그 문제를 보여 주는 원문 구간을 quote로 냅니다(원문에 글자 그대로 있어야 함)."
+        if reason:
+            problems.append({"kind": "hold", "index": index, "target": row["target"], "message": reason})
     return problems
+
+
+def _covers(items: set[str], item: str) -> bool:
+    """검증기 문제로 이미 보류되는 항목인지(같은 항목이거나 그 안·밖의 칸)."""
+    return any(item == held or held.startswith(item + "/") or item.startswith(held + "/") for held in items)
 
 
 def run_supervisor(env: Env) -> None:
