@@ -124,3 +124,21 @@ def _rename_refs(node: Any, renamed: dict[str, str]) -> Any:
     if isinstance(node, list):
         return [_rename_refs(x, renamed) for x in node]
     return node
+
+
+def split_by_owner(part: dict[str, Any], owners: dict[str, str]) -> dict[str, dict[str, Any]]:
+    """여러 담당의 섹션을 함께 담은 조각(작은 공고의 자격·선정·서류 한 호출)을 담당별 조각으로 나눕니다.
+    인용 목록은 모두 함께 둡니다(결합기는 조각 안에서만 ref를 찾음). 누락 기록·범위 상태는 그 섹션 담당에게."""
+    by_owner: dict[str, list[str]] = {}
+    for section in owners:
+        if section in part:
+            by_owner.setdefault(owners[section], []).append(section)
+    if len(by_owner) <= 1:
+        return {owner: part for owner in by_owner}
+    out = {}
+    for owner, sections in by_owner.items():
+        piece = {k: v for k, v in part.items() if k not in owners or k in sections}
+        piece["coverage"] = {k: v for k, v in (part.get("coverage") or {}).items() if k in sections}
+        piece["missingFields"] = [m for m in part.get("missingFields") or [] if str(m.get("target", "")).lstrip("/").split("/", 1)[0] in sections]
+        out[owner] = copy.deepcopy(piece)
+    return out

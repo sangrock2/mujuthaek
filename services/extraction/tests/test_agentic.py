@@ -170,3 +170,38 @@ def test_long_delegation_results_are_kept_not_replaced_by_an_error(monkeypatch):
     _, model = run_agentic(monkeypatch, calls)
     result = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn3").turns[-1].results[0])
     assert len(result["results"]) == 4 and all(len(r["summary"]) <= 700 and isinstance(r["draft"], dict) for r in result["results"])
+
+
+def test_extract_all_fills_every_worker_like_the_fixed_flow_and_workers_get_the_issues_up_front(monkeypatch):
+    calls = dict(answers())
+    calls.update(
+        supervisor(
+            turn("extract_all"), turn("check_all"), turn("delegate", worker="selection", brief="문제 고치기"), turn("finish", accept=[], hold=[], note="")
+        )
+    )
+    calls.update(worker("selection", turn("done", summary="고칠 것 없음")))
+    outcome, model = run_agentic(monkeypatch, calls)
+    assert outcome.status == "COMPLETED"
+    # 기존 흐름과 같은 호출로 뽑아(test_pipeline과 같은 호출 목록) 담당별로 초안에 넣음
+    assert [r.call_name for r in model.requests if not r.call_name.startswith("agentic:")] == list(WORKERS)
+    first = next(r for r in model.requests if r.call_name == "agentic:selection:turn1")
+    assert "남은 문제" in json.loads(first.user) and "outline" not in {t.name for t in first.tools}
+    assert "원문 차례" in json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn1").user)
+
+
+def test_part_with_several_workers_sections_is_split_by_owner():
+    from mujuthaek_extraction.agentic.draft import split_by_owner
+
+    owners = {"eligibility": "eligibility", "selectionRules": "selection", "requiredDocuments": "documents"}
+    part = {
+        "quotes": [{"ref": "q1"}],
+        "eligibility": [{"id": "e"}],
+        "selectionRules": [{"id": "s"}],
+        "requiredDocuments": [],
+        "coverage": {"eligibility": {"status": "EXTRACTED"}, "selectionRules": {"status": "PARTIAL"}, "requiredDocuments": {"status": "NOT_IN_SOURCE"}},
+        "missingFields": [{"target": "/selectionRules/0/points"}],
+    }
+    pieces = split_by_owner(part, owners)
+    assert set(pieces) == {"eligibility", "selection", "documents"} and pieces["selection"]["selectionRules"] == [{"id": "s"}]
+    assert "eligibility" not in pieces["selection"] and pieces["selection"]["quotes"] == [{"ref": "q1"}]
+    assert pieces["selection"]["missingFields"] == [{"target": "/selectionRules/0/points"}] and pieces["eligibility"]["missingFields"] == []
