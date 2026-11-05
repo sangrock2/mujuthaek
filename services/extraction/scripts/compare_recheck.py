@@ -136,11 +136,20 @@ def main() -> None:
         return
     regions = RegionCodeTable.from_csv(settings.region_table, settings.region_table_date)
     total, rows = 0.0, []
+
+    def stage_budget() -> bool:
+        """단계마다 공고당 상한은 운영 값 그대로 두고, 남은 전체 상한이 더 작으면 그만큼만 씁니다. 남은 것이 없으면 False.
+        (2026-11-05: 공고당 상한을 $0.05로 낮췄더니 병렬 호출이 최악 비용을 함께 잡아 자격·선정·서류 호출이 보내지지도 않고 거절됐음)"""
+        remaining = args.total_budget_usd - total
+        if remaining <= 0.01:
+            return False
+        factory.settings = dataclasses.replace(settings, notice_budget_usd=min(settings.notice_budget_usd, remaining))
+        return True
+
     for board in args.board:
         source, notice_id = board.split(":", 1)
-        saved = args.reuse and (args.out / f"{source}-{notice_id}" / "extraction.pkl").exists()
-        if total + settings.notice_budget_usd * (len(strategies) + (0 if saved else 1)) > args.total_budget_usd:
-            print(f"전체 상한에 닿을 수 있어 멈춥니다(지금 ${total:.4f}). 남은 공고: {board} 외")
+        if not stage_budget():
+            print(f"전체 상한에 닿아 멈춥니다(지금 ${total:.4f}). 남은 공고: {board} 외")
             break
         case = board_case(args.board_root, source, notice_id)
         case.event["payload"]["reprocess"] = False
@@ -149,8 +158,14 @@ def main() -> None:
             continue
         reused = args.reuse and (args.out / case.name / "extraction.pkl").exists()
         total += 0.0 if reused else data["costUsd"]
-        row: dict[str, Any] = {"notice": case.name, "extractionCostUsd": round(data["costUsd"], 4), "reused": reused}
+        complete = not data["failedCalls"]
+        if not complete:  # 섹션이 빠진 첫 추출: 두 전략은 같은 조각이라 비교는 되지만 재확인 대상이 적어 대표성이 떨어집니다
+            print(f"경고: {case.name} 첫 추출 실패 호출 {[name for name, _ in data['failedCalls']]} — 비교 결과에 extractionComplete=false로 남깁니다")
+        row: dict[str, Any] = {"notice": case.name, "extractionCostUsd": round(data["costUsd"], 4), "reused": reused, "extractionComplete": complete}
         for strategy in strategies:
+            if not stage_budget():
+                print(f"전체 상한에 닿아 {case.name}의 {strategy} 재확인을 건너뜁니다(지금 ${total:.4f})")
+                continue
             outcome, cost = recheck_with(strategy, case, data, factory, regions)
             total += cost
             folder = args.out / strategy / case.name
