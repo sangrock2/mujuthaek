@@ -57,6 +57,7 @@ class Table:
 class DocumentModel:
     items: tuple[Line | Table, ...]  # 원문 순서(본문 줄과 표가 섞임)
     picture_pages: tuple[str, ...] = ()  # 글자 없는 그림 쪽(p8 · d2.p1)
+    source_id: str = "text"  # 원문 글자의 문서 ID(V1 material.text_document_id). 인용의 documentId
     _by_id: dict[str, Line | Table] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -177,16 +178,16 @@ class DocumentModel:
 
 def build(material: ExtractionMaterial) -> DocumentModel:
     """V1 입력 해석 결과 → 문서 모델. 그림 쪽은 첨부 PDF에서 찾습니다(V1 그림 판독과 같은 기준)."""
-    document = parse(material.text)
+    document = parse(material.text, material.text_document_id)
     pdfs = [file.document_id for file in material.files if file.file_type == "pdf"]
     pages = []
     for document_id, _, _, page in image_targets(material):
         order = pdfs.index(document_id) + 1 if document_id in pdfs else 1
         pages.append(f"p{page}" if order == 1 else f"d{order}.p{page}")
-    return DocumentModel(document.items, tuple(pages))
+    return DocumentModel(document.items, tuple(pages), document.source_id)
 
 
-def parse(text: str) -> DocumentModel:
+def parse(text: str, source_id: str = "text") -> DocumentModel:
     items: list[Line | Table] = []
     area, document, last_page = "p1", 1, 0
     counters: dict[str, int] = {}
@@ -246,7 +247,7 @@ def parse(text: str) -> DocumentModel:
         counters[area] = counters.get(area, 0) + 1
         items.append(Line(f"{area}.{counters[area]}", line))
     close()
-    return DocumentModel(tuple(items))
+    return DocumentModel(tuple(items), source_id=source_id)
 
 
 def _is_row(line: str) -> bool:

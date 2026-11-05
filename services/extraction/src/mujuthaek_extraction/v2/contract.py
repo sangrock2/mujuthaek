@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
@@ -50,14 +51,15 @@ def complete(section: str, item: dict[str, Any], documents: tuple[str, ...]) -> 
 def errors(section: str, item: dict[str, Any], documents: tuple[str, ...], limit: int = 5) -> list[str]:
     """채운 항목이 섹션 형식에 맞는지. 「위치: 이유」 최대 limit개."""
     validator = _validator(section, documents)
+    item = _placeholder_refs(item)  # 하위 객체의 quoteRefs는 to_part가 채우므로(위 근거 이어받기) 빈 목록 때문에 객체 전체가 틀린 것으로 보이지 않게
     part = {"quotes": [], section: item if section == "notice" else [item], "coverage": {section: {"status": "EXTRACTED", "reason": None}}, "missingFields": []}
     skip = 1 if section == "notice" else 2
     found = []
     for error in validator.iter_errors(part):
         leaf = best_match(error.context) if error.context else error
         path = "/".join(str(x) for x in list(leaf.absolute_path)[skip:])
-        if path.startswith("quoteRefs"):
-            continue  # 근거는 to_part가 붙임
+        if "quoteRefs" in path.split("/"):
+            continue  # 근거는 to_part가 붙임(하위 항목은 위 근거를 이어받음)
         found.append(f"/{path}: {leaf.message[:240]}")
     return found[:limit]
 
@@ -68,22 +70,74 @@ def to_part(
     document: DocumentModel,
     documents: tuple[str, ...],
     coverage: dict[str, Any] | None = None,
+    missing: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """항목들(각각 evidence 칸) → V1 AI 조각. 같은 인용 글은 ref 하나를 같이 씁니다."""
+    """항목들(각각 evidence 칸) → V1 AI 조각. 같은 인용 글은 ref 하나를 같이 씁니다.
+    하위 항목(모집 수·가격·예외 등 quoteRefs가 있는 객체)은 자기 evidence가 있으면 그것을, 없으면 위 항목의 근거를 이어받습니다
+    (그 값이 위 근거에 없으면 검증기가 「값이 인용에 없음」으로 알려 에이전트가 하위 근거를 붙임)."""
     refs: dict[str, str] = {}
+
+    def ref_of(entry: str | dict[str, Any]) -> str:
+        return refs.setdefault(quote_text(document, entry), f"q{len(refs) + 1}")
+
     built = []
     for item in items:
-        evidence = item.get("evidence") or []
-        body = complete(section, {k: v for k, v in item.items() if k != "evidence"}, documents)
-        body["quoteRefs"] = [refs.setdefault(text, f"q{len(refs) + 1}") for text in dict.fromkeys(quote_text(document, e) for e in evidence)]
+        body = complete(section, without_evidence(item), documents)
+        _attach(body, item, [], ref_of)
         built.append(body)
     part: dict[str, Any] = {
-        "quotes": [{"ref": ref, "text": text} for text, ref in refs.items()],
+        "quotes": [{"ref": ref, "documentId": document.source_id, "text": text} for text, ref in refs.items()],
         section: built[0] if section == "notice" and built else built if section != "notice" else None,
         "coverage": {section: coverage or {"status": "EXTRACTED", "reason": None}},
-        "missingFields": [],
+        "missingFields": list(missing or []),
     }
     return part
+
+
+def _placeholder_refs(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: (v or ["q1"]) if k == "quoteRefs" and isinstance(v, list) else _placeholder_refs(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_placeholder_refs(v) for v in value]
+    return value
+
+
+def without_evidence(value: Any) -> Any:
+    """evidence 칸을 모든 깊이에서 뺀 값(형식 검사·채우기용)."""
+    if isinstance(value, dict):
+        return {k: without_evidence(v) for k, v in value.items() if k != "evidence"}
+    if isinstance(value, list):
+        return [without_evidence(v) for v in value]
+    return value
+
+
+def evidence_entries(value: Any) -> list[str | dict[str, Any]]:
+    """모든 깊이의 근거들(쓰기 도구가 id가 다 있는지 확인)."""
+    found: list[str | dict[str, Any]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "evidence" and isinstance(child, list):
+                found += child
+            else:
+                found += evidence_entries(child)
+    elif isinstance(value, list):
+        for child in value:
+            found += evidence_entries(child)
+    return found
+
+
+def _attach(body: Any, original: Any, inherited: list[str], ref_of: Callable[[str | dict[str, Any]], str]) -> None:
+    if isinstance(body, dict) and isinstance(original, dict):
+        own = original.get("evidence")
+        mine = list(dict.fromkeys(ref_of(e) for e in own)) if isinstance(own, list) and own else inherited
+        if "quoteRefs" in body:
+            body["quoteRefs"] = mine
+        for key, child in body.items():
+            if key != "quoteRefs" and key in original:
+                _attach(child, original[key], mine, ref_of)
+    elif isinstance(body, list) and isinstance(original, list):
+        for child, source in zip(body, original, strict=False):
+            _attach(child, source, inherited, ref_of)
 
 
 @lru_cache(maxsize=64)

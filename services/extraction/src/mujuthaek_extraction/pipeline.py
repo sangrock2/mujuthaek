@@ -154,6 +154,7 @@ def process(
         MeteredModel(models.fallback, usage, names.get("fallback", "fallback")) if models.fallback is not None else None,
         models.budget,
         names,
+        models.chat,  # V2 담당별 채팅 모델(LangChain). 예산 장부는 같은 것을 씀
     )
     rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger)
     from mujuthaek_extraction.graph import run_graph  # graph가 이 모듈의 단계 함수를 가져다 쓰므로 실행할 때 가져옵니다
