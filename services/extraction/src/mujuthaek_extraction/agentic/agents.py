@@ -35,6 +35,8 @@ SUPERVISOR_TURNS = 16
 WORKER_TURNS = 10
 MAX_DELEGATIONS = 3  # 하위 에이전트 하나를 다시 맡길 수 있는 횟수(비용 상한)
 OUTLINE_CHARS = 6_000
+SUMMARY_CHARS = 700  # 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게)
+WHOLE_RESULTS = frozenset({"outline", "delegate", "delegate_many"})  # 길어도 버리지 않고 그대로 돌려주는 도구 결과
 ISSUES_SHOWN = 25
 TURN_OUTPUT_TOKENS = 8_000
 SECTION_HEAD = re.compile(r"^\s*(?:\d{1,2}\s*[.)]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\s*\.?|[■□◆◇▶])\s*\S.{0,58}$")
@@ -184,7 +186,9 @@ class Reading:
             return _error("BAD_ARGUMENTS", "도구 입력 칸이 맞지 않습니다.")
         if result is None:
             return _error("BAD_ARGUMENTS", "도구 입력은 객체여야 합니다.")
-        return json.dumps(result, ensure_ascii=False) if call.name == "outline" else _limit(result)
+        # 차례·맡기기 결과는 「너무 길다」 오류로 바꾸지 않습니다: 맡긴 일은 이미 끝났고 비용도 들었는데 결과를 버리면 총괄이 같은 일을 다시 맡김
+        # (2026-11-05 gh-809: 동시에 맡긴 담당 4개의 결과가 길어 버려지고 다시 맡겨 공고당 상한에 닿음). 길이는 결과를 만들 때 줄입니다
+        return json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else _limit(result)
 
 
 def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -337,7 +341,8 @@ def run_worker(env: Env, name: str, brief: str) -> dict[str, Any]:
         max_output_tokens=TURN_OUTPUT_TOKENS,
     )
     run_loop(env.model, base, tools, turns("EXTRACTION_AGENTIC_WORKER_TURNS", WORKER_TURNS), env.run, log)
-    return {"worker": name, "outcome": log.outcome, "turns": log.turns, "summary": tools.result, "draft": env.draft.summary(tools.sections)}
+    counts = {k: v["count"] if isinstance(v, dict) and "count" in v else v for k, v in env.draft.summary(tools.sections).items()}
+    return {"worker": name, "outcome": log.outcome, "turns": log.turns, "summary": tools.result[:SUMMARY_CHARS], "draft": counts}
 
 
 # ── 총괄 에이전트 ─────────────────────────────────────────────────────────────────────────────────────
