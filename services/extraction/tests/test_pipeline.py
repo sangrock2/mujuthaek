@@ -188,3 +188,16 @@ def test_extraction_method_switch_keeps_the_previous_way(monkeypatch):
     monkeypatch.setenv("EXTRACTION_METHOD", "old")
     with pytest.raises(ValueError):
         extraction_method()
+
+
+def test_quarantine_notes_point_at_an_existing_section():
+    # 2026-11-05 실측: 정리 기록 메모 위치를 「/」로 적어 계약 검사(DANGLING_FIELD_POINTER)에 걸리고 상세 없이 공고 전체가 검수로 감
+    from mujuthaek_extraction.pipeline import _action_section
+
+    candidate = example("housing")
+    assert _action_section("INCOMPLETE_INCOME_BENCHMARK /selectionRules/1: 항목을 뺐습니다", candidate) == "/selectionRules"
+    assert _action_section("A, B /eligibility/3/rule: 조건식을 내렸습니다", candidate) == "/eligibility"
+    assert _action_section("schedules: 없는 근거 참조를 뺐습니다", candidate) == "/schedules"
+    assert _action_section("알 수 없는 기록", candidate) == "/quality"
+    for action in ("X /selectionRules/1: 항목을 뺐습니다", "알 수 없는 기록"):
+        tools().resolve(candidate, _action_section(action, candidate))  # 계약 검사와 같은 방식으로 찾아짐
