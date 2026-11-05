@@ -152,3 +152,21 @@ def test_independent_workers_run_together_after_structure(monkeypatch):
     first = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn2").turns[-1].results[0])
     assert first["error"] == "NO_STRUCTURE" and outcome.status == "COMPLETED"
     assert sorted(a["name"] for a in outcome.usage["agentic"]["agents"]) == sorted(["supervisor", *(f"worker:{w}" for w in ("structure", *rest))])
+
+
+def test_long_delegation_results_are_kept_not_replaced_by_an_error(monkeypatch):
+    # 2026-11-05 gh-809: 동시에 맡긴 담당 넷의 결과가 길다는 오류로 버려져 같은 일을 다시 맡김
+    calls = dict(answers())
+    rest = ("schedules", "eligibility", "selection", "documents")
+    calls.update(
+        supervisor(
+            turn("delegate", worker="structure", brief="처음"),
+            turn("delegate_many", tasks=[{"worker": w, "brief": "처음"} for w in rest]),
+            turn("finish", accept=[], hold=[], note=""),
+        )
+    )
+    for name in ("structure", *rest):
+        calls.update(worker(name, turn("extract_section"), turn("done", summary="가" * 3_000)))
+    _, model = run_agentic(monkeypatch, calls)
+    result = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn3").turns[-1].results[0])
+    assert len(result["results"]) == 4 and all(len(r["summary"]) <= 700 and isinstance(r["draft"], dict) for r in result["results"])
