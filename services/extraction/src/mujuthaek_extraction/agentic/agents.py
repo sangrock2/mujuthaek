@@ -66,7 +66,8 @@ class Env:
     model: ExtractionModel
     evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None]
     read_images: Callable[[ExtractionMaterial, TrustedContext], tuple[ExtractionMaterial, TrustedContext, ExtractionRun | None]]
-    extract_all: Callable[[], ExtractionRun]  # 기존 섹션 추출기를 모든 섹션에 동시에(호출마다 섹션 하나씩 나눠, 담당과 조각이 맞게)
+    # 기존 섹션 추출기를 주어진 호출들에 동시에(구조 요약이 있으면 구조 호출 없이). 지금 흐름과 같은 병렬 설정
+    extract_all: Callable[[tuple[CallSpec, ...], dict[str, Any] | None], ExtractionRun]
     workers: dict[str, CallSpec]
     draft: Draft
     run: ExtractionRun = field(default_factory=ExtractionRun)
@@ -75,6 +76,7 @@ class Env:
     decision: Decision | None = None
     delegations: dict[str, int] = field(default_factory=dict)
     stagger: float = 0.0  # 동시에 맡길 때 담당을 내보내는 간격(초, 설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)
+    progress: Callable[[], dict[str, Any]] = lambda: {}  # noqa: E731 — 도구 결과마다 붙일 진행 사실(쓴 비용·남은 상한·뽑아 둔 담당)
     _reader: RepairTools | None = None
 
     @property
@@ -95,6 +97,17 @@ class Env:
             return None
         groups = [g for p in owned for g in p.get("supplyGroups") or []]
         return structure_summary({**notice, "supplyGroups": groups})
+
+
+def _with_progress(text: str, progress: dict[str, Any]) -> str:
+    """도구 결과에 진행 사실을 붙입니다. 순서를 정해 주지 않고, 쓴 비용·남은 상한·이미 뽑은 섹션을 보고 에이전트가 중복·낭비를 스스로 피하게 합니다."""
+    if not progress:
+        return text
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return text
+    return json.dumps({**value, "progress": progress}, ensure_ascii=False) if isinstance(value, dict) else text
 
 
 def workers_of(rules: FieldRules) -> dict[str, CallSpec]:
@@ -189,7 +202,8 @@ class Reading:
             return _error("BAD_ARGUMENTS", "도구 입력은 객체여야 합니다.")
         # 차례·맡기기 결과는 「너무 길다」 오류로 바꾸지 않습니다: 맡긴 일은 이미 끝났고 비용도 들었는데 결과를 버리면 총괄이 같은 일을 다시 맡김
         # (2026-11-05 gh-809: 동시에 맡긴 담당 4개의 결과가 길어 버려지고 다시 맡겨 공고당 상한에 닿음). 길이는 결과를 만들 때 줄입니다
-        return json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else _limit(result)
+        text = json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else _limit(result)
+        return _with_progress(text, self.env.progress())
 
 
 def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -446,7 +460,17 @@ class SupervisorTools(Reading):
             return {"results": [f.result() for f in futures]}
 
     def _extract_all(self) -> dict[str, Any]:
-        run = self.env.extract_all()
+        # 이미 초안에 있는 섹션의 호출은 건너뜁니다(2026-11-05 jbdc: 담당이 각자 뽑은 뒤 또 불러 구조 3번·나머지 2번씩 같은 추출)
+        calls = self.env.rules.calls_for(self.env.material)
+        filled = set(self.env.draft.parts)
+        missing = tuple(c for c in calls if not all(self.env.draft.owners.get(s) in filled for s in c.sections))
+        skipped = [c.name for c in calls if c not in missing]
+        if not missing:
+            return {"skipped": skipped, "message": "모든 섹션이 이미 초안에 있습니다. 다시 뽑으려면 그 담당의 extract_section을 씁니다."}
+        structure = None if missing[0] is calls[0] else self.env.structure()
+        if structure is None and missing[0] is not calls[0]:
+            missing = (calls[0], *missing)  # 구조가 없으면 구조부터(뒤 호출이 그 ID를 씀)
+        run = self.env.extract_all(missing, structure)
         self.env.run.attempts += run.attempts
         self.env.run.raw_responses += run.raw_responses
         self.env.run.failed_calls += run.failed_calls
@@ -457,7 +481,8 @@ class SupervisorTools(Reading):
                     owned.setdefault(owner, []).append(piece)
         for owner, parts in owned.items():
             self.env.draft.put_parts(owner, parts)
-        return {"failedCalls": [f"{name}: {reason[:120]}" for name, reason in run.failed_calls], "draft": self.env.draft.summary()}
+        failed = [f"{name}: {reason[:120]}" for name, reason in run.failed_calls]
+        return {"extracted": [c.name for c in missing], "skipped": skipped, "failedCalls": failed, "draft": self.env.draft.summary()}
 
     def _check_all(self) -> dict[str, Any]:
         return issues_view(self.env.evaluate(self.env.draft.as_parts()))

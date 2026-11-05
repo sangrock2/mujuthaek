@@ -969,4 +969,45 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_image_content(candidate, sources, find)
     _check_image_evidence(candidate, sources, find)
     _check_notice_document(candidate, find)
+    _check_income_tiers(candidate, find)
     return findings
+
+
+# 임대료 소득 구간을 자격으로 넣음(2026-11-05 실측 sh-311087: 「소득 50% 이하」「50% 초과 70% 이하」 임대료 구간이 자격 조건 둘로 들어가
+# 자동 게시됨 — 자격은 「70% 이하」 하나). 소득 비율 자격이 둘 이상이고 그 기준값이 모두 가격의 소득 구간 비율이며 상한이 서로 다르면,
+# 구간을 자격으로 나눈 것일 수 있어 그 자격들을 사람 확인으로 보냅니다(어느 것이 진짜 자격인지 코드는 정할 수 없음)
+INCOME_TIER = "ELIGIBILITY_FROM_PRICE_TIER"
+PERCENT_WORD = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+
+
+def _income_percents(node: Any) -> list[float]:
+    found: list[float] = []
+    if isinstance(node, dict):
+        if node.get("attribute") == "INCOME_BENCHMARK_PERCENT":
+            value = node.get("value")
+            found += [float(v) for v in (value if isinstance(value, list) else [value]) if isinstance(v, int | float)]
+        for child in node.values():
+            found += _income_percents(child)
+    elif isinstance(node, list):
+        for child in node:
+            found += _income_percents(child)
+    return found
+
+
+def _check_income_tiers(candidate: dict[str, Any], find: Any) -> None:
+    tiers: set[float] = set()
+    for group in candidate.get("supplyGroups") or []:
+        for price in group.get("prices") or []:
+            scope = price.get("scope") or {}
+            words = [*(scope.get("targetGroups") or []), scope.get("description") or "", price.get("pricePlanId") or ""]
+            tiers |= {float(x) for word in words for x in PERCENT_WORD.findall(str(word))}
+    if len(tiers) < 2:
+        return
+    eligibility = candidate.get("eligibility") or []
+    items = [(i, values) for i, item in enumerate(eligibility) if (values := _income_percents((item.get("rule") or {}).get("expression")))]
+    if len(items) < 2 or not all(set(values) <= tiers for _, values in items) or len({max(values) for _, values in items}) < 2:
+        return
+    for index, values in items:
+        shown = ", ".join(f"{v:g}%" for v in sorted(set(values)))
+        description = f"소득 기준 {shown}이(가) 가격표의 소득 구간과 같습니다. 임대료 구간을 자격으로 나눈 것인지 확인하세요."
+        find("V8", INCOME_TIER, f"/eligibility/{index}", description)

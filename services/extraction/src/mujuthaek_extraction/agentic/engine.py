@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from mujuthaek_extraction import pipeline
@@ -37,14 +38,26 @@ def make_env(rules: FieldRules, intake: Any, rt: pipeline.Runtime) -> Env:
         model=rt.models.primary,
         evaluate=lambda parts: None,
         read_images=lambda material, context: pipeline.read_images(material, context, rt),
-        extract_all=lambda: ExtractionRun(),
+        extract_all=lambda calls, structure: ExtractionRun(),
         workers=workers,
         draft=Draft(owners, intake.material.text_document_id),
         stagger=rt.parallel_stagger,
     )
     env.evaluate = lambda parts: pipeline.evaluate_parts(parts, env.material, env.context, rt)
+
     # 지금 흐름과 같은 호출(작은 공고는 자격·선정·서류를 한 호출로). 여러 담당 섹션을 담은 조각은 extract_all이 담당별로 나눔
-    env.extract_all = lambda: run_extraction(rules, env.material, env.model, usage=rt.usage, parallel=rt.parallel_calls, stagger=rt.parallel_stagger)
+    def extract_all(calls: tuple[Any, ...], structure: dict[str, Any] | None) -> ExtractionRun:
+        chosen = dataclasses.replace(rules, calls=calls, split_calls=(), large_text_chars=None)
+        return run_extraction(chosen, env.material, env.model, structure=structure, usage=rt.usage, parallel=rt.parallel_calls, stagger=rt.parallel_stagger)
+
+    def progress() -> dict[str, Any]:
+        budget = rt.models.budget
+        facts: dict[str, Any] = {"extractedWorkers": sorted(env.draft.parts)}
+        if budget is not None:
+            facts.update(spentUsd=round(budget.spent_usd, 4), budgetLeftUsd=round(budget.limit_usd - budget.spent_usd, 4))
+        return facts
+
+    env.extract_all, env.progress = extract_all, progress
     return env
 
 

@@ -38,6 +38,8 @@ DISPUTED_LINE = "불일치 줄: "
 DISPUTED_BAR = "¦"
 MAX_IMAGES = 6  # 한 공고에서 그려 보낼 쪽 수 상한 (비용)
 RESOLUTION = 200  # 그림 영역 해상도(dpi). 120dpi 쪽 전체 그림에서는 표의 작은 숫자(27.02/27.07)가 헷갈렸음
+TILE_RESOLUTION = 300  # 다시 읽기 조각의 해상도(처음 판독과 다른 입력)
+TILE_OVERLAP = 0.04  # 위·아래 조각이 겹치는 높이 비율(경계의 행이 잘리지 않게)
 IMAGE_SHARE = 0.25  # pdf_reader.IMAGE_PAGE_SHARE와 같은 기준으로 자를 그림을 고릅니다
 PROMPT_VERSION = "image_text/v1"
 # 실측 최대 2,019(GH 783, 시도 6건)지만 한 호출에 쪽 그림을 6장까지 보내 표가 빽빽하면 쪽마다 수천 토큰이라 그대로 둡니다
@@ -85,6 +87,33 @@ def _render(data: bytes, page_number: int) -> bytes:
         out = io.BytesIO()
         picture.save(out, format="PNG")
         return out.getvalue()
+
+
+def _render_tiles(data: bytes, page_number: int) -> list[bytes]:
+    """다시 읽기용: 같은 그림 영역을 더 크게(TILE_RESOLUTION dpi) 그려 위·아래로 겹치게 나눈 조각.
+    같은 그림을 같은 크기로 두 번 읽으면 같은 글자를 같게 잘못 읽습니다(2026-11-05 실측: 두 판독 모두 250,600을 250,500으로).
+    입력을 바꿔 읽으면 두 판독의 실수가 겹칠 가능성이 줄어듭니다."""
+    import pdfplumber
+
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        page = pdf.pages[page_number - 1]
+        area = float(page.width * page.height) or 1.0
+        boxes = [
+            (max(float(i["x0"]), 0.0), max(float(i["top"]), 0.0), min(float(i["x1"]), float(page.width)), min(float(i["bottom"]), float(page.height)))
+            for i in page.images
+        ]
+        boxes = [b for b in boxes if (b[2] - b[0]) * (b[3] - b[1]) / area >= IMAGE_SHARE]
+        if boxes:
+            page = page.crop((min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)))
+        picture = page.to_image(resolution=TILE_RESOLUTION).original
+    width, height = picture.size
+    overlap = int(height * TILE_OVERLAP)
+    tiles = []
+    for top, bottom in ((0, height // 2 + overlap), (height // 2 - overlap, height)):
+        out = io.BytesIO()
+        picture.crop((0, top, width, bottom)).save(out, format="PNG")
+        tiles.append(out.getvalue())
+    return tiles
 
 
 def image_targets(material: ExtractionMaterial) -> list[tuple[str, str, bytes, int]]:
@@ -151,6 +180,34 @@ def _read(model: ExtractionModel, request: ModelRequest, run: ExtractionRun) -> 
     return answer
 
 
+def _check_read(model: ExtractionModel, request: ModelRequest, targets: list[tuple[str, str, bytes, int]], run: ExtractionRun) -> dict[int, str]:
+    """다시 읽기: 그림마다 크게 그린 위·아래 조각을 따로 읽어, 원래 그림 번호 → 옮긴 글자(조각 글자를 이어 붙임). 실패하면 빈 사전."""
+    owner, images, listing = [], [], []
+    try:
+        for index, (_, name, data, page) in enumerate(targets, start=1):
+            for part, tile in zip(("위", "아래"), _render_tiles(data, page), strict=False):
+                images.append(ModelImage(f"그림 {len(images) + 1}", "image/png", tile))
+                listing.append(f"- 그림 {len(images)}: {name} {page}쪽 {part} 부분(앞뒤 그림과 몇 줄 겹침)")
+                owner.append(index)
+    except Exception as error:  # 그리기 실패는 다시 읽기 실패와 같게(모든 줄 불일치)
+        log.warning("다시 읽을 그림을 그리지 못했습니다", extra={"error": str(error)[:200]})
+        return {}
+    check = dataclasses.replace(
+        request,
+        call_name=CHECK_CALL,
+        user="# 첨부 그림\n" + "\n".join(listing),
+        images=tuple(images),
+        max_output_tokens=output_limit(CHECK_CALL, MAX_OUTPUT_TOKENS),
+    )
+    answer = _read(model, check, run)
+    second: dict[int, str] = {}
+    for page in (answer or {}).get("pages", []):
+        if 1 <= page["image"] <= len(owner):
+            index = owner[page["image"] - 1]
+            second[index] = "\n".join(x for x in (second.get(index, ""), _clean(page["text"])) if x)
+    return second
+
+
 def read_image_tables(
     material: ExtractionMaterial, context: TrustedContext, model: ExtractionModel
 ) -> tuple[ExtractionMaterial, TrustedContext, ExtractionRun | None]:
@@ -181,8 +238,7 @@ def read_image_tables(
     # 같은 그림을 한 번 더 따로 읽어 줄마다 맞춰 봅니다(2026-11-05: 실행마다 250,600을 250,500으로 읽기도 함 — 한 번 읽은 값은 오독을 걸러 낼 수 없음).
     # 두 판독이 다른 줄은 불일치 묶음에 적어 두고, 그 줄을 근거로 한 값은 검증기가 사람 확인으로 보냅니다(verify/consistency).
     # 다시 읽기에 실패하면 모든 줄이 불일치입니다
-    check = _read(model, dataclasses.replace(request, call_name=CHECK_CALL, max_output_tokens=output_limit(CHECK_CALL, MAX_OUTPUT_TOKENS)), run)
-    second = {page["image"]: _clean(page["text"]) for page in (check or {}).get("pages", [])}
+    second = _check_read(model, request, targets, run)
 
     blocks, disputed = [], []
     for page in answer["pages"]:
