@@ -11,7 +11,9 @@ import dataclasses
 import json
 import os
 import re
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +71,7 @@ class Env:
     image_run: ExtractionRun | None = None
     decision: Decision | None = None
     delegations: dict[str, int] = field(default_factory=dict)
+    stagger: float = 0.0  # 동시에 맡길 때 담당을 내보내는 간격(초, 설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)
     _reader: RepairTools | None = None
 
     @property
@@ -345,6 +348,7 @@ SUPERVISOR_INSTRUCTIONS = """# 할 일 (총괄 에이전트)
 - read_images: 글자 없는 그림 쪽(가격표 등이 그림인 경우)의 글자를 옮겨 원문 끝에 붙입니다. outline의 pictureOnlyPages가 있을 때 판단해서 씁니다.
 - delegate: 하위 에이전트(섹션 담당)에 일을 맡깁니다. brief에 무엇을 할지(처음 뽑기, 특정 문제 고치기, 빠진 표 행 더하기 등) 구체적으로 적습니다.
   구조 담당(notice·위치·공급)이 먼저여야 다른 담당이 그 ID를 씁니다. 같은 담당은 최대 3번까지 맡길 수 있습니다.
+- delegate_many: 서로 기대지 않는 담당 여럿을 동시에 맡깁니다(시간이 줄어듦). 구조가 생긴 뒤 나머지 담당은 보통 이것으로 한 번에 맡깁니다.
 - check_all: 초안 전체에 검증기를 돌려 남은 문제를 봅니다.
 - finish: 끝냅니다. 검증기 문제 중 원문으로 확인해 문제가 아니라고 판단한 것은 accept에(code·target을 check_all 결과 그대로, reason에 확인한 근거),
   확인이 필요한 곳은 hold에 적습니다. accept한 값은 사람 확인 없이 게시되므로 원문으로 확인한 것만 넣습니다. 남긴 문제는 그 범위만 보류됩니다.
@@ -367,6 +371,11 @@ class SupervisorTools(Reading):
             ToolSpec("read_images", "글자 없는 그림 쪽을 그림으로 읽어 글자를 원문 끝에 붙입니다(한 번만).", _object({})),
             ToolSpec(
                 "delegate", "하위 에이전트에 일을 맡기고 결과(요약·초안 상태)를 받습니다.", _object({"worker": {"enum": list(env.workers)}, "brief": STRING})
+            ),
+            ToolSpec(
+                "delegate_many",
+                "서로 기대지 않는 담당 여럿에 동시에 일을 맡깁니다(구조가 생긴 뒤 일정·자격·선정·서류처럼). 결과는 담당마다 delegate와 같습니다.",
+                _object({"tasks": {"type": "array", "items": _object({"worker": {"enum": list(env.workers)}, "brief": STRING})}}),
             ),
             ToolSpec("check_all", "초안 전체에 검증기를 돌려 남은 문제와 검증기가 낼 상태를 봅니다.", _object({})),
             ToolSpec(
@@ -401,6 +410,28 @@ class SupervisorTools(Reading):
             return {"error": "DELEGATION_LIMIT", "message": f"{worker}는 이미 {used}번 맡겼습니다."}
         self.env.delegations[worker] = used + 1
         return run_worker(self.env, worker, brief)
+
+    def _delegate_many(self, tasks: list[dict[str, str]]) -> dict[str, Any]:
+        """서로 기대지 않는 담당 여럿을 동시에 돌립니다(2026-11-05 첫 비교: 하나씩 맡겨 공고당 약 7분, 기존 방식의 2~3배).
+        담당마다 초안 조각이 따로라 서로 덮어쓰지 않습니다. 구조를 쓰는 담당은 구조가 있어야 합니다."""
+        tasks = [t for t in tasks or [] if isinstance(t, dict)]
+        unknown = [t.get("worker") for t in tasks if t.get("worker") not in self.env.workers]
+        if not tasks or unknown or len({t["worker"] for t in tasks}) < len(tasks):
+            return {"error": "BAD_TASKS", "message": f"담당은 {', '.join(self.env.workers)} 중에서 한 번씩만 적습니다."}
+        if self.env.structure() is None and any(self.env.workers[t["worker"]].uses_structure for t in tasks):
+            return {"error": "NO_STRUCTURE", "message": "구조 담당을 먼저 delegate로 맡깁니다."}
+        over = [t["worker"] for t in tasks if self.env.delegations.get(t["worker"], 0) >= MAX_DELEGATIONS]
+        if over:
+            return {"error": "DELEGATION_LIMIT", "message": f"이미 {MAX_DELEGATIONS}번 맡긴 담당: {', '.join(over)}"}
+        for t in tasks:
+            self.env.delegations[t["worker"]] = self.env.delegations.get(t["worker"], 0) + 1
+        with ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="agentic-worker") as pool:
+            futures = []
+            for index, task in enumerate(tasks):
+                if index and self.env.stagger > 0:
+                    time.sleep(self.env.stagger)  # 같은 앞부분(공통 지시) 캐시를 첫 담당이 쓴 뒤 읽게 간격을 둡니다(extract 병렬 호출과 같은 이유)
+                futures.append(pool.submit(run_worker, self.env, task["worker"], str(task.get("brief") or "")))
+            return {"results": [f.result() for f in futures]}
 
     def _check_all(self) -> dict[str, Any]:
         return issues_view(self.env.evaluate(self.env.draft.as_parts()))

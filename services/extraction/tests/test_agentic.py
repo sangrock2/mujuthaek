@@ -138,3 +138,17 @@ def test_agent_cannot_accept_a_disputed_image_reading():
     report = report_with(issue)
     applied = apply_decision(report, Decision(accept=[{"code": issue["code"], "target": issue["target"], "reason": "확인함"}]))
     assert applied["refused"] == [{"code": issue["code"], "target": issue["target"]}] and report.candidate["quality"]["reviewIssues"] == [issue]
+
+
+def test_independent_workers_run_together_after_structure(monkeypatch):
+    calls = dict(answers())
+    rest = ("schedules", "eligibility", "selection", "documents")
+    many = turn("delegate_many", tasks=[{"worker": w, "brief": "처음 뽑기"} for w in rest])
+    early = turn("delegate_many", tasks=[{"worker": "schedules", "brief": "구조 전"}])
+    calls.update(supervisor(early, turn("delegate", worker="structure", brief="처음"), many, turn("finish", accept=[], hold=[], note="")))
+    for name in ("structure", *rest):
+        calls.update(worker(name, turn("extract_section"), turn("done", summary=name)))
+    outcome, model = run_agentic(monkeypatch, calls)
+    first = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn2").turns[-1].results[0])
+    assert first["error"] == "NO_STRUCTURE" and outcome.status == "COMPLETED"
+    assert sorted(a["name"] for a in outcome.usage["agentic"]["agents"]) == sorted(["supervisor", *(f"worker:{w}" for w in ("structure", *rest))])
