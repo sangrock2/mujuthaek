@@ -61,6 +61,8 @@ class NoticeModels:
     fallback: ExtractionModel | None
     budget: Budget | None = None  # 유료 API 비용 (공고 1건)
     names: dict[str, str] = field(default_factory=dict)
+    # V2 에이전트 모델(LangChain): 담당 이름 → 채팅 모델. 같은 공고의 담당들은 프롬프트 캐시 열쇠를 함께 씀. 없으면 V2 에이전트를 돌리지 않음
+    chat: Any = None
 
 
 class ModelFactory:
@@ -117,6 +119,20 @@ class ModelFactory:
         paid: ExtractionModel = BudgetedModel(self._paid, budget)
         if cache is not None:  # 예산 바깥: 다시 쓴 응답은 예산을 쓰지 않습니다
             paid = CachedModel(paid, cache, self._paid.cache_identity, self.settings.openai_model)
+        chat = self._chat_models()
         if not self.settings.local_ai_url:  # 로컬 AI가 아직 없으면 유료 API를 바로 씁니다 (같은 모델로 두 번 추출하지 않게)
-            return NoticeModels(paid, None, budget, {"primary": self.settings.openai_model})
-        return NoticeModels(local, paid, budget, {"primary": "local", "fallback": self.settings.openai_model})
+            return NoticeModels(paid, None, budget, {"primary": self.settings.openai_model}, chat)
+        return NoticeModels(local, paid, budget, {"primary": "local", "fallback": self.settings.openai_model}, chat)
+
+    def _chat_models(self):
+        """V2 담당별 채팅 모델(LangChain ChatOpenAI). 공고 하나의 담당들이 같은 프롬프트 캐시 열쇠를 씁니다(공통 지시·도구가 같은 앞부분)."""
+        import uuid
+
+        key = f"v2-{uuid.uuid4().hex[:16]}"
+
+        def chat(agent: str) -> Any:
+            from mujuthaek_extraction.v2.llm.models import chat_model  # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
+
+            return chat_model(self.settings, cache_key=key)
+
+        return chat

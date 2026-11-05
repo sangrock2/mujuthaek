@@ -14,11 +14,19 @@ SECTIONS = ("notice", *LIST_SECTIONS)
 
 
 def sparse(value):
-    """에이전트가 넘길 모양: null 칸과 빈 목록을 뺌."""
+    """에이전트가 넘길 모양: null 칸과 빈 목록, 인용 ref(quoteRefs, 모든 깊이)를 뺌."""
     if isinstance(value, dict):
-        return {k: sparse(v) for k, v in value.items() if v is not None and v != []}
+        return {k: sparse(v) for k, v in value.items() if v is not None and v != [] and k != "quoteRefs"}
     if isinstance(value, list):
         return [sparse(v) for v in value]
+    return value
+
+
+def drop_refs(value):
+    if isinstance(value, dict):
+        return {k: drop_refs(v) for k, v in value.items() if k != "quoteRefs"}
+    if isinstance(value, list):
+        return [drop_refs(v) for v in value]
     return value
 
 
@@ -41,7 +49,7 @@ def test_missing_nullable_fields_and_lists_are_filled_back_exactly_for_every_sec
         for item in items:
             original = {k: v for k, v in item.items() if k != "quoteRefs"}
             filled = complete(section, sparse(original), documents)
-            assert {k: v for k, v in filled.items() if k != "quoteRefs"} == original, section  # quoteRefs는 to_part가 붙임
+            assert drop_refs(filled) == drop_refs(original), section  # quoteRefs는 to_part가 붙임(하위 항목은 위 근거를 이어받음)
             assert errors(section, {**original, "quoteRefs": []}, documents) == [], section
 
 
@@ -73,6 +81,7 @@ def test_items_with_evidence_ids_become_the_same_v1_part():
         items = [{**sparse({k: v for k, v in item.items() if k != "quoteRefs"}), "evidence": evidence(item["quoteRefs"])} for item in part[section]]
         built = to_part(section, items, doc, documents)
         assert {q["text"] for q in built["quotes"]} == {texts[r] for item in part[section] for r in item["quoteRefs"]}
-        rebuilt = [{**item, "quoteRefs": [next(q["text"] for q in built["quotes"] if q["ref"] == r) for r in item["quoteRefs"]]} for item in built[section]]
-        expected = [{**item, "quoteRefs": [texts[r] for r in item["quoteRefs"]]} for item in part[section]]
+        quote = {q["ref"]: q["text"] for q in built["quotes"]}
+        rebuilt = [{**drop_refs(item), "quoteRefs": [quote[r] for r in item["quoteRefs"]]} for item in built[section]]
+        expected = [{**drop_refs(item), "quoteRefs": [texts[r] for r in item["quoteRefs"]]} for item in part[section]]
         assert rebuilt == expected, section

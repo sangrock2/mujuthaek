@@ -9,7 +9,7 @@
 - section: 나머지 담당이 동시에. 담당이 낸 V1 AI 조각을 parts에 더함(리듀서)
 - conclude: V1과 같은 결합·검증·계약 정리·게시·기록(틀린 값 0을 지키는 결정론 부분은 V1의 검증된 코드)
 
-담당 구현은 AGENTS(담당 이름 → 실행 함수)에 꽂습니다(3단계). 꽂히지 않은 담당은 조각을 내지 않습니다.
+담당은 섹션 에이전트(v2/agents/section.py)이고, AGENTS(담당 이름 → 실행 함수)에 꽂으면 그것을 씁니다(시험).
 """
 
 from __future__ import annotations
@@ -120,7 +120,11 @@ def workers(rules: FieldRules) -> dict[str, CallSpec]:
 
 def _run(spec: CallSpec, state: V2State, rt: pipeline.Runtime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     agent = AGENTS.get(spec.name)
-    return agent(spec, state, rt) if agent is not None else ([], [])
+    if agent is None:
+        from mujuthaek_extraction.v2.agents.section import run_section  # 섹션 담당 에이전트(LangChain)
+
+        agent = run_section
+    return agent(spec, state, rt)
 
 
 def _done_or(next_node: str):
@@ -131,7 +135,7 @@ def _done_or(next_node: str):
 
 
 def build() -> Any:
-    graph = StateGraph(V2State, context_schema=pipeline.Runtime)
+    graph = StateGraph(V2State)  # 실행 환경(pipeline.Runtime)은 문맥으로 넘기되 형식은 주지 않음(예산 장부의 잠금을 Pydantic 형식으로 만들지 않게)
     for node in (intake, document, plan, structure, section, conclude):
         graph.add_node(node.__name__, node)
     graph.add_edge(START, "intake")
