@@ -94,6 +94,16 @@ def image_targets(material: ExtractionMaterial) -> list[tuple[str, str, bytes, i
     return targets[:MAX_IMAGES]
 
 
+def bordered(text: str) -> str:
+    """판독한 표 행(「a | b | c」)을 PDF 표 글과 같은 「| a | b | c |」 모양으로 바꿉니다. 칸 글자는 그대로 둡니다.
+    공급표를 코드가 행 단위로 옮길 때(supply_tables.image_tables) 인용 줄이 원문 줄과 같아지게 합니다."""
+    lines = []
+    for line in text.split("\n"):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        lines.append("| " + " | ".join(cells) + " |" if "|" in line and len(cells) >= 2 else line)
+    return "\n".join(lines)
+
+
 def read_image_tables(
     material: ExtractionMaterial, context: TrustedContext, model: ExtractionModel
 ) -> tuple[ExtractionMaterial, TrustedContext, ExtractionRun | None]:
@@ -152,7 +162,7 @@ def read_image_tables(
         index, text = page["image"], RESIDENT_NUMBER.sub("******-*******", redact_secret_values(page["text"].strip()))
         if text and 1 <= index <= len(targets):
             _, name, _, number = targets[index - 1]
-            blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{text}")
+            blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{bordered(text)}")
     if not blocks:
         return material, context, run
     text = "\n".join([material.text, *blocks])
