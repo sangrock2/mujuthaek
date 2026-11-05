@@ -169,7 +169,10 @@ def test_long_delegation_results_are_kept_not_replaced_by_an_error(monkeypatch):
         calls.update(worker(name, turn("extract_section"), turn("done", summary="가" * 3_000)))
     _, model = run_agentic(monkeypatch, calls)
     result = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn3").turns[-1].results[0])
-    assert len(result["results"]) == 4 and all(len(r["summary"]) <= 700 and isinstance(r["draft"], dict) for r in result["results"])
+    from mujuthaek_extraction.agentic.agents import SUMMARY_CHARS
+
+    assert len(result["results"]) == 4 and all(len(r["summary"]) <= SUMMARY_CHARS and isinstance(r["draft"], dict) for r in result["results"])
+    assert all(r["summary"].endswith("…(줄임)") for r in result["results"])
 
 
 def test_extract_all_fills_every_worker_like_the_fixed_flow_and_workers_get_the_issues_up_front(monkeypatch):

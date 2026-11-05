@@ -18,9 +18,9 @@ from mujuthaek_extraction.repair.agent import BUDGET_CODES, _attempt
 RECORD_CHARS = 600  # 작업 기록에 남길 도구 결과 앞부분
 # 한 차례 도구 결과의 글자 상한(2026-11-05 대역 시험: 첫 차례에 쪽 9개를 한꺼번에 읽어 그 글이 뒤 차례마다 입력으로 붙음).
 # 결과가 작은 확인(check_quote 12개 등)은 막지 않고, 쌓인 결과가 이만큼을 넘으면 그 뒤 호출은 실행하지 않고 그 사실을 돌려줍니다
-# (끝내기 도구는 늘 실행). 호출 수 상한은 안전장치
+# (끝내기 도구는 늘 실행). 호출 수 상한은 안전장치(2026-11-05 2차 대역 시험: 15개에서 3,215자뿐인 인용 확인 3개가 막혀 한 차례를 더 씀 → 30)
 MAX_TURN_RESULT_CHARS = 12_000
-MAX_CALLS_PER_TURN = 15
+MAX_CALLS_PER_TURN = 30
 
 
 class Toolbox(Protocol):

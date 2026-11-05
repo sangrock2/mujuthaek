@@ -39,7 +39,9 @@ SUPERVISOR_TURNS = 16
 WORKER_TURNS = 6  # 10 → 6(2026-11-05: 담당 차례 214번 중 항목을 고친 것은 5번, 나머지는 읽기만)
 MAX_DELEGATIONS = 3  # 하위 에이전트 하나를 다시 맡길 수 있는 횟수(비용 상한)
 OUTLINE_CHARS = 6_000
-SUMMARY_CHARS = 700  # 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게)
+# 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게). 2026-11-05 2차 대역 시험: 700자에서
+# 담당 요약(1,529자)의 「문제가 아니라고 본 것(근거)」「남은 것」이 잘려 총괄이 판단 근거를 못 받음 → 1,200자, 요약은 그 둘을 앞에
+SUMMARY_CHARS = 1_200
 WHOLE_RESULTS = frozenset({"outline", "delegate", "delegate_many", "extract_all"})  # 길어도 버리지 않고 그대로 돌려주는 도구 결과(크기는 만들 때 줄임)
 # 에이전트 도구 결과 한 번의 글자 상한. 재확인 도구(2,000자)보다 크게(2026-11-05 대역 시험: 검증 문제 목록·추출 결과가 2,000자를 넘어
 # 「결과가 너무 깁니다」 오류로 버려짐). 넘으면 긴 글 칸·긴 목록부터 줄이고 오류로 바꾸지 않습니다
@@ -350,14 +352,16 @@ WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
 - upsert_item·remove_item·set_coverage: 원문을 읽고 항목을 직접 넣고·고치고·빼고, 섹션 상태를 정합니다. 문제 항목의 인용 위치부터 read_page로 읽습니다.
 - extract_section: 맡은 섹션을 기존 추출기로 처음부터 다시 뽑습니다(초안의 이 섹션을 바꿈). 모델 호출 1번(약 $0.004, 40~60초).
 - check: 고친 뒤 맡은 섹션에 남은 문제를 다시 봅니다.
-- done: 끝냅니다. summary에 고친 것, 원문으로 확인해 문제가 아니라고 본 것(근거 쪽), 남은 것을 짧게 적습니다. 총괄 에이전트가 이것을 읽고 다음을 정합니다.
+- done: 끝냅니다. summary는 남은 것 → 원문으로 확인해 문제가 아니라고 본 것(근거 쪽·인용) → 고친 것 순서로 짧게 적습니다(길면 뒤가 잘림).
+  총괄 에이전트가 이것을 읽고 다음을 정합니다.
 - 차례마다 비용이 듭니다(읽기만 하는 차례 포함, 1번 약 $0.0004). 한 차례에 도구 여럿을 부를 수 있습니다(쪽 여러 개 읽기 등).
 - 「남은 문제」의 where는 그 항목 근거가 원문 어디에 있는지(쪽·pageChar·앞뒤 글)입니다.
 
 # 규칙
 - 근거는 공고 원문뿐입니다. 원문에서 확인하지 못한 값은 만들지 않습니다.
 - 항목은 공통 지시의 출력 형식 그대로(같은 칸 이름, 같은 id 규칙)이고, 근거는 quoteRefs로 가리킵니다. 인용문 글자는 upsert_item의 quotes(ref·text)에 적습니다.
-- 인용은 원문에 글자 그대로 이어져 나오는 구간입니다. 넣기 전에 check_quote로 확인합니다.
+- 인용은 원문에 글자 그대로 이어져 나오는 구간입니다. upsert_item이 인용을 확인해 원문에 없는 것만 돌려주므로, 넣기 전에 하나씩
+  check_quote하지 않습니다(돌려받은 인용을 고칠 때 씁니다).
 - upsert_item의 item_json은 고칠 때 바꿀 칸만 적어도 됩니다(같은 id의 나머지 칸은 그대로). 새 항목은 모든 칸을 적습니다.
 - 「총괄 지시」가 있으면 그것을 먼저 합니다. 이미 초안이 있으면 처음부터 다시 뽑지 말고 필요한 곳만 고칩니다.
 - 차례 수가 제한됩니다(도구 결과의 turnsLeft). 마지막 차례에는 done만 부를 수 있습니다."""
@@ -403,7 +407,7 @@ class WorkerTools(Reading):
                 _object({"section": section, "status": {"enum": list(COVERAGE)}, "reason": STRING}),
             ),
             ToolSpec("check", "검증기를 돌려 맡은 섹션에 남은 문제를 봅니다.", _object({})),
-            ToolSpec("done", "끝냅니다. summary에 한 일과 남은 일을 적습니다.", _object({"summary": STRING})),
+            ToolSpec("done", "끝냅니다. summary에 남은 일, 문제가 아니라고 본 것(근거), 한 일 순서로 적습니다.", _object({"summary": STRING})),
         )
 
     def _extract_section(self) -> dict[str, Any]:
@@ -546,7 +550,12 @@ def run_worker(env: Env, name: str, brief: str) -> dict[str, Any]:
     turns = run_loop(env.model, base, tools, _turns("EXTRACTION_AGENTIC_WORKER_TURNS", WORKER_TURNS), env.run, log, turns=turns, first=first)
     env.sessions[name] = (base, turns, first + log.turns)
     counts = {k: v["count"] if isinstance(v, dict) and "count" in v else v for k, v in env.draft.summary(tools.sections).items()}
-    return {"worker": name, "outcome": log.outcome, "turns": log.turns, "summary": tools.result[:SUMMARY_CHARS], "draft": counts}
+    return {"worker": name, "outcome": log.outcome, "turns": log.turns, "summary": _cut(tools.result, SUMMARY_CHARS), "draft": counts}
+
+
+def _cut(text: str, limit: int) -> str:
+    """길면 자르고 잘렸다고 적습니다(잘린 줄 모르면 총괄이 요약을 다 받은 줄 앎)."""
+    return text if len(text) <= limit else text[: limit - 6] + "…(줄임)"
 
 
 # ── 총괄 에이전트 ─────────────────────────────────────────────────────────────────────────────────────
