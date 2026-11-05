@@ -4,6 +4,7 @@
   EXTRACTION_MODEL_MODE=auto (기본)  로컬 AI를 먼저 쓰고, 연결이 안 되거나 결과가 부족하면 유료 API(gpt-6-luna)
   EXTRACTION_MODEL_MODE=recorded     녹화한 응답을 재생 (개발·시연용 가짜 추출기, 유료 호출 없음)
   EXTRACTION_MODEL_MODE=standin      요청을 파일로 쓰고 답 파일을 기다림(EXTRACTION_STANDIN_DIR, 대역 모델로 흐름 시험, 유료 호출 없음)
+    EXTRACTION_STANDIN_REPLAY_DIR    앞선 대역 실행 폴더. 같은 요청은 그 답을 다시 씀(같은 첫 추출 위에서 고친 흐름만 다시 시험)
   LOCAL_AI_URL       로컬 AI 주소 (OpenAI 호환 /v1/chat/completions. 예: http://localhost:11434/v1). 비우면 로컬 AI 없음으로 보고 바로 유료 API
   OPENAI_API_KEY     유료 API 키. 환경 변수가 없으면 services/extraction/.env 파일에서 읽습니다. 키는 출력·저장하지 않습니다
 
@@ -78,6 +79,7 @@ class Settings:
     env_file: Path = SERVICE_DIR / ".env"
     recorded_dir: Path | None = None  # recorded 모드: <호출 이름>.json (응답 문자열 목록) 파일이 있는 폴더
     standin_dir: Path | None = None  # standin 모드: 요청·답 파일을 주고받을 폴더(model/file_exchange.py)
+    standin_replay_dir: Path | None = None  # standin 모드: 같은 요청의 답을 다시 쓸 앞선 실행 폴더
     require_pdf: bool = True  # 공고는 PDF가 반드시 옴(2026-10-16). false는 글자만 있는 시험 이벤트용
     extraction_method: str = "structured"  # 롤백 스위치(method.py): structured(표 머리글 복원) / legacy(이전 방식)
     local_files_dir: Path | None = None  # 시험용: 첨부를 S3 대신 이 폴더에서 읽음 (s3Key = 폴더 아래 상대 경로)
@@ -136,6 +138,7 @@ class Settings:
             openai_stream=os.getenv("OPENAI_STREAM", "true").lower() != "false",
             recorded_dir=Path(recorded) if recorded else None,
             standin_dir=Path(os.environ["EXTRACTION_STANDIN_DIR"]) if os.getenv("EXTRACTION_STANDIN_DIR") else None,
+            standin_replay_dir=Path(os.environ["EXTRACTION_STANDIN_REPLAY_DIR"]) if os.getenv("EXTRACTION_STANDIN_REPLAY_DIR") else None,
             require_pdf=os.getenv("EXTRACTION_REQUIRE_PDF", "true").lower() != "false",
             extraction_method=extraction_method(),
             local_files_dir=Path(os.environ["EXTRACTION_LOCAL_FILES_DIR"]) if os.getenv("EXTRACTION_LOCAL_FILES_DIR") else None,
