@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -115,6 +116,18 @@ def build() -> Any:
 GRAPH = build()
 
 
+ENGINE_ENV = "EXTRACTION_ENGINE"  # graph(기본, 정해진 단계) · agent(에이전트가 순서·방법을 정함, graph/agentic.py)
+
+
 def run_graph(raw_event: dict[str, Any], rt: Runtime, method: str | None = None) -> Outcome:
-    state = GRAPH.invoke({"raw_event": raw_event, "method": method or extraction_method()}, context=rt)
+    engine = os.getenv(ENGINE_ENV, "graph")
+    if engine not in ("graph", "agent"):
+        raise ValueError(f"{ENGINE_ENV}는 graph·agent 중 하나여야 합니다: {engine!r}")
+    if engine == "agent":
+        from mujuthaek_extraction.graph.agentic import AGENT_GRAPH  # 이 모듈의 노드를 가져다 쓰므로 실행할 때 가져옵니다
+
+        graph = AGENT_GRAPH
+    else:
+        graph = GRAPH
+    state = graph.invoke({"raw_event": raw_event, "method": method or extraction_method()}, context=rt)
     return state["outcome"]
