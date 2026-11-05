@@ -16,6 +16,11 @@ from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRe
 from mujuthaek_extraction.repair.agent import BUDGET_CODES, _attempt
 
 RECORD_CHARS = 600  # 작업 기록에 남길 도구 결과 앞부분
+# 한 차례 도구 결과의 글자 상한(2026-11-05 대역 시험: 첫 차례에 쪽 9개를 한꺼번에 읽어 그 글이 뒤 차례마다 입력으로 붙음).
+# 결과가 작은 확인(check_quote 12개 등)은 막지 않고, 쌓인 결과가 이만큼을 넘으면 그 뒤 호출은 실행하지 않고 그 사실을 돌려줍니다
+# (끝내기 도구는 늘 실행). 호출 수 상한은 안전장치
+MAX_TURN_RESULT_CHARS = 12_000
+MAX_CALLS_PER_TURN = 15
 
 
 class Toolbox(Protocol):
@@ -86,9 +91,19 @@ def run_loop(
         calls = response.tool_calls
         results: list[str] = [""] * len(calls)
         order = sorted(range(len(calls)), key=lambda i: calls[i].name == toolbox.finish_tool)  # 끝내기는 마지막에
+        ran, size = 0, 0
         for i in order:
             log.steps.append(calls[i].name)
-            result = toolbox.run(calls[i]) if not final or calls[i].name == toolbox.finish_tool else _refuse(toolbox.finish_tool)
+            finishing = calls[i].name == toolbox.finish_tool
+            if final and not finishing:
+                result = _refuse(toolbox.finish_tool)
+            elif not finishing and (ran >= MAX_CALLS_PER_TURN or size >= MAX_TURN_RESULT_CHARS):
+                message = f"이 차례 결과가 이미 큽니다(호출 {ran}개, {size:,}자). 나머지는 실행하지 않았습니다. 필요한 것만 다음 차례에 부릅니다."
+                result = json.dumps({"error": "TURN_FULL", "message": message}, ensure_ascii=False)
+            else:
+                ran += 1
+                result = toolbox.run(calls[i])
+                size += len(result)
             results[i] = _with_turns_left(result, first + limit - 1 - number)
         run.raw_responses.append(
             (
