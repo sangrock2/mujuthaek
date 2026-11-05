@@ -169,6 +169,16 @@ def test_runaway_is_found_inside_string_values_only():
     assert runaway(json.dumps({"requiredDocuments": items})) is None
 
 
+def test_image_transcription_may_be_long_but_not_looping():
+    # 2026-11-05: 가격표 그림 한 장을 옮긴 글(2,000자 넘음)이 길이 규칙에 걸려 그림 판독이 통째로 버려졌습니다
+    table = "".join(f"| {i}동 | 59A | {i * 37 % 900 + 100},000 | {i * 53 % 700 + 300},000 |\n" for i in range(101, 201))
+    page = json.dumps({"pages": [{"image": 1, "text": table}]}, ensure_ascii=False)
+    assert len(table) > 2_000
+    assert runaway(page) and runaway(page, "image_text") is None
+    row = "| 본인 직접 신청할 때 | ① 본인 신분증(주민등록증, 운전면허증, 여권만 인정) ② 본인 도장 |" * 3
+    assert runaway(json.dumps({"pages": [{"image": 1, "text": row * 4}]}, ensure_ascii=False), "image_text")  # 반복은 그대로 폭주
+
+
 def documents_part(data, ids):
     part = ai_part(data, ("requiredDocuments",))
     template = part["requiredDocuments"][0]
