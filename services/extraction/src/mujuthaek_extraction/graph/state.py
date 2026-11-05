@@ -32,4 +32,5 @@ class ExtractionState(TypedDict, total=False):
     repairs: list[str]
     quarantine_actions: list[str]
     publication: Publication
+    agent_env: Any  # 에이전트 방식(EXTRACTION_ENGINE=agent)의 공유 상태(agentic.agents.Env)
     outcome: Outcome  # 이 값이 생기면 끝입니다

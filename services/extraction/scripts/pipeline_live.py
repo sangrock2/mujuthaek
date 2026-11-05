@@ -36,17 +36,19 @@ def main() -> None:
     parser.add_argument("--board", action="append", default=[], help="<출처>:<공고 번호>")
     parser.add_argument("--total-budget-usd", type=float)
     parser.add_argument("--strategy", choices=("batch", "agent"), default="batch", help="재확인 답 받기 방법(EXTRACTION_RECHECK_STRATEGY)")
+    parser.add_argument("--engine", choices=("graph", "agent"), default="graph", help="추출 방식(EXTRACTION_ENGINE): 정해진 단계·에이전트")
     parser.add_argument("--env-file", type=Path, help="유료 API 키를 읽을 파일(값은 출력하지 않음). 없으면 설정 기본 위치")
     parser.add_argument("--confirm-spend", action="store_true")
     args = parser.parse_args()
     targets = [("lh", n) for n in args.lh_notice] + [("board", b) for b in args.board]
 
     os.environ["EXTRACTION_RECHECK_STRATEGY"] = args.strategy
+    os.environ["EXTRACTION_ENGINE"] = args.engine
     settings = Settings.from_env()
     if args.env_file is not None:
         settings = dataclasses.replace(settings, env_file=args.env_file)
     factory = ModelFactory(settings)
-    print(f"모델: {factory.describe()}, 재확인: {args.strategy}")
+    print(f"모델: {factory.describe()}, 방식: {args.engine}, 재확인: {args.strategy}")
     if not args.confirm_spend:
         print(f"미리보기: {len(targets)}건, 공고당 상한 ${settings.notice_budget_usd:.2f}, 전체 상한 {args.total_budget_usd}. --confirm-spend로 실행합니다.")
         return
@@ -107,11 +109,25 @@ def main() -> None:
             "error": outcome.error,
             "repairs": outcome.repairs,
             "recheck": (outcome.usage or {}).get("recheck"),
+            "agentic": _agentic_brief((outcome.usage or {}).get("agentic")),
         }
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False))
     (args.out / "summary.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"전체 추정 비용 ${total:.4f} ({len(rows)}건)")
+
+
+def _agentic_brief(record: dict | None) -> dict | None:
+    """에이전트 방식 기록 요약: 에이전트마다 차례·결말·부른 도구 순서, 받아들인·보류한 문제 수."""
+    if not record:
+        return None
+    applied = record.get("applied") or {}
+    return {
+        "agents": [f"{a['name']} {a['turns']}차례 {a['outcome']}: {'→'.join(a['steps'])}" for a in record["agents"]],
+        "accepted": len(applied.get("accepted") or []),
+        "held": len(applied.get("held") or []),
+        "verifierIssues": len(record.get("verifierIssues") or []),
+    }
 
 
 if __name__ == "__main__":
