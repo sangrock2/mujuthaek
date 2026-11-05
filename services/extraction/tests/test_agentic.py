@@ -363,3 +363,110 @@ def test_model_without_tools_or_an_agent_crash_falls_back_to_the_fixed_flow(monk
     monkeypatch.setattr(agentic_graph, "run_supervisor", broken)
     outcome = run(raw_event(), NoticeModels(RecordedModel(answers(), "gpt"), None, names={"primary": "gpt"}))
     assert outcome.status == "COMPLETED" and "RuntimeError" in outcome.usage["agenticFallback"]
+
+
+# ── 보강 B(비용·시간)·C(틀린 값 0) ────────────────────────────────────────────────────────────────
+
+
+def test_workers_get_only_their_section_rules_and_the_supervisor_none():
+    from mujuthaek_extraction.agentic.agents import section_prompt
+    from mujuthaek_extraction.rules.housing_notice import RULES
+
+    full = RULES.system_prompt()
+    eligibility, selection, supervisor_prompt = section_prompt(full, ("eligibility",)), section_prompt(full, ("selectionRules",)), section_prompt(full, ())
+    assert "## 2-5. 자격" in eligibility and "## 2-7. 서류" not in eligibility and "# 3. 근거 인용" in eligibility and len(eligibility) < len(full) // 2
+    assert "## 2-6. 선정" in selection and "## 2-5. 자격" in selection  # 선정은 조건식·속성 사전이 자격 규칙에 있음
+    assert "## 2-" not in supervisor_prompt and "# 1. 원칙" in supervisor_prompt and "# 5. 누락 기록과 보고" in supervisor_prompt
+
+
+def test_agent_requests_allow_several_tools_per_turn_and_finish_runs_last(monkeypatch):
+    from mujuthaek_extraction.model import ModelResponse, StopReason
+    from mujuthaek_extraction.model.base import ToolCall
+    from mujuthaek_extraction.model.openai_responses import OpenAIResponsesModel
+
+    both = ModelResponse(
+        "",
+        "recorded",
+        StopReason.END,
+        input_tokens=10,
+        output_tokens=5,
+        tool_calls=(ToolCall("c1", "done", json.dumps({"summary": "끝"})), ToolCall("c2", "read_page", json.dumps({"page": 1, "from_char": 0}))),
+    )
+    calls = full_script()
+    calls.update(worker("schedules", turn("extract_section"), both))
+    outcome, model = run_agentic(monkeypatch, calls)
+    first = next(r for r in model.requests if r.call_name == "agentic:schedules:turn1")
+    assert first.parallel_tools and OpenAIResponsesModel("sk-test").body(first)["parallel_tool_calls"] is True
+    log = next(a for a in outcome.usage["agentic"]["agents"] if a["name"] == "worker:schedules")
+    assert log["steps"][-2:] == ["read_page", "done"] and log["outcome"] == "DONE"  # 끝내기는 그 차례의 마지막에
+
+
+def test_delegating_the_same_worker_again_continues_its_conversation(monkeypatch):
+    calls = full_script()
+    steps = [turn("delegate", worker=w, brief="처음") for w in WORKERS] + [turn("delegate", worker="selection", brief="가점 행 다시 확인")]
+    calls.update(supervisor(*steps, turn("finish", accept=[], hold=[], note="")))
+    calls.update(worker("selection", turn("extract_section"), turn("done", summary="처음"), turn("done", summary="다시")))
+    _, model = run_agentic(monkeypatch, calls)
+    again = next(r for r in model.requests if r.call_name == "agentic:selection:turn3")  # 차례 번호가 이어짐
+    assert len(again.turns) == 2 and again.turns[-1].note and "가점 행 다시 확인" in again.turns[-1].note
+    from mujuthaek_extraction.model.openai_responses import OpenAIResponsesModel
+
+    body = OpenAIResponsesModel("sk-test").body(again)
+    assert body["input"][-1]["role"] == "user" and "다시 맡김" in body["input"][-1]["content"][0]["text"]
+
+
+def test_code_made_address_locations_are_left_out_of_the_structure_summary():
+    from mujuthaek_extraction.extract import ExtractionRun
+
+    env = bare_env()
+    env.draft.put_parts("structure", [{"quotes": [], "notice": {"title": "t"}, "locations": [{"id": "complex"}, {"id": "addr-1"}, {"id": "addr-2"}]}])
+    env.note_extraction(ExtractionRun(structure={"locations": [{"id": "complex"}]}))
+    assert [loc["id"] for loc in env.structure()["locations"]] == ["complex"]
+
+
+def test_problem_items_come_with_where_their_evidence_is():
+    from types import SimpleNamespace
+
+    from mujuthaek_extraction.agentic.agents import _where
+
+    env = bare_env()
+    text = env.material.text
+    start = text.index("무주택")
+    candidate = {"eligibility": [{"evidenceIds": ["e1"]}], "evidence": [{"id": "e1", "locator": {"kind": "TEXT_RANGE", "start": start, "end": start + 3}}]}
+    where = _where(env, SimpleNamespace(candidate=candidate), "/eligibility/0/rule")
+    assert where and "무주택" in where["snippet"]
+
+
+def test_accepting_needs_a_quote_that_is_in_the_source():
+    from mujuthaek_extraction.agentic.agents import decision_problems
+
+    issue = {"code": "EVIDENCE_AMBIGUOUS", "target": "/schedules/0", "description": "근거가 여러 곳"}
+    env = bare_env()
+    env.evaluate = lambda parts: report_with(issue)
+    real = env.material.text[env.material.text.index("무주택") :][:20]
+    ok = {"code": issue["code"], "target": issue["target"], "reason": "확인", "quote": real}
+    assert decision_problems(env, [ok], []) == []
+    wrong = [{**ok, "quote": "원문에 없는 글입니다"}, {**ok, "code": "OTHER"}, {**ok, "code": "IMAGE_READING_DISAGREES"}]
+    problems = decision_problems(env, wrong, [{"target": "schedules/guidance", "reason": "?"}])
+    assert [p["kind"] for p in problems] == ["accept", "accept", "accept", "hold"]
+
+
+def test_wrong_decisions_are_sent_back_once_then_only_valid_ones_are_kept(monkeypatch):
+    calls = full_script()
+    bad = turn("finish", accept=[{"code": "X", "target": "/eligibility/0", "reason": "?", "quote": "없는 글"}], hold=[], note="")
+    steps = [turn("delegate", worker=w, brief="처음") for w in WORKERS] + [bad, bad]
+    calls.update(supervisor(*steps))
+    outcome, model = run_agentic(monkeypatch, calls)
+    returned = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn7").turns[-1].results[0])
+    assert returned["received"] is False and returned["problems"][0]["kind"] == "accept"
+    record = outcome.usage["agentic"]
+    assert record["decision"]["accept"] == [] and record["decisionDropped"] and outcome.status == "COMPLETED"
+
+
+def test_agents_cannot_empty_sections_used_for_judgment():
+    from mujuthaek_extraction.agentic.agents import WorkerTools
+
+    env = bare_env()
+    result = WorkerTools(env, "eligibility")._set_coverage("eligibility", "NOT_IN_SOURCE", "없음")
+    assert result["error"] == "NOT_ALLOWED"
+    assert WorkerTools(env, "documents")._set_coverage("requiredDocuments", "NOT_IN_SOURCE", "없음") == {"ok": True}

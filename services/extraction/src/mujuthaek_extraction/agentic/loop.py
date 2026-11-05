@@ -47,17 +47,23 @@ def run_loop(
     run: ExtractionRun,
     log: AgentLog,
     *,
+    turns: list[ToolTurn] | None = None,
+    first: int = 1,
     policy: RetryPolicy = DEFAULT_POLICY,
     sleep: Callable[[float], None] | None = None,
-) -> None:
-    """sleep: 일시 오류 뒤 기다리는 함수(테스트는 가짜). 일시 오류(429·5xx·시간 초과)는 추출 호출과 같은 정책으로 다시 보냅니다
+) -> list[ToolTurn]:
+    """차례를 돌리고 쌓인 차례들을 돌려줍니다(같은 담당을 다시 맡길 때 이어 가려고).
+    turns·first: 이어 갈 앞선 차례와 이번 첫 차례 번호. 한 차례에 도구 여럿을 부를 수 있고(읽기 여러 개를 한 번에), 끝내기 도구는 그 차례의 마지막에 실행합니다.
+    sleep: 일시 오류 뒤 기다리는 함수(테스트는 가짜). 일시 오류(429·5xx·시간 초과)는 추출 호출과 같은 정책으로 다시 보냅니다
     (2026-11-05 점검: 동시 담당이 늘면 한도 초과가 잦은데 차례 하나의 일시 오류로 담당이 바로 끝났음)."""
     wait = sleep or time.sleep
-    turns: list[ToolTurn] = []
+    turns = list(turns or [])
     log.outcome = "TURN_LIMIT"
-    for turn in range(1, limit + 1):
-        name = f"{base.call_name}:turn{turn}"
-        final = turn == limit
+    for number in range(first, first + limit):
+        name = f"{base.call_name}:turn{number}"
+        final = number == first + limit - 1
+        if hasattr(toolbox, "final"):
+            toolbox.final = final
         request = replace(base, call_name=name, turns=tuple(turns), tools=toolbox.specs, forced_tool=toolbox.finish_tool if final else None)
         response = None
         for attempt in range(1, policy.max_attempts + 1):
@@ -71,33 +77,33 @@ def run_loop(
                     continue
                 run.failed_calls.append((name, str(error)))
                 log.outcome = "BUDGET" if error.code in BUDGET_CODES else "MODEL_ERROR"
-                return
+                return turns
         run.attempts.append(_attempt(request, response, None))
-        log.turns = turn
+        log.turns += 1
         if not response.tool_calls:
             log.outcome = "NO_TOOL_CALL"
-            return
-        results = []
-        for call in response.tool_calls:
-            log.steps.append(call.name)
-            result = toolbox.run(call) if not final or call.name == toolbox.finish_tool else _refuse(toolbox.finish_tool)
-            results.append(_with_turns_left(result, limit - turn))
+            return turns
+        calls = response.tool_calls
+        results: list[str] = [""] * len(calls)
+        order = sorted(range(len(calls)), key=lambda i: calls[i].name == toolbox.finish_tool)  # 끝내기는 마지막에
+        for i in order:
+            log.steps.append(calls[i].name)
+            result = toolbox.run(calls[i]) if not final or calls[i].name == toolbox.finish_tool else _refuse(toolbox.finish_tool)
+            results[i] = _with_turns_left(result, first + limit - 1 - number)
         run.raw_responses.append(
             (
                 name,
                 json.dumps(
-                    {
-                        "toolCalls": [{"name": c.name, "arguments": c.arguments[:RECORD_CHARS]} for c in response.tool_calls],
-                        "results": [r[:RECORD_CHARS] for r in results],
-                    },
+                    {"toolCalls": [{"name": c.name, "arguments": c.arguments[:RECORD_CHARS]} for c in calls], "results": [r[:RECORD_CHARS] for r in results]},
                     ensure_ascii=False,
                 ),
             )
         )
-        turns.append(ToolTurn(response.tool_calls, tuple(results)))
+        turns.append(ToolTurn(calls, tuple(results)))
         if toolbox.done:
             log.outcome = "DONE"
-            return
+            return turns
+    return turns
 
 
 def _refuse(finish_tool: str) -> str:

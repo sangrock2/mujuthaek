@@ -52,6 +52,8 @@ class ToolTurn:
 
     calls: tuple[ToolCall, ...]
     results: tuple[str, ...]
+    # 이 차례 뒤에 덧붙이는 사용자 글(같은 담당을 다시 맡길 때 새 지시). 있으면 도구 결과 다음에 사용자 메시지로 보냅니다
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,12 +75,15 @@ class ModelRequest:
     turns: tuple[ToolTurn, ...] = ()
     # 이 차례에 반드시 부를 도구 이름(재확인 에이전트의 마지막 차례 submit_fix). 도구 목록은 그대로 두어 앞 차례의 입력 캐시를 이어 씁니다
     forced_tool: str | None = None
+    # 한 차례에 도구 여럿을 부를 수 있게(에이전트 방식: 쪽 여러 개를 한 차례에 읽어 차례 수를 줄임). 재확인 에이전트는 하나씩
+    parallel_tools: bool = False
 
     def tool_chars(self) -> int:
         """도구 설명·앞선 차례가 입력에 더하는 글자 수(비용 상한 계산용)."""
         specs = sum(len(t.name) + len(t.description) + len(json.dumps(t.parameters, ensure_ascii=False)) for t in self.tools)
         turns = sum(len(c.name) + len(c.arguments) for turn in self.turns for c in turn.calls) + sum(len(r) for turn in self.turns for r in turn.results)
-        return specs + turns
+        notes = sum(len(turn.note or "") for turn in self.turns)
+        return specs + turns + notes
 
 
 @dataclass(frozen=True)
