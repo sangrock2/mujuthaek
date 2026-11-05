@@ -742,3 +742,32 @@ def test_no_deposit_rent_column_is_a_deposit_down_plan():
     rent = group["prices"][-1]
     assert (rent["sourceAmount"], rent["priceStage"], rent["scope"]["targetGroups"]) == ("120,000", "CONVERSION_DEPOSIT_DOWN", ["수급자"])
     assert st._stage_words("무보증금 월세") == "CONVERSION_DEPOSIT_DOWN"
+
+
+def test_transcribed_picture_table_is_a_candidate_and_every_row_is_copied():
+    # 2026-11-05 sh-311087: 임대조건 표가 그림이라 판독 글에만 있었고 후보가 없어, 구조 호출이 37행 중 1행만 공급 묶음으로 만듦(가격 4/148)
+    text = "\n".join(
+        [
+            "--- 1쪽 ---\n임대조건은 아래 그림 참고",
+            "=== 그림 판독 공고.pdf 1쪽 (AI가 그림 속 글자를 옮김, 원문 그림으로 확인 필요) ===",
+            "임대조건",
+            "| 구분 | 호수 | 전용면적 (㎡) | 소득 50% 이하 | 소득 50% 이하 |",
+            "| 구분 | 호수 | 전용면적 (㎡) | 보증금(원) | 월임대료(원) |",
+            "| 가동 (성안로 64) | 202 | 36.29 | 27,490,000 | 358,100 |",
+            "| 가동 (성안로 64) | 302 | 36.29 | 28,181,000 | 367,100 |",
+            "| 나동 (성안로 64) | 304 | 35.99 | 27,680,000 | 360,600 |",
+            "",
+            "| 순위 | 내용 |",
+            "| 1순위 | 수급자 |",
+        ]
+    )
+    [table] = st.image_tables(replace(material(), text=text, sheets=()))
+    assert table.label == "그림1" and table.columns[3:] == ("소득 50% 이하 보증금(원)", "소득 50% 이하 월임대료(원)") and len(table.rows) == 3
+    group = "소득 50% 이하"
+    columns = [column(1, "COMPLEX"), column(2, "UNIT"), column(3, "AREA_EXCLUSIVE")]
+    columns += [column(4, "PRICE", pk="DEPOSIT", unit="원", plan=group, stage="STANDARD", group=group)]
+    columns += [column(5, "PRICE", pk="MONTHLY_RENT", unit="원", plan=group, stage="STANDARD", group=group)]
+    mapping = {"tables": [{"table": "그림1", "role": "SUPPLY", "rowUnit": "HOUSING_UNIT", "complex": None, "columns": columns}]}
+    part = st.build_part([table], mapping, "pdf-text")
+    assert len(part["supplyGroups"]) == 3 and sum(len(g["prices"]) for g in part["supplyGroups"]) == 6
+    assert all(q["text"] in text for q in part["quotes"])  # 인용은 판독 글의 표 줄 그대로

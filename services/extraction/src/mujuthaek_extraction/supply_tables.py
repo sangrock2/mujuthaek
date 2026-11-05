@@ -264,6 +264,34 @@ def candidates(material: ExtractionMaterial) -> list[Table]:
                     continue
                 if len(found) >= MAX_TABLES:
                     return found
+    return (found + image_tables(material))[:MAX_TABLES]
+
+
+IMAGE_BLOCK_HEAD = "=== 그림 판독 "  # image_reading.BLOCK_HEAD와 같음 (image_reading이 extract를 가져와 순환 import를 피함)
+IMAGE_LABEL = "그림"
+
+
+def image_tables(material: ExtractionMaterial) -> list[Table]:
+    """그림 판독 글(원문 끝에 붙은 「=== 그림 판독 …」 묶음)의 표도 공급표 후보로: 이어진 「| … |」 줄 묶음마다 맨 위 머리 행
+    (여러 줄이면 이어 붙임)을 열 제목, 그 아래 숫자가 있는 행을 행으로. 열 제목에 공급 단서가 있는 표만 고릅니다.
+    (2026-11-05 sh-311087: 가격표가 그림이라 판독 글에만 있어 후보가 없었고, 구조 호출이 37행을 인용만 하고 공급 묶음은 1개만 만듦 — 가격 4/148)"""
+    found: list[Table] = []
+    for block in (getattr(material, "text", "") or "").split(IMAGE_BLOCK_HEAD)[1:]:
+        head, _, body = block.partition("\n")
+        runs: list[list[tuple[str, ...]]] = [[]]
+        for line in body.split("\n"):
+            stripped = line.strip()
+            if len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|"):
+                runs[-1].append(tuple(c.strip() for c in stripped[1:-1].split("|")))
+            elif runs[-1]:
+                runs.append([])
+        for rows in (tuple(run) for run in runs):
+            if not rows or not _header_like(rows[0]):
+                continue
+            columns, first = _merged_header(rows, 0)
+            body_rows = tuple(r for r in rows[first:] if any(_numeric(c) for c in r))
+            if body_rows and any(SUPPLY_HINT.search(c) for c in columns):
+                found.append(Table(f"{IMAGE_LABEL}{len(found) + 1}", 0, f"{IMAGE_BLOCK_HEAD}{head}"[:160], columns, body_rows, None))
     return found
 
 

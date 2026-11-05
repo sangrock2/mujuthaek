@@ -39,6 +39,15 @@ def test_transcribed_table_is_appended_and_document_hash_follows(pictured):
     assert run.failed_calls == [] and context.documents[0]["sha256"] == "old"  # 입력은 바꾸지 않습니다
 
 
+def test_transcribed_rows_get_the_pdf_table_line_shape(pictured):
+    # 2026-11-05 sh-311087: 판독기가 「a | b」로 적은 행은 표 행(「| …」)으로 보지 않아 공급표 후보·가격 행 누락 검사가 모두 놓쳤습니다
+    material, context = pictured
+    plain = "임대조건\n호실 | 전용면적 | 보증금\n202호 | 26.71 | 12,744,000"
+    new_material, _, _ = image_reading.read_image_tables(material, context, RecordedModel({"image_text": [answer(plain)]}))
+    assert new_material.text.endswith("임대조건\n| 호실 | 전용면적 | 보증금 |\n| 202호 | 26.71 | 12,744,000 |")
+    assert image_reading.bordered(TABLE) == TABLE  # 이미 표 모양인 줄은 그대로
+
+
 def test_reader_failure_or_empty_picture_leaves_material_as_is(pictured):
     material, context = pictured
     down = RecordedModel({"image_text": [ModelError("timeout", transient=True)]})
