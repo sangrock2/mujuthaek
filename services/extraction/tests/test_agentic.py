@@ -130,3 +130,11 @@ def test_hold_locations_written_loosely_are_normalized_or_dropped():
     applied = apply_decision(report, Decision(hold=holds))
     assert applied["held"] == ["/eligibility", "/selectionRules"] and applied["unmatchedHolds"] == ["schedules/guidance"]
     assert tools().validate(report.candidate, "schemas/extracted-notice.v1.json") == []
+
+
+def test_agent_cannot_accept_a_disputed_image_reading():
+    # 원문 그림과 맞춰야 하는 문제인데 에이전트는 옮긴 글자만 봅니다
+    issue = {"code": "IMAGE_READING_DISAGREES", "target": "/schedules/0", "description": "두 판독이 다름"}
+    report = report_with(issue)
+    applied = apply_decision(report, Decision(accept=[{"code": issue["code"], "target": issue["target"], "reason": "확인함"}]))
+    assert applied["refused"] == [{"code": issue["code"], "target": issue["target"]}] and report.candidate["quality"]["reviewIssues"] == [issue]

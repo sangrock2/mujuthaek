@@ -563,6 +563,7 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
     }
     if not from_image:
         return
+    _check_disputed_reading(candidate, sources, from_image, find)
     if _evidence_ids(candidate["notice"]) & from_image:
         find("V8", "EVIDENCE_FROM_IMAGE", "/notice", "공고 정보의 근거가 AI가 그림에서 옮긴 글자입니다. 원문 그림과 맞는지 확인하세요.")
     for index, item in enumerate(candidate["eligibility"]):
@@ -572,6 +573,51 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
         count = sum(1 for item in candidate.get(section) or [] if _evidence_ids(item) & from_image)
         if count:
             find("V8", "IMAGE_TRANSCRIBED_VALUES", f"/{section}", f"{count}개 항목이 AI가 그림에서 옮긴 글자를 근거로 합니다(원문 그림 확인 권장).")
+
+
+# 그림을 두 번 따로 읽어 글자가 다른 줄(image_reading.DISPUTED_HEAD 묶음). 이 줄을 근거로 한 값은 판독 오류일 수 있어 사람 확인입니다
+# (2026-11-05 실측: 같은 가격표 그림을 실행마다 250,600·250,500으로 읽어 틀린 월임대료가 자동 게시됨). 그 묶음의 가격·수량 칸만 보류합니다
+IMAGE_DISPUTED_HEAD = "=== 그림 판독 불일치 "
+IMAGE_DISPUTED_LINE = "불일치 줄: "
+IMAGE_DISAGREES = "IMAGE_READING_DISAGREES"
+
+
+def _disputed_rows(sources: SourceBundle) -> list[str]:
+    rows = []
+    for text in sources.texts.values():
+        at = text.find(IMAGE_DISPUTED_HEAD)
+        for line in text[at:].split("\n")[1:] if at >= 0 else []:
+            if line.startswith("=== "):
+                break
+            if line.startswith(IMAGE_DISPUTED_LINE):
+                rows.append("".join(line[len(IMAGE_DISPUTED_LINE) :].replace("¦", "|").split()))
+    return [r for r in rows if r]
+
+
+def _check_disputed_reading(candidate: dict[str, Any], sources: SourceBundle, from_image: set[str], find: Any) -> None:
+    rows = _disputed_rows(sources)
+    if not rows:
+        return
+    disputed = set()
+    for evidence in candidate.get("evidence") or []:
+        quote = "".join(str(evidence.get("quote") or "").split())
+        if evidence["id"] in from_image and len(quote) >= 4 and any(quote in row or row in quote for row in rows):
+            disputed.add(evidence["id"])
+    if not disputed:
+        return
+    description = "두 번 따로 읽은 그림 글자가 이 근거 줄에서 다릅니다(판독 오류일 수 있음). 원문 그림과 맞춰 확인하세요."
+    for g, group in enumerate(candidate["supplyGroups"]):
+        own = {k: v for k, v in group.items() if k not in ("prices", "counts")}
+        if _evidence_ids(own) & disputed:
+            find("V8", IMAGE_DISAGREES, f"/supplyGroups/{g}", description)
+            continue
+        for field in ("prices", "counts"):
+            if _evidence_ids(group.get(field)) & disputed:
+                find("V8", IMAGE_DISAGREES, f"/supplyGroups/{g}/{field}", description)
+    for section in ("eligibility", "locations", "schedules", "selectionRules", "requiredDocuments"):
+        for index, item in enumerate(candidate.get(section) or []):
+            if _evidence_ids(item) & disputed:
+                find("V8", IMAGE_DISAGREES, f"/{section}/{index}", description)
 
 
 def _check_image_content(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
