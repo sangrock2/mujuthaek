@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-from mujuthaek_extraction.repair.tools import _merge, item_refs
+from mujuthaek_extraction.repair.tools import _id_list, item_refs
 
 LIST_SECTIONS = ("locations", "supplyGroups", "schedules", "eligibility", "selectionRules", "requiredDocuments", "guidance")
 COVERAGE = ("EXTRACTED", "PARTIAL", "NOT_IN_SOURCE", "NOT_APPLICABLE")
@@ -61,12 +61,20 @@ class Draft:
             part = self._holder(section) or {}
             return {q["ref"] for q in part.get("quotes") or [] if isinstance(q, dict) and "ref" in q}
 
-    def upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]]) -> str:
-        """항목 하나를 넣거나(같은 id가 없으면) 고칩니다(칸마다 덮어씀, id 있는 목록은 id별로 합침). 인용 ref는 겹치지 않게 바꿉니다."""
+    def upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]], replace_refs: bool = False) -> str:
+        """항목 하나를 넣거나(같은 id가 없으면) 고칩니다(칸마다 덮어씀, id 있는 목록은 id별로 합침). 인용 ref는 겹치지 않게 바꿉니다.
+        quoteRefs는 기본으로 있던 것에 더합니다(replace_refs면 바꿈). 2026-11-05 대역 시험: 설명 칸 근거만 더하려고 quoteRefs에 새 ref
+        하나를 적었더니 목록을 통째로 바꿔 서류 이름의 근거가 사라졌음. 틀린 근거를 고칠 때만 바꿉니다."""
         with self._lock:
-            return self._upsert(section, item, quotes)
+            return self._upsert(section, item, quotes, replace_refs)
 
-    def _upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]]) -> str:
+    def preview(self, section: str, item: dict[str, Any], replace_refs: bool = False) -> dict[str, Any]:
+        """upsert하면 될 항목(같은 id의 지금 항목에 합친 것)을 미리 봅니다(초안은 바꾸지 않음)."""
+        with self._lock:
+            current = self.item(section, None if section == "notice" else item.get("id"))
+        return merge_item(current, item, replace_refs) if isinstance(current, dict) else item
+
+    def _upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]], replace_refs: bool) -> str:
         part = self._part(section)
         renamed = {}
         for quote in quotes:
@@ -75,14 +83,14 @@ class Draft:
             part["quotes"].append({"ref": renamed[quote["ref"]], "documentId": self.document_id, "text": quote["text"]})
         item = _rename_refs(item, renamed)
         if section == "notice":
-            part["notice"] = _merge(part.get("notice"), item) if isinstance(part.get("notice"), dict) else item
+            part["notice"] = merge_item(part.get("notice"), item, replace_refs) if isinstance(part.get("notice"), dict) else item
             return "notice"
         items = part[section]
         found = next((i for i, x in enumerate(items) if isinstance(x, dict) and x.get("id") == item.get("id")), None)
         if found is None:
             items.append(item)
             return f"{section}/{item.get('id')} 추가"
-        items[found] = _merge(items[found], item)
+        items[found] = merge_item(items[found], item, replace_refs)
         return f"{section}/{item.get('id')} 고침"
 
     def remove(self, section: str, item_id: str) -> bool:
@@ -153,6 +161,12 @@ class Draft:
                 out[section] = {"count": len(ids), "ids": ids[:30], "coverage": coverage}
         return out
 
+    def counts(self) -> dict[str, Any]:
+        """섹션마다 항목 수만(id 목록 없이). 결과 크기를 작게 두려고 씁니다."""
+        with self._lock:
+            summary = self._summary(None)
+        return {k: (v["count"] if isinstance(v, dict) and "count" in v else v) for k, v in summary.items()}
+
     def structure_ids(self) -> set[str]:
         """초안의 위치·공급 묶음 ID."""
         with self._lock:
@@ -179,6 +193,25 @@ class Draft:
                             if isinstance(item, dict) and _referenced(item) & ids:
                                 found.append(f"{section}/{item.get('id')}")
         return found
+
+
+def merge_item(base: Any, patch: Any, replace_refs: bool = False) -> Any:
+    """고칠 칸만 적은 조각을 지금 항목에 합칩니다(repair.tools._merge와 같은 규칙: 객체는 칸마다, id 있는 목록은 id별로, 그 밖은 바꿈).
+    다른 점: quoteRefs는 있던 것에 더합니다(replace_refs면 바꿈)."""
+    if isinstance(base, dict) and isinstance(patch, dict):
+        out = dict(base)
+        for key, value in patch.items():
+            if key == "quoteRefs" and not replace_refs and isinstance(value, list) and isinstance(base.get(key), list):
+                out[key] = list(dict.fromkeys([*base[key], *value]))
+            else:
+                out[key] = merge_item(base.get(key), value, replace_refs)
+        return out
+    if _id_list(base) and _id_list(patch):
+        patches = {item["id"]: item for item in patch}
+        merged = [merge_item(item, patches[item["id"]], replace_refs) if item["id"] in patches else item for item in base]
+        known = {item["id"] for item in base}
+        return [*merged, *(item for item in patch if item["id"] not in known)]
+    return patch
 
 
 REF_KEYS = ("locationId", "locationIds", "supplyGroupIds", "parentLocationId")

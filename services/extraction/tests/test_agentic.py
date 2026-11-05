@@ -470,3 +470,82 @@ def test_agents_cannot_empty_sections_used_for_judgment():
     result = WorkerTools(env, "eligibility")._set_coverage("eligibility", "NOT_IN_SOURCE", "없음")
     assert result["error"] == "NOT_ALLOWED"
     assert WorkerTools(env, "documents")._set_coverage("requiredDocuments", "NOT_IN_SOURCE", "없음") == {"ok": True}
+
+
+# ── 대역 시험(2026-11-05 jbdc)에서 찾은 결함 ──────────────────────────────────────────────────
+
+
+def test_long_results_are_trimmed_not_turned_into_an_error():
+    # extract_all·check_all 결과가 2,000자를 넘어 「결과가 너무 깁니다」 오류로 버려지고, 총괄이 초안이 비었다고 보고 구조를 처음부터 다시 맡김
+    from mujuthaek_extraction.agentic.agents import fit
+
+    issues = [{"code": "EVIDENCE_SCATTERED", "target": f"/eligibility/{i}", "description": "가" * 300} for i in range(60)]
+    text = fit({"issues": issues, "issueCount": 60}, 8_000)
+    value = json.loads(text)
+    assert len(text) <= 8_000 and value["issueCount"] == 60 and value["issues"] and value.get("truncated")
+
+
+def test_extract_all_result_is_small_and_kept(monkeypatch):
+    calls = dict(answers())
+    calls.update(supervisor(turn("extract_all"), turn("finish", accept=[], hold=[], note="")))
+    _, model = run_agentic(monkeypatch, calls)
+    result = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn2").turns[-1].results[0])
+    assert "error" not in result and "ids" not in json.dumps(result["draft"]) and result["draft"]["schedules"] == 1  # id 목록 없이 수만
+
+
+def test_too_many_tool_calls_in_one_turn_are_not_run(monkeypatch):
+    # 첫 차례에 쪽 9개를 한꺼번에 읽어 그 글이 뒤 차례마다 입력으로 붙음
+    from mujuthaek_extraction.agentic.loop import MAX_CALLS_PER_TURN
+    from mujuthaek_extraction.model import ModelResponse, StopReason
+    from mujuthaek_extraction.model.base import ToolCall
+
+    reads = tuple(ToolCall(f"c{n}", "check_quote", json.dumps({"quote": "무주택"})) for n in range(MAX_CALLS_PER_TURN + 3))
+    many = ModelResponse("", "recorded", StopReason.END, input_tokens=10, output_tokens=5, tool_calls=reads)
+    calls = dict(answers())
+    calls.update(supervisor(many, turn("finish", accept=[], hold=[], note="")))
+    _, model = run_agentic(monkeypatch, calls)
+    results = [json.loads(r) for r in next(r for r in model.requests if r.call_name == "agentic:supervisor:turn2").turns[-1].results]
+    assert sum(1 for r in results if r.get("error") == "TURN_FULL") == 3  # 결과가 작아도 호출 수 안전장치에서 멈춤
+    assert all("progress" not in r for r in results if "error" not in r)  # 읽기 결과에는 진행 사실을 붙이지 않음
+
+
+def test_a_turn_stops_running_tools_once_its_results_are_large():
+    from mujuthaek_extraction.agentic.loop import MAX_TURN_RESULT_CHARS, AgentLog, run_loop
+    from mujuthaek_extraction.extract import ExtractionRun
+    from mujuthaek_extraction.model import ModelRequest, ModelResponse, StopReason
+    from mujuthaek_extraction.model.base import ToolCall
+
+    class Box:
+        specs, finish_tool, done = (), "done", False
+
+        def run(self, call):
+            return json.dumps({"text": "가" * (MAX_TURN_RESULT_CHARS // 3)}, ensure_ascii=False)
+
+    calls = tuple(ToolCall(f"c{n}", "read_page", "{}") for n in range(6))
+    first = ModelResponse("", "r", StopReason.END, input_tokens=1, output_tokens=1, tool_calls=calls)
+    model = RecordedModel({"agentic:x:turn1": [first], "agentic:x:turn2": [turn("done", summary="")]})
+    turns = run_loop(model, ModelRequest("v", "agentic:x", "s", "u", "i", {"type": "object"}, 10), Box(), 2, ExtractionRun(), AgentLog("x"))
+    ran = [r for r in turns[0].results if "TURN_FULL" not in r]
+    assert len(ran) == 3  # 셋째 결과에서 상한을 넘어 나머지 셋은 실행하지 않음
+
+
+def test_new_quote_refs_are_added_to_the_old_ones_unless_replacing():
+    # 2026-11-05 대역 시험: 설명 칸 근거만 더하려고 quoteRefs에 새 ref 하나를 적었더니 서류 이름의 근거가 사라짐
+    from mujuthaek_extraction.agentic.draft import merge_item
+
+    item = {"id": "d1", "name": "위임장", "quoteRefs": ["q1"], "prices": [{"id": "p1", "quoteRefs": ["q2"]}]}
+    patch = {"id": "d1", "description": "자필로 작성", "quoteRefs": ["a1"], "prices": [{"id": "p1", "quoteRefs": ["a2"]}]}
+    added = merge_item(item, patch)
+    assert added["quoteRefs"] == ["q1", "a1"] and added["prices"][0]["quoteRefs"] == ["q2", "a2"] and added["name"] == "위임장"
+    replaced = merge_item(item, patch, replace_refs=True)
+    assert replaced["quoteRefs"] == ["a1"] and replaced["prices"][0]["quoteRefs"] == ["a2"]
+
+
+def test_format_errors_show_the_reason_not_the_whole_item():
+    # 2026-11-05 대역 시험: 오류가 항목 글자로 시작해 잘려 이유가 안 보이자 담당이 항목 종류를 바꿔 통과시킴
+    from mujuthaek_extraction.agentic.agents import WorkerTools
+
+    tools_ = WorkerTools(bare_env(), "selection")
+    item = {"id": "s1", "kind": "SCORING", "points": None, "description": "가" * 400}
+    errors = tools_._format_errors("selectionRules", item)
+    assert errors and all(len(e) < 300 and not e.split(": ", 1)[1].startswith("{") for e in errors)
