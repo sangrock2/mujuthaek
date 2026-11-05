@@ -329,10 +329,20 @@ def quarantine_step(
 def note_changes(report: VerificationReport, extracted: Extracted, recheck: RecheckResult, quarantine_actions: list[str]) -> None:
     """공통 검사: 재확인 답으로 바꿔 넣으며 처음 값이 사라진 칸, 계약 오류 정리로 바꾸거나 비운 값을 메모로 남겨 검수로 보냅니다(2026-10-26)."""
     run = extracted.run
-    changed = [*lost_by_recheck(run.parts, recheck.parts if recheck.accepted else run.parts), *(("/", a) for a in quarantine_actions)]
-    notes = report.candidate["quality"].setdefault("notes", [])
+    candidate = report.candidate
+    changed = [*lost_by_recheck(run.parts, recheck.parts if recheck.accepted else run.parts), *((_action_section(a, candidate), a) for a in quarantine_actions)]
+    notes = candidate["quality"].setdefault("notes", [])
     for target, description in changed:
         notes.append({"code": "AI_OUTPUT_VALUE_CHANGED", "target": target, "description": description})
+
+
+def _action_section(action: str, candidate: dict[str, Any]) -> str:
+    """정리 기록(「코드 /selectionRules/1: 항목을 뺐습니다」「schedules: …」)이 가리키는 섹션. 메모 위치는 계약상 있는 칸이어야 해서
+    뺀 항목 자리 대신 그 섹션을 가리킵니다(2026-11-05 실측: 위치를 「/」로 적어 DANGLING_FIELD_POINTER — 상세 없이 공고 전체가 검수로 감)."""
+    head = action.split(":", 1)[0].split()
+    pointer = next((t for t in head if t.startswith("/")), head[0] if len(head) == 1 else "")
+    section = pointer.strip("/").split("/", 1)[0]
+    return f"/{section}" if section in candidate else "/quality"
 
 
 def publish_step(report: VerificationReport, raw_event: dict[str, Any], material: ExtractionMaterial, rt: Runtime) -> Publication:
