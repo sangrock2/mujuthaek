@@ -19,6 +19,7 @@ TABLE = "| 호실 | 전용면적 | 보증금 | 월임대료 |\n| 202호 | 26.71 
 def pictured(monkeypatch):
     monkeypatch.setattr(image_reading, "image_pages", lambda data: ((1, 0.32),) if data == b"pdf" else ())
     monkeypatch.setattr(image_reading, "_render", lambda data, page: b"png")
+    monkeypatch.setattr(image_reading, "_render_tiles", lambda data, page: [b"png-top", b"png-bottom"])
     material = ExtractionMaterial("--- 1쪽 ---\n m 임대조건", "pdf-text", (), None, (MaterialFile("file-1", "공고.pdf", b"pdf", "pdf"),))
     context = TrustedContext({}, (), ({"id": "pdf-text", "kind": "TEXT", "name": "첨부 PDF에서 읽은 글자", "sha256": "old"},), "SKIPPED_NO_API_REFERENCE", None)
     return material, context
@@ -146,3 +147,15 @@ def test_failed_second_reading_disputes_every_line(pictured):
     model = RecordedModel({"image_text": [answer(TABLE)], "image_text_check": [ModelError("timeout", transient=True)]})
     new_material, _, run = image_reading.read_image_tables(material, context, model)
     assert new_material.text.count("불일치 줄: ") == len(TABLE.split("\n")) and run.failed_calls[0][0] == "image_text_check"
+
+
+def test_second_reading_uses_larger_tiles_and_joins_them_back(pictured):
+    # 2026-11-05: 같은 그림을 같은 크기로 두 번 읽으면 같은 글자를 같게 잘못 읽음(두 판독 모두 250,600 → 250,500). 다시 읽기는 크게 그린 위·아래 조각
+    material, context = pictured
+    top, bottom = "| 호실 | 전용면적 | 보증금 | 월임대료 |", "| 202호 | 26.71 | 12,744,000 | 166,100 |"
+    pages = json.dumps({"pages": [{"image": 1, "text": top}, {"image": 2, "text": bottom}]}, ensure_ascii=False)
+    model = RecordedModel({"image_text": [answer(TABLE)], "image_text_check": [pages]})
+    new_material, _, _ = image_reading.read_image_tables(material, context, model)
+    check = model.requests[1]
+    assert [i.data for i in check.images] == [b"png-top", b"png-bottom"] and "위 부분" in check.user and "아래 부분" in check.user
+    assert "불일치" not in new_material.text  # 두 조각을 이어 붙이면 처음 판독과 같음

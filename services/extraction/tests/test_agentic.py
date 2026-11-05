@@ -205,3 +205,18 @@ def test_part_with_several_workers_sections_is_split_by_owner():
     assert set(pieces) == {"eligibility", "selection", "documents"} and pieces["selection"]["selectionRules"] == [{"id": "s"}]
     assert "eligibility" not in pieces["selection"] and pieces["selection"]["quotes"] == [{"ref": "q1"}]
     assert pieces["selection"]["missingFields"] == [{"target": "/selectionRules/0/points"}] and pieces["eligibility"]["missingFields"] == []
+
+
+def test_tool_results_carry_progress_and_extract_all_skips_what_is_already_drafted(monkeypatch):
+    # 2026-11-05 jbdc: 담당이 각자 뽑은 뒤 총괄이 extract_all을 또 불러 같은 추출을 두 번 — 순서를 정해 주는 대신 진행 사실을 알림
+    calls = dict(answers())
+    steps = [turn("delegate", worker="structure", brief="처음"), turn("extract_all"), turn("extract_all"), turn("finish", accept=[], hold=[], note="")]
+    calls.update(supervisor(*steps))
+    calls.update(worker("structure", turn("extract_section"), turn("done", summary="구조")))
+    outcome, model = run_agentic(monkeypatch, calls)
+    second = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn3").turns[-1].results[0])
+    third = json.loads(next(r for r in model.requests if r.call_name == "agentic:supervisor:turn4").turns[-1].results[0])
+    assert second["skipped"] == ["structure"] and second["extracted"] == ["schedules", "eligibility", "selection", "documents"]
+    assert "모든 섹션이 이미" in third["message"] and "progress" in third and "extractedWorkers" in third["progress"]
+    # 구조 호출은 한 번만(두 번째 extract_all은 구조 요약을 받아 나머지만)
+    assert [r.call_name for r in model.requests if not r.call_name.startswith("agentic:")] == list(WORKERS) and outcome.status == "COMPLETED"

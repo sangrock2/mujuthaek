@@ -140,3 +140,23 @@ def test_filler_reason_on_a_structured_rule_is_cleared():
     unstructured = {"id": "s2", "rule": {"status": "UNSTRUCTURED", "reason": "조건식으로 표현할 수 없어요.", "expression": None}}
     fixed = fix_format_slips({"selectionRules": [structured, unstructured]})["selectionRules"]
     assert fixed[0]["rule"]["reason"] is None and fixed[1]["rule"]["reason"] == "조건식으로 표현할 수 없어요."
+
+
+def test_rent_income_tiers_put_in_as_eligibility_go_to_review():
+    # 2026-11-05 실측 sh-311087: 임대료 소득 구간(50% 이하, 50% 초과 70% 이하)이 자격 조건 둘로 들어가 자동 게시됨
+    from mujuthaek_extraction.verify.consistency import _check_income_tiers
+
+    def price(group):
+        return {"scope": {"targetGroups": [group], "description": ""}, "pricePlanId": None}
+
+    def income(*values):
+        children = [{"kind": "ATOMIC", "attribute": "INCOME_BENCHMARK_PERCENT", "value": v} for v in values]
+        return {"rule": {"expression": {"kind": "ALL", "children": children}}}
+
+    groups = [{"prices": [price("소득 50% 이하"), price("소득 50% 초과 70% 이하")]}]
+    found = []
+    _check_income_tiers({"supplyGroups": groups, "eligibility": [income(50), income(50, 70)]}, lambda *a: found.append(a[1:3]))
+    assert found == [("ELIGIBILITY_FROM_PRICE_TIER", "/eligibility/0"), ("ELIGIBILITY_FROM_PRICE_TIER", "/eligibility/1")]
+    found.clear()  # 자격 소득 기준이 하나면(진짜 자격 「70% 이하」) 걸지 않음
+    _check_income_tiers({"supplyGroups": groups, "eligibility": [income(70)]}, lambda *a: found.append(a[1:3]))
+    assert found == []
