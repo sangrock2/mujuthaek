@@ -3,6 +3,7 @@
 모델 (결정 C12, 2026-10-15)
   EXTRACTION_MODEL_MODE=auto (기본)  로컬 AI를 먼저 쓰고, 연결이 안 되거나 결과가 부족하면 유료 API(gpt-6-luna)
   EXTRACTION_MODEL_MODE=recorded     녹화한 응답을 재생 (개발·시연용 가짜 추출기, 유료 호출 없음)
+  EXTRACTION_MODEL_MODE=standin      요청을 파일로 쓰고 답 파일을 기다림(EXTRACTION_STANDIN_DIR, Claude 대역으로 흐름 시험, 유료 호출 없음)
   LOCAL_AI_URL       로컬 AI 주소 (OpenAI 호환 /v1/chat/completions. 예: http://localhost:11434/v1). 비우면 로컬 AI 없음으로 보고 바로 유료 API
   OPENAI_API_KEY     유료 API 키. 환경 변수가 없으면 services/extraction/.env 파일에서 읽습니다. 키는 출력·저장하지 않습니다
 
@@ -51,7 +52,7 @@ from mujuthaek_platform.slack import read_env_value
 SERVICE_DIR = Path(__file__).resolve().parents[2]
 LOCAL_S3_ENDPOINT = "http://127.0.0.1:9000"  # infra/docker-compose.yml의 MinIO
 LOCAL_S3_KEYS = ("minio", "minio-pass")  # infra/.env.example의 MINIO_ROOT_USER·MINIO_ROOT_PASSWORD
-MODEL_MODES = {"auto", "recorded"}
+MODEL_MODES = {"auto", "recorded", "standin"}
 SLACK_WEBHOOK_ENV_NAMES = ("EXTRACTION_SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL")  # 서비스 전용 이름 먼저(이전 이름 유지), 공통 이름은 나중
 
 
@@ -76,6 +77,7 @@ class Settings:
     openai_stream: bool = True  # 2026-10-24: 폭주를 받는 도중 끊음(실측 4차: 출력의 22%가 폭주로 버린 글)
     env_file: Path = SERVICE_DIR / ".env"
     recorded_dir: Path | None = None  # recorded 모드: <호출 이름>.json (응답 문자열 목록) 파일이 있는 폴더
+    standin_dir: Path | None = None  # standin 모드: 요청·답 파일을 주고받을 폴더(model/file_exchange.py)
     require_pdf: bool = True  # 공고는 PDF가 반드시 옴(2026-10-16). false는 글자만 있는 시험 이벤트용
     extraction_method: str = "structured"  # 롤백 스위치(method.py): structured(표 머리글 복원) / legacy(이전 방식)
     local_files_dir: Path | None = None  # 시험용: 첨부를 S3 대신 이 폴더에서 읽음 (s3Key = 폴더 아래 상대 경로)
@@ -133,6 +135,7 @@ class Settings:
             openai_light_effort=os.getenv("OPENAI_LIGHT_EFFORT", "low"),
             openai_stream=os.getenv("OPENAI_STREAM", "true").lower() != "false",
             recorded_dir=Path(recorded) if recorded else None,
+            standin_dir=Path(os.environ["EXTRACTION_STANDIN_DIR"]) if os.getenv("EXTRACTION_STANDIN_DIR") else None,
             require_pdf=os.getenv("EXTRACTION_REQUIRE_PDF", "true").lower() != "false",
             extraction_method=extraction_method(),
             local_files_dir=Path(os.environ["EXTRACTION_LOCAL_FILES_DIR"]) if os.getenv("EXTRACTION_LOCAL_FILES_DIR") else None,
