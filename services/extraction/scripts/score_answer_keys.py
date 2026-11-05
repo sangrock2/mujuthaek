@@ -1,7 +1,7 @@
 """정답표 채점 (회귀 시험, 유료 호출 없음). 정답표 형식: docs/extraction/answer-key-instructions.md
 
 추출 결과(표준 공고 후보)를 정답표와 같은 중립 형식으로 바꾼 뒤 정답표끼리처럼 비교합니다.
-같은 비교로 정답표 두 벌(예: Opus와 다른 AI)이 서로 얼마나 같은지도 봅니다.
+같은 비교로 정답표 두 벌(예: 서로 다른 두 AI가 만든 것)이 서로 얼마나 같은지도 봅니다.
 
   # 추출 결과 채점: 정답표 폴더(<공고>/key.json) ↔ 추출 작업 폴더(<공고>/outcome.json)
   python scripts/score_answer_keys.py --keys <정답표 폴더> --outcomes <추출 폴더>
@@ -159,7 +159,7 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
     ]
     documents = [{"name": d["name"], "appliesTo": d.get("appliesTo")} for d in candidate["requiredDocuments"]]
     # 전화가 있는 안내는 종류와 상관없이 문의처로 보고, 한 칸에 여러 번호(「051-810-1433, 051-810-1438」「☎ 064) 720-1035 ☎ 064) 720-3901」)는
-    # 번호마다 나눕니다(OpenAI 0/2, Haiku 10/20으로 셈)
+    # 번호마다 나눕니다(정답표를 만든 AI마다 0/2·10/20으로 다르게 셌음)
     contacts = [{"name": g.get("title"), "phone": phone} for g in candidate.get("guidance") or [] if g.get("phone") for phone in _phones(g["phone"])]
     return {
         "noticeId": notice_id,
