@@ -77,7 +77,14 @@ EVIDENCE_ONLY_CODES = frozenset(
 # 대상 한정 요금표의 대상 미정·표 제목의 주택형 여럿·병합 칸 수량(2026-10-24)도 코드가 표에서 정한 보류라 AI 재확인에 보내지 않습니다
 # 전환안 방향을 숫자로도 정할 수 없음(2026-10-24)도 코드가 표 숫자로 정한 보류입니다
 NO_RECHECK_CODES = frozenset(
-    {"SUPPLY_PRICE_MISSING", "PRICE_SCOPE_UNCERTAIN", "SUPPLY_TYPE_AMBIGUOUS", "COUNT_MERGED_AMBIGUOUS", "CONVERSION_DIRECTION_UNCERTAIN"}
+    {
+        "SUPPLY_PRICE_MISSING",
+        "PRICE_SCOPE_UNCERTAIN",
+        "SUPPLY_TYPE_AMBIGUOUS",
+        "COUNT_MERGED_AMBIGUOUS",
+        "CONVERSION_DIRECTION_UNCERTAIN",
+        "IMAGE_READING_DISAGREES",  # 그림 두 판독이 다름(2026-11-05): AI는 글자만 보므로 다시 읽어도 어느 쪽이 맞는지 정할 수 없음
+    }
 )
 # 화면 메모(verifier.NOTE_CODES)지만 AI 재확인에 보내는 것: 원문 서류 표 행을 어느 서류도 인용하지 않음(2026-10-23).
 # 누락이라 사람 확인으로 막지는 않지만, 재확인이 서류 섹션 전체를 다시 읽어 빠진 서류를 더할 수 있습니다
