@@ -84,7 +84,10 @@ class Budget:
 
     def reserve(self, request: ModelRequest) -> int | None:
         """상한 안이면 최악 비용을 잡아 두고 표를 돌려줍니다. 넘으면 None."""
-        worst = self.worst_case(request)
+        return self.reserve_usd(self.worst_case(request))
+
+    def reserve_usd(self, worst: float) -> int | None:
+        """최악 비용(USD)을 직접 받아 잡아 둡니다(V2 LangChain 미들웨어가 요청 모양과 상관없이 씀)."""
         with self._lock:
             if not self._fits(worst):
                 return None
@@ -102,7 +105,10 @@ class Budget:
 
     def settle(self, ticket: int, response: ModelResponse) -> float:
         """잡아 둔 비용을 풀고 실제 사용량 비용을 더합니다."""
-        cost = cost_usd(self.model, response)
+        return self.settle_usd(ticket, cost_usd(self.model, response))
+
+    def settle_usd(self, ticket: int, cost: float) -> float:
+        """잡아 둔 비용을 풀고 실제 비용(USD)을 더합니다."""
         with self._lock:
             self._held.pop(ticket, None)
             self.spent_usd += cost
