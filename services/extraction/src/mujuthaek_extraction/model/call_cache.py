@@ -59,7 +59,11 @@ def request_fingerprint(request: ModelRequest) -> dict[str, Any]:
     reusable이 저장하지 않습니다."""
     tools = {
         "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in request.tools],
-        "turns": [{"calls": [[c.call_id, c.name, c.arguments] for c in turn.calls], "results": list(turn.results)} for turn in request.turns],
+        "turns": [
+            {"calls": [[c.call_id, c.name, c.arguments] for c in turn.calls], "results": list(turn.results), **({"note": turn.note} if turn.note else {})}
+            for turn in request.turns
+        ],
+        **({"parallelTools": True} if request.parallel_tools else {}),
     }
     return {
         **({"toolUse": tools} if request.tools or request.turns else {}),
