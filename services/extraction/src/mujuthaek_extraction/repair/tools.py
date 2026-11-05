@@ -291,10 +291,21 @@ def item_check(
 
 
 def _merge(base: Any, patch: Any) -> Any:
-    """객체는 칸마다 덮어쓰고(없는 칸은 처음 값 유지), 목록·값은 통째로 바꿉니다."""
+    """객체는 칸마다 덮어쓰고(없는 칸은 처음 값 유지), 값은 바꿉니다.
+    목록은 양쪽 원소가 모두 id 있는 객체이면 id별로 합치고(조각에 없는 원소는 처음 값 그대로, 새 id는 뒤에 붙임), 아니면 통째로 바꿉니다.
+    (2026-11-05 실측: 에이전트가 가격·수량 목록에 id와 quoteRefs만 적어 냈는데 목록을 통째로 바꿔 값이 모두 사라졌음)"""
     if isinstance(base, dict) and isinstance(patch, dict):
         return {**base, **{key: _merge(base.get(key), value) for key, value in patch.items()}}
+    if _id_list(base) and _id_list(patch):
+        patches = {item["id"]: item for item in patch}
+        merged = [_merge(item, patches[item["id"]]) if item["id"] in patches else item for item in base]
+        known = {item["id"] for item in base}
+        return [*merged, *(item for item in patch if item["id"] not in known)]
     return patch
+
+
+def _id_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, dict) and isinstance(item.get("id"), str) for item in value)
 
 
 def item_refs(node: Any) -> list[str]:

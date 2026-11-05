@@ -127,3 +127,17 @@ def test_near_suggestions_skip_short_lines():
     tools = RepairTools(material(text), no_check)
     near = call(tools, "check_quote", quote="- 출산자녀수 가산 항목 및 비율 : 출산자녀 1인 10%p 가산")["near"]
     assert near and all(len(n["text"]) > 1 for n in near) and near[0]["text"].startswith("- 출산자녀수")
+
+
+def test_patch_merges_id_lists_element_by_element():
+    from mujuthaek_extraction.repair.tools import _merge
+
+    base = {"id": "g1", "prices": [{"id": "p1", "amount": 100, "quoteRefs": ["q1"]}, {"id": "p2", "amount": 200, "quoteRefs": ["q2"]}], "tags": ["a"]}
+    patch = {"prices": [{"id": "p1", "quoteRefs": ["n1"]}, {"id": "p3", "amount": 300, "quoteRefs": ["n2"]}], "tags": ["b"]}
+    merged = _merge(base, patch)
+    assert merged["prices"] == [
+        {"id": "p1", "amount": 100, "quoteRefs": ["n1"]},  # 값은 처음 그대로, 근거만 바뀜
+        {"id": "p2", "amount": 200, "quoteRefs": ["q2"]},  # 조각에 없는 원소는 그대로
+        {"id": "p3", "amount": 300, "quoteRefs": ["n2"]},  # 새 id는 뒤에
+    ]
+    assert merged["tags"] == ["b"]  # id 없는 목록은 통째로

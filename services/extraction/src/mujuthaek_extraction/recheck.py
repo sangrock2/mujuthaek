@@ -259,15 +259,19 @@ def _broken_sections(part: dict[str, Any], schema: dict[str, Any]) -> set[str] |
 def _value_counts(report: VerificationReport) -> dict[str, int]:
     candidate = report.candidate
     counts = {f"supplyGroups/{g.get('id')}": len(g.get("prices") or []) + len(g.get("counts") or []) for g in candidate.get("supplyGroups") or []}
+    counts["supplyGroups"] = len(candidate.get("supplyGroups") or [])
     counts["requiredDocuments"] = len(candidate.get("requiredDocuments") or [])
     counts["schedules"] = len(candidate.get("schedules") or [])
+    counts["eligibility"] = len(candidate.get("eligibility") or [])
     return counts
 
 
 def _lost_values(first: VerificationReport, second: VerificationReport) -> list[str]:
-    """재확인 뒤 가격·수량·서류·일정 개수가 줄어든 곳. 문제가 줄어도 맞는 값을 지운 답일 수 있어 받지 않습니다."""
+    """재확인 뒤 가격·수량·서류·일정·자격 조건 개수가 줄어든 곳. 문제가 줄어도 맞는 값을 지운 답일 수 있어 받지 않습니다.
+    항목이 통째로 사라진 곳(뒤 결과에 키가 없음)도 0개로 셉니다(2026-11-05 실측: 재확인 답이 공급 묶음의 가격·수량 값을 비워
+    묶음째 빠졌는데, 그 묶음의 문제도 함께 사라져 「나아짐」으로 채택되고 가격 16개가 공개 결과에서 빠짐)."""
     before, after = _value_counts(first), _value_counts(second)
-    return [key for key, count in before.items() if key in after and after[key] < count]
+    return [key for key, count in before.items() if after.get(key, 0) < count]
 
 
 def _rejection(first: VerificationReport, second: VerificationReport, sections: list[str]) -> str:
