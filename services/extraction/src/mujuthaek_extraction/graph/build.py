@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -19,9 +20,11 @@ from langgraph.runtime import Runtime as GraphRuntime
 from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.graph.state import ExtractionState
 from mujuthaek_extraction.method import extraction_method
+from mujuthaek_extraction.model.base import supports_tools
 from mujuthaek_extraction.pipeline import Outcome, Runtime
 
 Context = GraphRuntime[Runtime]
+log = logging.getLogger(__name__)
 
 
 def intake(state: ExtractionState, runtime: Context) -> dict[str, Any]:
@@ -123,11 +126,18 @@ def run_graph(raw_event: dict[str, Any], rt: Runtime, method: str | None = None)
     engine = os.getenv(ENGINE_ENV, "graph")
     if engine not in ("graph", "agent"):
         raise ValueError(f"{ENGINE_ENV}는 graph·agent 중 하나여야 합니다: {engine!r}")
+    start = {"raw_event": raw_event, "method": method or extraction_method()}
     if engine == "agent":
         from mujuthaek_extraction.graph.agentic import AGENT_GRAPH  # 이 모듈의 노드를 가져다 쓰므로 실행할 때 가져옵니다
 
-        graph = AGENT_GRAPH
-    else:
-        graph = GRAPH
-    state = graph.invoke({"raw_event": raw_event, "method": method or extraction_method()}, context=rt)
-    return state["outcome"]
+        # 안전망(2026-11-05 점검): 도구를 못 쓰는 모델(로컬 AI)이거나 에이전트 처리 중 예상 못 한 오류가 나면 정해진 단계로 처리합니다.
+        # 이미 쓴 비용은 그대로 공고당 상한에 들어갑니다
+        if not supports_tools(rt.models.primary):
+            rt.usage.record("agenticFallback", "도구 호출을 지원하지 않는 모델이라 정해진 단계로 처리했습니다")
+        else:
+            try:
+                return AGENT_GRAPH.invoke(start, context=rt)["outcome"]
+            except Exception as error:
+                log.exception("에이전트 처리 오류, 정해진 단계로 다시 처리")
+                rt.usage.record("agenticFallback", f"에이전트 처리 중 오류({type(error).__name__})로 정해진 단계로 다시 처리했습니다")
+    return GRAPH.invoke(start, context=rt)["outcome"]

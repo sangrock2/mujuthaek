@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
-from mujuthaek_extraction.extract import ExtractionRun
+from mujuthaek_extraction.extract import DEFAULT_POLICY, ExtractionRun, RetryPolicy, retry_delay
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ToolCall, ToolSpec, ToolTurn
 from mujuthaek_extraction.repair.agent import BUDGET_CODES, _attempt
 
@@ -37,20 +39,39 @@ class AgentLog:
         return {"name": self.name, "turns": self.turns, "steps": self.steps, "outcome": self.outcome}
 
 
-def run_loop(model: ExtractionModel, base: ModelRequest, toolbox: Toolbox, limit: int, run: ExtractionRun, log: AgentLog) -> None:
+def run_loop(
+    model: ExtractionModel,
+    base: ModelRequest,
+    toolbox: Toolbox,
+    limit: int,
+    run: ExtractionRun,
+    log: AgentLog,
+    *,
+    policy: RetryPolicy = DEFAULT_POLICY,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """sleep: 일시 오류 뒤 기다리는 함수(테스트는 가짜). 일시 오류(429·5xx·시간 초과)는 추출 호출과 같은 정책으로 다시 보냅니다
+    (2026-11-05 점검: 동시 담당이 늘면 한도 초과가 잦은데 차례 하나의 일시 오류로 담당이 바로 끝났음)."""
+    wait = sleep or time.sleep
     turns: list[ToolTurn] = []
     log.outcome = "TURN_LIMIT"
     for turn in range(1, limit + 1):
         name = f"{base.call_name}:turn{turn}"
         final = turn == limit
         request = replace(base, call_name=name, turns=tuple(turns), tools=toolbox.specs, forced_tool=toolbox.finish_tool if final else None)
-        try:
-            response = model.complete(request)
-        except ModelError as error:
-            run.attempts.append(_attempt(request, None, error))
-            run.failed_calls.append((name, str(error)))
-            log.outcome = "BUDGET" if error.code in BUDGET_CODES else "MODEL_ERROR"
-            return
+        response = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                response = model.complete(request)
+                break
+            except ModelError as error:
+                run.attempts.append(_attempt(request, None, error))
+                if error.transient and error.code not in BUDGET_CODES and attempt < policy.max_attempts:
+                    wait(retry_delay(policy, attempt))
+                    continue
+                run.failed_calls.append((name, str(error)))
+                log.outcome = "BUDGET" if error.code in BUDGET_CODES else "MODEL_ERROR"
+                return
         run.attempts.append(_attempt(request, response, None))
         log.turns = turn
         if not response.tool_calls:
