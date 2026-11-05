@@ -22,6 +22,7 @@ from offline_common import FixedApi
 from mujuthaek_extraction.assemble.regions import RegionCodeTable
 from mujuthaek_extraction.config import Settings
 from mujuthaek_extraction.intake import InMemorySourceReader
+from mujuthaek_extraction.model.call_cache import FileCallCache
 from mujuthaek_extraction.model.factory import ModelFactory
 from mujuthaek_extraction.pipeline import process
 from mujuthaek_platform.events import new_event
@@ -40,6 +41,7 @@ def main() -> None:
     parser.add_argument("--expected-per-notice-usd", type=float, default=0.08, help="다음 공고를 시작할지 정할 때 쓰는 공고당 예상 비용")
     parser.add_argument("--strategy", choices=("batch", "agent"), default="batch", help="재확인 답 받기 방법(EXTRACTION_RECHECK_STRATEGY)")
     parser.add_argument("--engine", choices=("graph", "agent"), default="graph", help="추출 방식(EXTRACTION_ENGINE): 정해진 단계·에이전트")
+    parser.add_argument("--call-cache-dir", type=Path, help="성공한 호출을 파일로 저장·재사용(평가용, 같은 첫 추출 위 비교)")
     parser.add_argument("--env-file", type=Path, help="유료 API 키를 읽을 파일(값은 출력하지 않음). 없으면 설정 기본 위치")
     parser.add_argument("--confirm-spend", action="store_true")
     args = parser.parse_args()
@@ -68,7 +70,7 @@ def main() -> None:
         case.event["payload"]["reprocess"] = False
         outcome = process(
             case.event,
-            models=factory.for_notice(),
+            models=factory.for_notice(cache=FileCallCache(args.call_cache_dir) if args.call_cache_dir else None),
             reader=InMemorySourceReader(files=case.source_files),
             regions=regions,
             clock=lambda: datetime.now(UTC),
