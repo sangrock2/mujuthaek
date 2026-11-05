@@ -55,6 +55,10 @@ class ReplayModel:
         return ModelResponse(raw_text=self.answers[request.call_name], model_id="recorded", stop_reason=StopReason.END)
 
 
+# V2 담당 한 번 호출의 출력 상한(생각 토큰 포함). 항목이 많은 담당이 한 번에 넣다가 잘리면 그 차례 도구 호출을 통째로 잃음
+V2_OUTPUT_TOKENS = 8_000
+
+
 @dataclass
 class NoticeModels:
     primary: ExtractionModel
@@ -133,6 +137,6 @@ class ModelFactory:
         def chat(agent: str) -> Any:
             from mujuthaek_extraction.v2.llm.models import chat_model  # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
 
-            return chat_model(self.settings, cache_key=key)
+            return chat_model(self.settings, cache_key=key, max_output_tokens=V2_OUTPUT_TOKENS)
 
         return chat
