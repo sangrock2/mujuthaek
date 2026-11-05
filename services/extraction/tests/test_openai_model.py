@@ -310,7 +310,7 @@ def test_stream_reads_completed_response_and_sends_stream_flag():
     text = json.dumps({"quotes": []})
     events = [*deltas(text), {"type": "response.completed", "response": response_payload(text)}]
     http = FakeStream(events)
-    model = OpenAIResponsesModel(FAKE_KEY, opener=http, stream=True, runaway_check=lambda raw: None)
+    model = OpenAIResponsesModel(FAKE_KEY, opener=http, stream=True, runaway_check=lambda raw, name: None)
     response = model.complete(request_for(0))
     assert response.stop_reason is StopReason.END and response.input_tokens == 1000
     assert json.loads(http.requests[0].data)["stream"] is True
