@@ -2,7 +2,7 @@
 
 마무리는 코드입니다: 초안을 결합·검증하고(계약 오류는 지금처럼 그 항목만 정리), 총괄 에이전트의 결정을 적용합니다.
 - accept: 검증기 문제 중 에이전트가 원문으로 확인해 받아들인 것 → 검수 문제에서 빼고 메모(AGENT_ACCEPTED)로 남김(그 값은 게시)
-- hold: 에이전트가 보류로 지정한 위치 → 검수 문제(AGENT_HOLD)로 더함
+- hold: 에이전트가 보류로 지정한 항목(이유가 된 원문과 함께) → 검수 문제(AGENT_HOLD)로 더함
 검증기가 처음 낸 문제 목록은 작업 기록(usage.agentic.verifierIssues)에 남겨, 에이전트가 받아들인 값이 맞았는지 평가에서 대조합니다.
 계약 형식(스키마)을 어기는 결과는 받아들일 수 없어 지금처럼 검수·실패로 갑니다.
 """
@@ -88,7 +88,9 @@ def apply_decision(report: VerificationReport, decision: Decision | None) -> dic
         if target is None:
             record["unmatchedHolds"].append(hold["target"])
             continue
-        kept.append({"code": HELD, "target": target, "description": hold["reason"] or "에이전트가 확인 필요로 지정했습니다."})
+        quote = (hold.get("quote") or "").strip()
+        description = (hold["reason"] or "에이전트가 확인 필요로 지정했습니다.") + (f" 근거 「{quote[:200]}」" if quote else "")
+        kept.append({"code": HELD, "target": target, "description": description[:1_000]})
         record["held"].append(target)
     quality["reviewIssues"] = kept
     verification = quality["verification"]
