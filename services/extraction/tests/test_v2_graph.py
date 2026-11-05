@@ -43,6 +43,9 @@ def test_section_agents_run_structure_first_then_in_parallel_and_the_notice_is_p
     assert {c["agent"] for c in outcome.usage["v2"]["calls"]} == {"structure", "schedules", "eligibility", "selection", "documents"}
 
 
-def test_without_section_agents_nothing_is_extracted_and_the_notice_fails(v2):
-    outcome = run(raw_event(), models())
-    assert outcome.status == "FAILED" and outcome.usage["v2"]["workers"][0] == "structure"
+def test_structure_is_extracted_the_v1_way_and_without_chat_models_the_other_workers_do_nothing(v2):
+    # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출). 채팅 모델이 없는 실행(로컬 AI·녹화)에서는 섹션 에이전트가 돌지 않음
+    recorded = RecordedModel(answers(), "local")
+    outcome = run(raw_event(), NoticeModels(recorded, None, names={"primary": "local"}))
+    assert [r.call_name for r in recorded.requests] == ["structure"]
+    assert outcome.candidate["notice"]["title"] and outcome.usage["v2"]["calls"] == [] and outcome.status != "COMPLETED"

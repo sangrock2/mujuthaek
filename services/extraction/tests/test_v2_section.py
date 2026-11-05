@@ -6,7 +6,7 @@ from events import raw_event
 from helpers import ai_part, example
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
-from test_pipeline import run
+from test_pipeline import answers, run
 from test_v2_contract import sparse
 from test_v2_document import TEXT, ToolCallingFake
 
@@ -14,7 +14,9 @@ from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.model import RecordedModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.pricing import Budget
+from mujuthaek_extraction.v2 import graph
 from mujuthaek_extraction.v2.document import parse
+from mujuthaek_extraction.v2.tools.typed import add_tool
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 
 
@@ -27,8 +29,8 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     turn = AIMessage(
         content="",
         tool_calls=[
-            call("add_items", section="schedules", items=[{**schedule, "evidence": ["p1.2"]}, {**schedule, "id": "bad", "evidence": ["p9.9"]}]),
-            call("add_items", section="eligibility", items=[]),
+            call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}, {**schedule, "id": "bad", "evidence": ["p9.9"]}]),
+            call("update_item", section="eligibility", item_id="x", changes={}),
             call("update_item", section="schedules", item_id="nope", changes={}),
             call("set_coverage", section="schedules", status="PARTIAL", reason="표 끝 행을 못 읽었어요."),
         ],
@@ -39,7 +41,8 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     )
     draft = SectionDraft(("schedules",))
     context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
-    agent = create_agent(ToolCallingFake(messages=iter([turn, later, AIMessage(content="끝")])), tools=list(WRITE_TOOLS), context_schema=SectionContext)
+    tools = [add_tool("schedules", ("text",)), *WRITE_TOOLS]
+    agent = create_agent(ToolCallingFake(messages=iter([turn, later, AIMessage(content="끝")])), tools=tools, context_schema=SectionContext)
     result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
     answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
     assert answers[0]["added"] == ["apply"] and answers[0]["failed"][0]["id"] == "bad" and "p9.9" in answers[0]["failed"][0]["errors"][0]
@@ -62,8 +65,11 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     assert json.loads(refused["messages"][2].content)["error"] == "NOT_ALLOWED" and judged.coverage == {}
 
 
-def test_section_agents_add_items_with_tools_and_the_notice_is_published_like_v1(monkeypatch):
+def test_section_agents_add_items_with_typed_tools_and_the_notice_is_published_like_v1(monkeypatch):
     monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
+    recorded = answers()
+    # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출)이라 시험에서는 그 결과를 꽂음
+    monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
     part = ai_part(example("housing"))
     line = "p1.1"  # 예시 원문은 한 줄이고 예시의 인용은 그 줄 전체
 
@@ -72,7 +78,6 @@ def test_section_agents_add_items_with_tools_and_the_notice_is_published_like_v1
         return [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": [line]} for row in rows]
 
     sections = {
-        "structure": ("notice", "locations", "supplyGroups"),
         "schedules": ("schedules", "guidance"),
         "eligibility": ("eligibility",),
         "selection": ("selectionRules",),
@@ -80,7 +85,7 @@ def test_section_agents_add_items_with_tools_and_the_notice_is_published_like_v1
     }
 
     def script(name):
-        adds = [call("add_items", section=s, items=items(s)) for s in sections[name]]
+        adds = [call(f"add_{s}", **({"item": items(s)[0]} if s == "notice" else {"items": items(s)})) for s in sections[name]]
         usage = {"input_tokens": 1_000, "output_tokens": 100, "total_tokens": 1_100}
         return iter(
             [AIMessage(content="", tool_calls=adds, usage_metadata=usage), AIMessage(content="", tool_calls=[call("check")]), AIMessage(content="다 넣었어요.")]
@@ -94,3 +99,6 @@ def test_section_agents_add_items_with_tools_and_the_notice_is_published_like_v1
     assert tools().validate(outcome.event, "events/extraction.completed.v1.json") == []
     calls = outcome.usage["v2"]["calls"]
     assert {c["agent"] for c in calls} == set(sections) and len(calls) == 3 * len(sections)  # 담당마다 모델 호출 3번
+    traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
+    assert set(traces) == set(sections) and traces["eligibility"]["turns"][0]["calls"][0]["name"] == "add_eligibility"
+    assert json.loads(traces["eligibility"]["turns"][1]["results"][0]["result"])["issueCount"] == 0  # check: 이 담당 섹션 문제 없음

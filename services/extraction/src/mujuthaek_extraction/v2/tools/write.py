@@ -62,11 +62,8 @@ class SectionContext(V2Context):
     check: SkipValidation[Callable[[], list[dict[str, Any]]] | None] = None  # 지금 초안을 V1 검증기로 본 이 담당 섹션의 문제
 
 
-@tool
-def add_items(section: str, items: list[dict[str, Any]], runtime: ToolRuntime[SectionContext, Any]) -> str:
-    """맡은 섹션에 항목을 넣습니다(여러 개 한 번에). 칸은 값이 있는 것만 적고, 근거 evidence(id 또는 {"id","part"})를 1개 이상 붙입니다.
-    notice는 항목 하나(id 없음)입니다. 형식이 틀린 항목만 「위치: 이유」로 돌아옵니다."""
-    context = runtime.context
+def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> str:
+    """섹션별 형식 도구(add_<섹션>, v2/tools/typed.py)가 부르는 넣기: 항목마다 형식·근거를 검사해 맞는 것만 넣고 틀린 것은 「위치: 이유」로."""
     draft = context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
@@ -156,7 +153,7 @@ def check(runtime: ToolRuntime[SectionContext, Any]) -> str:
     return _dump({"issues": issues[:ISSUES_SHOWN], "issueCount": len(issues)})
 
 
-WRITE_TOOLS = (add_items, update_item, remove_item, set_coverage, report_missing, check)
+WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, check)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
 
 
 def _problems(context: SectionContext, section: str, item: Any, adding: bool) -> list[str]:
