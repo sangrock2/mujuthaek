@@ -8,6 +8,7 @@ extract_section은 그 담당의 조각들을 통째로 바꾸고, upsert·remov
 from __future__ import annotations
 
 import copy
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,10 +24,19 @@ class Draft:
     document_id: str
     parts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     _refs: int = 0
+    # 동시 담당(delegate_many)이 함께 읽고 씁니다. 한 담당이 초안 전체를 사본으로 읽는 동안 다른 담당이 새 조각을 넣으면
+    # 「dictionary changed size」로 처리 전체가 멈출 수 있어(2026-11-05 점검) 읽기·쓰기를 모두 잠금 안에서 합니다
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
 
     def put_parts(self, owner: str, parts: list[dict[str, Any]]) -> None:
         """extract_section 결과로 그 하위 에이전트의 조각들을 통째로 바꿉니다."""
-        self.parts[owner] = copy.deepcopy(parts)
+        with self._lock:
+            self.parts[owner] = copy.deepcopy(parts)
+
+    def filled(self) -> set[str]:
+        """조각이 있는 담당들."""
+        with self._lock:
+            return {owner for owner, owned in self.parts.items() if owned}
 
     def _holder(self, section: str) -> dict[str, Any] | None:
         """그 섹션을 담은 조각(없으면 None)."""
@@ -45,8 +55,18 @@ class Draft:
             part.setdefault("coverage", {})[section] = {"status": "EXTRACTED", "reason": None}
         return part
 
+    def quote_refs(self, section: str) -> set[str]:
+        """그 섹션 조각에 있는 인용 ref들."""
+        with self._lock:
+            part = self._holder(section) or {}
+            return {q["ref"] for q in part.get("quotes") or [] if isinstance(q, dict) and "ref" in q}
+
     def upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]]) -> str:
         """항목 하나를 넣거나(같은 id가 없으면) 고칩니다(칸마다 덮어씀, id 있는 목록은 id별로 합침). 인용 ref는 겹치지 않게 바꿉니다."""
+        with self._lock:
+            return self._upsert(section, item, quotes)
+
+    def _upsert(self, section: str, item: dict[str, Any], quotes: list[dict[str, str]]) -> str:
         part = self._part(section)
         renamed = {}
         for quote in quotes:
@@ -66,6 +86,10 @@ class Draft:
         return f"{section}/{item.get('id')} 고침"
 
     def remove(self, section: str, item_id: str) -> bool:
+        with self._lock:
+            return self._remove(section, item_id)
+
+    def _remove(self, section: str, item_id: str) -> bool:
         part = self._holder(section)
         items = part.get(section) if part else None
         if not isinstance(items, list):
@@ -75,31 +99,43 @@ class Draft:
         return len(kept) < len(items)
 
     def set_coverage(self, section: str, status: str, reason: str | None) -> None:
+        with self._lock:
+            self._set_coverage(section, status, reason)
+
+    def _set_coverage(self, section: str, status: str, reason: str | None) -> None:
         part = self._part(section)
         part["coverage"][section] = {"status": status, "reason": reason or None}
         if status in ("NOT_IN_SOURCE", "NOT_APPLICABLE") and section != "notice":
             part[section] = []
 
     def item(self, section: str, item_id: str | None) -> dict[str, Any] | None:
-        part = self._holder(section)
-        if not part:
-            return None
-        if section == "notice":
-            return part.get("notice")
-        return next((x for x in part.get(section) or [] if isinstance(x, dict) and x.get("id") == item_id), None)
+        """그 항목의 사본(없으면 None)."""
+        with self._lock:
+            part = self._holder(section)
+            if not part:
+                return None
+            if section == "notice":
+                return copy.deepcopy(part.get("notice"))
+            return copy.deepcopy(next((x for x in part.get(section) or [] if isinstance(x, dict) and x.get("id") == item_id), None))
 
     def quotes_of(self, section: str, item: dict[str, Any]) -> list[dict[str, str]]:
-        part = self._holder(section) or {}
-        texts = {q["ref"]: q["text"] for q in part.get("quotes") or [] if isinstance(q, dict)}
+        with self._lock:
+            part = self._holder(section) or {}
+            texts = {q["ref"]: q["text"] for q in part.get("quotes") or [] if isinstance(q, dict)}
         return [{"ref": ref, "text": texts[ref]} for ref in item_refs(item) if ref in texts]
 
     def as_parts(self) -> list[dict[str, Any]]:
         """결합기에 줄 조각 목록(notice가 있는 조각을 맨 앞에)."""
-        parts = [copy.deepcopy(p) for owned in self.parts.values() for p in owned]
+        with self._lock:
+            parts = [copy.deepcopy(p) for owned in self.parts.values() for p in owned]
         return sorted(parts, key=lambda p: 0 if p.get("notice") is not None else 1)
 
     def summary(self, sections: tuple[str, ...] | None = None) -> dict[str, Any]:
         """섹션마다 항목 수·id(앞 30개)·범위 상태. 에이전트가 초안을 다시 읽지 않고 상태를 보게 합니다."""
+        with self._lock:
+            return self._summary(sections)
+
+    def _summary(self, sections: tuple[str, ...] | None) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for section in self.owners:
             if sections and section not in sections:
@@ -116,6 +152,51 @@ class Draft:
                 ids = [x.get("id") for x in value or [] if isinstance(x, dict)]
                 out[section] = {"count": len(ids), "ids": ids[:30], "coverage": coverage}
         return out
+
+    def structure_ids(self) -> set[str]:
+        """초안의 위치·공급 묶음 ID."""
+        with self._lock:
+            return {
+                x["id"]
+                for owned in self.parts.values()
+                for part in owned
+                for section in ("locations", "supplyGroups")
+                for x in part.get(section) or []
+                if isinstance(x, dict) and isinstance(x.get("id"), str)
+            }
+
+    def referencing(self, ids: set[str], skip_owner: str) -> list[str]:
+        """다른 담당의 항목 중 ids를 가리키는 것(「섹션/id」). 구조를 다시 뽑아 ID가 사라졌을 때 알리려고 씁니다."""
+        found: list[str] = []
+        with self._lock:
+            for owner, owned in self.parts.items():
+                if owner == skip_owner:
+                    continue
+                for part in owned:
+                    for section in self.owners:
+                        items = part.get(section)
+                        for item in items if isinstance(items, list) else []:
+                            if isinstance(item, dict) and _referenced(item) & ids:
+                                found.append(f"{section}/{item.get('id')}")
+        return found
+
+
+REF_KEYS = ("locationId", "locationIds", "supplyGroupIds", "parentLocationId")
+
+
+def _referenced(node: Any) -> set[str]:
+    """항목 안에서 위치·공급 묶음 ID를 가리키는 값들(범위 scope 포함)."""
+    out: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in REF_KEYS:
+                out |= {v for v in (value if isinstance(value, list) else [value]) if isinstance(v, str)}
+            else:
+                out |= _referenced(value)
+    elif isinstance(node, list):
+        for value in node:
+            out |= _referenced(value)
+    return out
 
 
 def _rename_refs(node: Any, renamed: dict[str, str]) -> Any:

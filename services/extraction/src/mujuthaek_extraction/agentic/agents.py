@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import re
 import time
@@ -27,9 +28,11 @@ from mujuthaek_extraction.image_reading import BLOCK_HEAD, image_targets
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 from mujuthaek_extraction.judgment.pages import PAGE_MARK
 from mujuthaek_extraction.model.base import ExtractionModel, ModelRequest, ToolCall, ToolSpec
-from mujuthaek_extraction.repair.tools import RepairTools, _clean_quotes, _error, _limit, _merge, _object, _parse_item
+from mujuthaek_extraction.repair.tools import RepairTools, _clean_quotes, _error, _limit, _merge, _object, _parse_item, item_refs
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
+
+log = logging.getLogger(__name__)
 
 SUPERVISOR_TURNS = 16
 WORKER_TURNS = 6  # 10 → 6(2026-11-05: 담당 차례 214번 중 항목을 고친 것은 5번, 나머지는 읽기만)
@@ -198,12 +201,28 @@ class Reading:
             result = handler(**args) if isinstance(args, dict) else None
         except TypeError:
             return _error("BAD_ARGUMENTS", "도구 입력 칸이 맞지 않습니다.")
+        except Exception as error:  # 도구 하나의 오류로 공고 처리 전체가 멈추지 않게(2026-11-05 점검: 숫자 칸에 글자가 오면 ValueError로 중단)
+            log.warning("에이전트 도구 오류", extra={"tool": call.name, "error": f"{type(error).__name__}: {str(error)[:200]}"})
+            return _error("TOOL_ERROR", f"도구를 실행하지 못했습니다({type(error).__name__}). 입력을 고쳐 다시 부릅니다.")
         if result is None:
             return _error("BAD_ARGUMENTS", "도구 입력은 객체여야 합니다.")
         # 차례·맡기기 결과는 「너무 길다」 오류로 바꾸지 않습니다: 맡긴 일은 이미 끝났고 비용도 들었는데 결과를 버리면 총괄이 같은 일을 다시 맡김
         # (2026-11-05 gh-809: 동시에 맡긴 담당 4개의 결과가 길어 버려지고 다시 맡겨 공고당 상한에 닿음). 길이는 결과를 만들 때 줄입니다
         text = json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else _limit(result)
         return _with_progress(text, self.env.progress())
+
+
+def _issue_section(candidate: dict[str, Any], target: str) -> str | None:
+    """문제 위치가 속한 섹션. 섹션 범위(/quality/coverage/섹션)·누락 기록(/quality/missingFields/n)도 그 섹션으로 봅니다
+    (2026-11-05 점검: 담당이 「가격표 행이 어느 공급 묶음에도 없음」 같은 섹션 단위 문제를 못 봤음)."""
+    parts = target.split(" ", 1)[0].lstrip("/").split("/")
+    if parts[:2] == ["quality", "coverage"] and len(parts) >= 3:
+        return parts[2]
+    if parts[:2] == ["quality", "missingFields"] and len(parts) >= 3 and parts[2].isdigit():
+        entries = candidate["quality"]["missingFields"]
+        index = int(parts[2])
+        return entries[index]["target"].lstrip("/").split("/", 1)[0] if index < len(entries) else None
+    return parts[0] or None
 
 
 def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -216,7 +235,7 @@ def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | N
         *({"code": f"CONTRACT_{e.split(' ', 1)[0]}", "target": e.partition(" ")[2].split(":")[0], "description": e} for e in report.contract_errors),
     ]
     if sections:
-        issues = [i for i in issues if any(i["target"].startswith(f"/{s}") for s in sections)]
+        issues = [i for i in issues if _issue_section(report.candidate, i["target"]) in sections]
     shown = [{"code": i["code"], "target": i["target"], "description": i["description"][:220]} for i in issues[:ISSUES_SHOWN]]
     return {
         "assembled": True,
@@ -286,8 +305,16 @@ class WorkerTools(Reading):
         parts = [p for p in run.parts if isinstance(p, dict) and any(s in p for s in self.sections)]
         if not parts or run.failed_calls:
             return {"error": "EXTRACT_FAILED", "message": "; ".join(r for _, r in run.failed_calls)[:300] or "응답이 없습니다."}
+        before = self.env.draft.structure_ids() if "notice" in self.sections else set()
         self.env.draft.put_parts(self.name, parts)  # 구조 추출은 공고·위치 조각과 코드가 표에서 옮긴 공급 조각 둘을 냄
-        return {"ok": True, "draft": self.env.draft.summary(self.sections)}
+        result: dict[str, Any] = {"ok": True, "draft": self.env.draft.summary(self.sections)}
+        gone = before - self.env.draft.structure_ids()
+        dependents = self.env.draft.referencing(gone, self.name) if gone else []
+        if dependents:  # 다시 뽑아 사라진 ID를 다른 섹션이 가리킴(2026-11-05 점검: 알리지 않으면 계약 정리로 그 항목들이 빠짐)
+            result["removedIds"] = sorted(gone)[:20]
+            result["dependentItems"] = dependents[:20]
+            result["message"] = "다시 뽑아 위치·공급 ID가 바뀌었습니다. dependentItems는 사라진 ID를 가리킵니다(그 담당이 고쳐야 함)."
+        return result
 
     def _upsert_item(self, section: str, item_json: str, quotes: list[dict[str, str]]) -> dict[str, Any]:
         if section not in self.sections:
@@ -300,15 +327,20 @@ class WorkerTools(Reading):
         missing = [q["text"][:60] for q in _clean_quotes(quotes) if not self.env.reader._check_quote(q["text"]).get("found")]
         if missing:
             return {"error": "QUOTE_NOT_FOUND", "message": "원문에 없는 인용이 있습니다. check_quote로 고칩니다.", "quotes": missing}
-        errors = self._format_errors(section, item)
-        if errors:  # 형식이 틀린 항목은 결합할 때 빠지므로 넣기 전에 돌려줍니다(2026-11-05 첫 실행: 손으로 넣은 공급 묶음이 모두 빠짐)
-            return {"error": "BAD_FORMAT", "message": "공통 지시의 출력 형식에 맞지 않습니다.", "errors": errors}
-        return {"ok": self.env.draft.upsert(section, item, _clean_quotes(quotes))}
-
-    def _format_errors(self, section: str, item: dict[str, Any]) -> list[str]:
-        """고친 결과(같은 id의 지금 항목에 합친 것)가 그 섹션 출력 형식에 맞는지. 틀린 곳 최대 5개."""
         current = self.env.draft.item(section, None if section == "notice" else item.get("id"))
         merged = _merge(current, item) if isinstance(current, dict) else item
+        errors = self._format_errors(section, merged)
+        if errors:  # 형식이 틀린 항목은 결합할 때 빠지므로 넣기 전에 돌려줍니다(2026-11-05 첫 실행: 손으로 넣은 공급 묶음이 모두 빠짐)
+            return {"error": "BAD_FORMAT", "message": "공통 지시의 출력 형식에 맞지 않습니다.", "errors": errors}
+        known = self.env.draft.quote_refs(section) | {q["ref"] for q in _clean_quotes(quotes)}
+        dangling = [ref for ref in item_refs(merged) if ref not in known]
+        if dangling:  # 없는 인용을 가리키면 결합할 때 근거 없음으로 빠집니다(2026-11-05 점검)
+            message = "quoteRefs가 가리키는 인용이 없습니다. quotes에 그 ref의 원문을 함께 냅니다."
+            return {"error": "UNKNOWN_QUOTE_REF", "message": message, "refs": dangling[:10]}
+        return {"ok": self.env.draft.upsert(section, item, _clean_quotes(quotes))}
+
+    def _format_errors(self, section: str, merged: dict[str, Any]) -> list[str]:
+        """고친 결과(같은 id의 지금 항목에 합친 것)가 그 섹션 출력 형식에 맞는지. 틀린 곳 최대 5개."""
         part = {
             "quotes": [],
             section: merged if section == "notice" else [merged],
@@ -462,7 +494,7 @@ class SupervisorTools(Reading):
     def _extract_all(self) -> dict[str, Any]:
         # 이미 초안에 있는 섹션의 호출은 건너뜁니다(2026-11-05 jbdc: 담당이 각자 뽑은 뒤 또 불러 구조 3번·나머지 2번씩 같은 추출)
         calls = self.env.rules.calls_for(self.env.material)
-        filled = set(self.env.draft.parts)
+        filled = self.env.draft.filled()
         missing = tuple(c for c in calls if not all(self.env.draft.owners.get(s) in filled for s in c.sections))
         skipped = [c.name for c in calls if c not in missing]
         if not missing:
@@ -480,7 +512,8 @@ class SupervisorTools(Reading):
                 for owner, piece in split_by_owner(part, self.env.draft.owners).items():
                     owned.setdefault(owner, []).append(piece)
         for owner, parts in owned.items():
-            self.env.draft.put_parts(owner, parts)
+            if owner not in filled:  # 합쳐진 호출을 다시 돌려도 이미 있던 담당 몫(담당이 고친 것)은 덮어쓰지 않습니다(2026-11-05 점검)
+                self.env.draft.put_parts(owner, parts)
         failed = [f"{name}: {reason[:120]}" for name, reason in run.failed_calls]
         return {"extracted": [c.name for c in missing], "skipped": skipped, "failedCalls": failed, "draft": self.env.draft.summary()}
 

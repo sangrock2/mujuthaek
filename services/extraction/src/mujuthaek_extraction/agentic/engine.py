@@ -52,7 +52,7 @@ def make_env(rules: FieldRules, intake: Any, rt: pipeline.Runtime) -> Env:
 
     def progress() -> dict[str, Any]:
         budget = rt.models.budget
-        facts: dict[str, Any] = {"extractedWorkers": sorted(env.draft.parts)}
+        facts: dict[str, Any] = {"extractedWorkers": sorted(env.draft.filled())}
         if budget is not None:
             facts.update(spentUsd=round(budget.spent_usd, 4), budgetLeftUsd=round(budget.limit_usd - budget.spent_usd, 4))
         return facts

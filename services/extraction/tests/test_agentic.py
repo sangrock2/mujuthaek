@@ -220,3 +220,146 @@ def test_tool_results_carry_progress_and_extract_all_skips_what_is_already_draft
     assert "모든 섹션이 이미" in third["message"] and "progress" in third and "extractedWorkers" in third["progress"]
     # 구조 호출은 한 번만(두 번째 extract_all은 구조 요약을 받아 나머지만)
     assert [r.call_name for r in model.requests if not r.call_name.startswith("agentic:")] == list(WORKERS) and outcome.status == "COMPLETED"
+
+
+# ── 2026-11-05 점검으로 찾은 결함(유료 실행 없이 재현) ──────────────────────────────────────────
+
+
+def bare_env(extract=None):
+    """도구 단위 시험용 공유 상태(모델 호출 없음)."""
+    from helpers import example, source_for
+
+    from mujuthaek_extraction.agentic.agents import Env, workers_of
+    from mujuthaek_extraction.agentic.draft import Draft
+    from mujuthaek_extraction.extract import ExtractionRun
+    from mujuthaek_extraction.rules.housing_notice import RULES
+
+    source = source_for("housing", example("housing"))
+    workers = workers_of(RULES)
+    owners = {s: name for name, spec in workers.items() for s in spec.sections}
+    return Env(
+        rules=RULES,
+        material=source.material,
+        context=source.context,
+        model=RecordedModel({}),
+        evaluate=lambda parts: None,
+        read_images=lambda m, c: (m, c, None),
+        extract_all=extract or (lambda calls, structure: ExtractionRun()),
+        workers=workers,
+        draft=Draft(owners, source.material.text_document_id),
+    )
+
+
+def test_extract_all_does_not_overwrite_a_section_a_worker_already_fixed():
+    # 합쳐진 호출(작은 공고의 자격·선정·서류 한 호출)을 다시 돌려도 이미 있던 담당 몫은 그대로
+    from mujuthaek_extraction.agentic.agents import SupervisorTools
+    from mujuthaek_extraction.extract import ExtractionRun
+
+    combined = {"quotes": [], "eligibility": [{"id": "new-e"}], "selectionRules": [{"id": "new-s"}], "requiredDocuments": [], "coverage": {}}
+    env = bare_env(lambda calls, structure: ExtractionRun(parts=[combined]))
+    env.draft.put_parts("selection", [{"quotes": [], "selectionRules": [{"id": "fixed-by-worker"}], "coverage": {}}])
+    SupervisorTools(env)._extract_all()
+    assert env.draft.summary(("selectionRules",))["selectionRules"]["ids"] == ["fixed-by-worker"]
+    assert env.draft.summary(("eligibility",))["eligibility"]["ids"] == ["new-e"]
+
+
+def test_draft_can_be_read_while_other_workers_write():
+    import threading
+
+    env = bare_env()
+    errors = []
+
+    def write():
+        for n in range(300):
+            env.draft.put_parts(f"w{n}", [{"quotes": [], "schedules": [{"id": str(n)}]}])
+
+    def read():
+        try:
+            for _ in range(300):
+                env.draft.as_parts()
+                env.draft.summary()
+        except RuntimeError as error:  # dictionary changed size during iteration
+            errors.append(error)
+
+    threads = [threading.Thread(target=write), threading.Thread(target=read), threading.Thread(target=read)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+
+
+def test_bad_tool_input_is_returned_as_an_error_not_a_crash():
+    from mujuthaek_extraction.agentic.agents import SupervisorTools
+    from mujuthaek_extraction.model.base import ToolCall
+
+    tools_ = SupervisorTools(bare_env())
+    result = json.loads(tools_.run(ToolCall("c", "read_page", json.dumps({"page": "첫쪽", "from_char": "처음"}))))
+    assert result["error"] in ("TOOL_ERROR", "NO_PAGES", "NO_SUCH_PAGE")
+    result = json.loads(tools_.run(ToolCall("c", "search_source", json.dumps({"query": "무주택", "limit": "다섯"}))))
+    assert result["error"] == "TOOL_ERROR"
+
+
+def test_transient_error_in_an_agent_turn_is_retried():
+    from mujuthaek_extraction.agentic.loop import AgentLog, run_loop
+    from mujuthaek_extraction.extract import ExtractionRun
+    from mujuthaek_extraction.model import ModelError, ModelRequest
+
+    class Box:
+        specs, finish_tool, done = (), "done", False
+
+        def run(self, call):
+            self.done = True
+            return json.dumps({"received": True})
+
+    model = RecordedModel({"agentic:x:turn1": [ModelError("429", transient=True), turn("done", summary="")]})
+    base = ModelRequest("v", "agentic:x", "s", "u", "i", {"type": "object"}, 100)
+    log, waits = AgentLog("x"), []
+    run_loop(model, base, Box(), 3, ExtractionRun(), log, sleep=waits.append)
+    assert log.outcome == "DONE" and len(waits) == 1
+
+
+def test_workers_see_section_level_issues():
+    from mujuthaek_extraction.agentic.agents import _issue_section
+
+    candidate = {"quality": {"missingFields": [{"target": "/supplyGroups/2/prices/0/amountKrw"}]}}
+    assert _issue_section(candidate, "/quality/coverage/supplyGroups") == "supplyGroups"
+    assert _issue_section(candidate, "/quality/missingFields/0") == "supplyGroups"
+    assert _issue_section(candidate, "/eligibility/3/rule") == "eligibility"
+
+
+def test_upsert_pointing_at_a_quote_that_does_not_exist_is_returned(monkeypatch):
+    calls = full_script()
+    bad = json.dumps({"id": "sch-x", "quoteRefs": ["nowhere"]})
+    calls.update(worker("schedules", turn("extract_section"), turn("upsert_item", section="schedules", item_json=bad, quotes=[]), turn("done", summary="")))
+    _, model = run_agentic(monkeypatch, calls)
+    result = json.loads(next(r for r in model.requests if r.call_name == "agentic:schedules:turn3").turns[-1].results[0])
+    assert result["error"] in ("UNKNOWN_QUOTE_REF", "BAD_FORMAT")
+
+
+def test_items_pointing_at_ids_that_disappear_are_listed():
+    env = bare_env()
+    env.draft.put_parts("structure", [{"quotes": [], "notice": {}, "locations": [{"id": "loc-1"}], "supplyGroups": [{"id": "g-1"}]}])
+    env.draft.put_parts("eligibility", [{"quotes": [], "eligibility": [{"id": "e1", "scope": {"supplyGroupIds": ["g-1"], "locationIds": []}}]}])
+    assert env.draft.referencing({"g-1"}, "structure") == ["eligibility/e1"] and env.draft.structure_ids() == {"loc-1", "g-1"}
+
+
+def test_model_without_tools_or_an_agent_crash_falls_back_to_the_fixed_flow(monkeypatch):
+    import mujuthaek_extraction.agentic.agents as agents
+
+    class NoTools(RecordedModel):
+        supports_tools = False
+
+    monkeypatch.setenv("EXTRACTION_ENGINE", "agent")
+    outcome = run(raw_event(), NoticeModels(NoTools(answers(), "local"), None, names={"primary": "local"}))
+    assert outcome.status == "COMPLETED" and "도구" in outcome.usage["agenticFallback"]
+
+    def broken(env):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(agents, "run_supervisor", broken)
+    import mujuthaek_extraction.graph.agentic as agentic_graph
+
+    monkeypatch.setattr(agentic_graph, "run_supervisor", broken)
+    outcome = run(raw_event(), NoticeModels(RecordedModel(answers(), "gpt"), None, names={"primary": "gpt"}))
+    assert outcome.status == "COMPLETED" and "RuntimeError" in outcome.usage["agenticFallback"]
