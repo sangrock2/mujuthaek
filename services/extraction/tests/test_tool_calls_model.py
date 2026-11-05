@@ -43,6 +43,14 @@ def test_tool_request_body_requires_a_tool_and_carries_previous_turns():
     assert body["input"][2] == {"type": "function_call_output", "call_id": "call_1", "output": '{"hits": []}'}
 
 
+def test_forced_tool_keeps_the_tool_list_and_items_share_one_cache_key():
+    model = OpenAIResponsesModel(FAKE_KEY)
+    plain, forced = model.body(request(tools=(SEARCH,))), model.body(request(tools=(SEARCH,), forced_tool="search_source"))
+    assert forced["tools"] == plain["tools"] and forced["tool_choice"] == {"type": "function", "name": "search_source"}
+    other_item = model.body(request(tools=(SEARCH,), user="다른 고칠 항목", call_name="repair:eligibility/e2:turn1"))
+    assert plain["prompt_cache_key"] == other_item["prompt_cache_key"] and plain["prompt_cache_key"].startswith("repair-")
+
+
 def test_request_without_tools_is_unchanged():
     body = OpenAIResponsesModel(FAKE_KEY).body(request())
     assert "tools" not in body and body["text"]["format"]["type"] == "json_schema" and len(body["input"]) == 1

@@ -9,7 +9,8 @@ from test_recheck import answer, setup
 from mujuthaek_extraction.model import ModelError, ModelResponse, RecordedModel, StopReason
 from mujuthaek_extraction.model.base import ToolCall
 from mujuthaek_extraction.recheck import recheck_problems
-from mujuthaek_extraction.repair.agent import AGENT, MAX_TURNS, recheck_strategy
+from mujuthaek_extraction.repair.agent import AGENT, recheck_strategy
+from mujuthaek_extraction.repair.agent import DEFAULT_MAX_TURNS as MAX_TURNS
 from mujuthaek_extraction.rules.housing_notice import RULES
 
 
@@ -90,13 +91,27 @@ def without_refs(node):
 
 
 def test_last_turn_allows_only_submit():
+    # 도구 목록은 그대로 두고(바뀌면 앞 차례 입력 캐시가 깨짐, 2026-11-05 실측 마지막 차례 캐시 읽기 0) 부를 도구만 submit_fix로 정합니다
     data, *_ = setup()
     item_id = data["eligibility"][1]["id"]
     model = RecordedModel(script(item_id, *[turn("search_source", query="무주택", limit=1) for _ in range(MAX_TURNS)]))
     run_agent(model)
-    assert [t.name for t in model.requests[-1].tools] == ["submit_fix"]
-    assert json.loads(model.requests[-1].turns[-1].results[0])["turnsLeft"] == 1
-    assert "마지막" in json.loads(model.requests[-1].turns[-1].results[0])["notice"]
+    last = model.requests[-1]
+    assert last.tools == model.requests[0].tools and last.forced_tool == "submit_fix"
+    assert all(r.forced_tool is None for r in model.requests[:-1])
+    assert json.loads(last.turns[-1].results[0])["turnsLeft"] == 1
+    assert "마지막" in json.loads(last.turns[-1].results[0])["notice"]
+
+
+def test_first_quotes_are_located_before_the_first_turn_and_turn_limit_is_configurable(monkeypatch):
+    data, *_ = setup()
+    item_id = data["eligibility"][1]["id"]
+    model = RecordedModel(script(item_id, *[turn("search_source", query="무주택", limit=1) for _ in range(3)]))
+    monkeypatch.setenv("EXTRACTION_AGENT_MAX_TURNS", "3")
+    result, _, _ = run_agent(model)
+    assert result.agent["items"][0]["turns"] == 3 and model.requests[-1].forced_tool == "submit_fix"
+    located = json.loads(model.requests[0].user)["처음 인용의 원문 위치"]
+    assert located and all("snippet" in place or place.get("found") is False for place in located)
 
 
 def test_giving_up_keeps_the_first_result():

@@ -159,8 +159,10 @@ class OpenAIResponsesModel:
                 {"type": "function", "name": t.name, "description": t.description, "parameters": to_strict(t.parameters)[0], "strict": True}
                 for t in request.tools
             ]
-            body["tool_choice"] = "required"
+            body["tool_choice"] = {"type": "function", "name": request.forced_tool} if request.forced_tool else "required"
             body["parallel_tool_calls"] = False
+            # 같은 공통 지시를 쓰는 항목들을 같은 캐시로 보내는 열쇠(2026-11-05 실측: 항목마다 첫 차례가 공통 지시 1.5만 토큰을 다시 씀)
+            body["prompt_cache_key"] = "repair-" + hashlib.sha256((request.system + request.instructions).encode("utf-8")).hexdigest()[:32]
             del body["text"]
         for turn in request.turns:  # 앞선 차례: 모델의 도구 호출과 우리가 돌려준 결과. 서버 보관(store) 없이 매번 함께 보냅니다
             for call, output in zip(turn.calls, turn.results, strict=True):

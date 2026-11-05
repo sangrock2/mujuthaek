@@ -79,7 +79,7 @@ SPECS = (
         ),
     ),
 )
-FINAL_SPECS = tuple(spec for spec in SPECS if spec.name == "submit_fix")  # 마지막 차례에 쓸 수 있는 도구
+FINAL_TOOL = "submit_fix"  # 마지막 차례에 쓸 수 있는 도구(목록은 그대로 두고 이 도구만 받습니다: 목록이 바뀌면 입력 캐시가 깨짐)
 
 # validate_item이 부르는 검사: (항목, 인용 목록) → 그 항목에 남는 문제 문구들
 ItemCheck = Callable[[Any, list[dict[str, str]]], list[str]]
@@ -101,7 +101,8 @@ class RepairTools:
       합친 항목이 가리키는 처음 인용(quoteRefs)은 제출 인용에 자동으로 붙입니다.
     known_codes: 처음부터 있던 문제 코드. 제출한 항목에 처음에 없던 문제가 생기면 한 번은 받지 않고 문제를 돌려줘 고칠 기회를 줍니다
       (마지막 차례면 그대로 받습니다. 채택은 어차피 recheck.adopt가 정합니다).
-    final: 마지막 차례. 이때는 submit_fix만 쓸 수 있습니다(검색만 하다 끝나지 않게)."""
+    final: 마지막 차례. 이때는 submit_fix만 쓸 수 있습니다(검색만 하다 끝나지 않게).
+    index: 원문 색인. 같은 공고의 항목끼리 하나를 함께 씁니다(없으면 처음 쓸 때 만듭니다)."""
 
     material: ExtractionMaterial
     check: ItemCheck
@@ -112,12 +113,12 @@ class RepairTools:
     submission: Submission | None = None
     calls: dict[str, int] = field(default_factory=dict)  # 도구별 호출 수(기록용)
     rejected_submissions: int = 0  # 새 문제로 한 번 돌려보낸 제출 수(기록용)
-    _index: NormalizedText | None = None
+    index: NormalizedText | None = None
     _pages: tuple[list[int], list[int], list[int]] | None = None
 
     @property
     def specs(self) -> tuple[ToolSpec, ...]:
-        return FINAL_SPECS if self.final else SPECS
+        return SPECS
 
     def run(self, call: ToolCall) -> str:
         """도구 하나를 실행해 JSON 글자를 돌려줍니다. 어떤 입력에도 예외를 내지 않습니다."""
@@ -125,7 +126,7 @@ class RepairTools:
         handler = getattr(self, "_" + call.name, None)
         if call.name not in {spec.name for spec in SPECS} or handler is None:
             return _error("UNKNOWN_TOOL", f"없는 도구입니다: {call.name[:40]}")
-        if call.name not in {spec.name for spec in self.specs}:
+        if self.final and call.name != FINAL_TOOL:
             return _error("FINAL_TURN", "마지막 차례입니다. submit_fix로 고친 항목을 내거나 give_up에 이유를 적습니다.")
         try:
             args = json.loads(call.arguments)
@@ -212,12 +213,24 @@ class RepairTools:
         inherited = [{"ref": ref, "text": self.base_quotes[ref]} for ref in item_refs(item) if ref not in given and ref in self.base_quotes]
         return item, [*cleaned, *inherited]
 
+    def locate(self, quotes: list[dict[str, str]]) -> list[dict[str, Any]]:
+        """처음 인용의 원문 위치(쪽·쪽 안 위치·앞뒤 글)를 미리 찾아 둡니다. 못 찾으면 비슷한 원문 줄.
+        (2026-11-05 실측: 항목마다 search_source·read_page로 처음 인용 자리를 찾는 데 2~4차례를 씀 — 도구 실행은 무료, 차례가 비용)"""
+        found = []
+        for quote in quotes:
+            spans, _ = candidates(self.material.text, quote["text"], self._text_index())
+            if spans:
+                found.append({"ref": quote["ref"], "places": len(spans), **self._hit(*spans[0])})
+            else:
+                found.append({"ref": quote["ref"], "found": False, "near": self._near(quote["text"])[:1]})
+        return found
+
     # ── 내부 ──────────────────────────────────────────────────────────────
 
     def _text_index(self) -> NormalizedText:
-        if self._index is None:
-            self._index = NormalizedText(self.material.text)
-        return self._index
+        if self.index is None:
+            self.index = NormalizedText(self.material.text)
+        return self.index
 
     def _page_marks(self) -> tuple[list[int], list[int], list[int]]:
         if self._pages is None:

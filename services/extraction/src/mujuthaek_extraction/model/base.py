@@ -71,6 +71,8 @@ class ModelRequest:
     # 다음 요청에 앞선 차례(turns)를 붙여 이어 갑니다. 반복은 모델 층이 아니라 부르는 쪽이 하므로 한 차례가 complete() 한 번입니다
     tools: tuple[ToolSpec, ...] = ()
     turns: tuple[ToolTurn, ...] = ()
+    # 이 차례에 반드시 부를 도구 이름(재확인 에이전트의 마지막 차례 submit_fix). 도구 목록은 그대로 두어 앞 차례의 입력 캐시를 이어 씁니다
+    forced_tool: str | None = None
 
     def tool_chars(self) -> int:
         """도구 설명·앞선 차례가 입력에 더하는 글자 수(비용 상한 계산용)."""
