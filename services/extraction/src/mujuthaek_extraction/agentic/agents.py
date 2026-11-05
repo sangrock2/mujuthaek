@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import best_match
 
 from mujuthaek_extraction import supply_tables
 from mujuthaek_extraction.agentic.draft import COVERAGE, Draft, split_by_owner
@@ -28,7 +29,7 @@ from mujuthaek_extraction.image_reading import BLOCK_HEAD, image_targets
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 from mujuthaek_extraction.judgment.pages import PAGE_MARK
 from mujuthaek_extraction.model.base import ExtractionModel, ModelRequest, ToolCall, ToolSpec, ToolTurn
-from mujuthaek_extraction.repair.tools import RepairTools, _clean_quotes, _error, _limit, _merge, _object, _parse_item, item_refs
+from mujuthaek_extraction.repair.tools import RepairTools, _clean_quotes, _error, _object, _parse_item, _shrink, item_refs
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
 
@@ -39,7 +40,10 @@ WORKER_TURNS = 6  # 10 → 6(2026-11-05: 담당 차례 214번 중 항목을 고�
 MAX_DELEGATIONS = 3  # 하위 에이전트 하나를 다시 맡길 수 있는 횟수(비용 상한)
 OUTLINE_CHARS = 6_000
 SUMMARY_CHARS = 700  # 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게)
-WHOLE_RESULTS = frozenset({"outline", "delegate", "delegate_many"})  # 길어도 버리지 않고 그대로 돌려주는 도구 결과
+WHOLE_RESULTS = frozenset({"outline", "delegate", "delegate_many", "extract_all"})  # 길어도 버리지 않고 그대로 돌려주는 도구 결과(크기는 만들 때 줄임)
+# 에이전트 도구 결과 한 번의 글자 상한. 재확인 도구(2,000자)보다 크게(2026-11-05 대역 시험: 검증 문제 목록·추출 결과가 2,000자를 넘어
+# 「결과가 너무 깁니다」 오류로 버려짐). 넘으면 긴 글 칸·긴 목록부터 줄이고 오류로 바꾸지 않습니다
+RESULT_CHARS = 8_000
 ISSUES_SHOWN = 25
 # 차례 출력 한도 8,000 → 4,000(2026-11-05 점검): 실측 차례 출력은 100~1,000토큰인데, 공고당 상한은 차례마다 최악 비용(출력 한도 전부)을
 # 잡아 두어 동시 담당 넷이면 실제 비용이 적어도 상한이 막혔음
@@ -146,6 +150,44 @@ class Env:
         return {g.get("id") for p in owned for g in p.get("supplyGroups") or [] if isinstance(g, dict)}
 
 
+def fit(result: dict[str, Any], limit: int) -> str:
+    """결과를 limit자 안의 JSON으로: 긴 글 칸을 줄이고, 그래도 길면 긴 목록 뒤를 잘라 truncated를 붙입니다. 오류로 바꾸지 않습니다
+    (일이 이미 끝났는데 결과를 버리면 에이전트가 같은 일을 다시 함)."""
+    text = json.dumps(result, ensure_ascii=False)
+    if len(text) <= limit:
+        return text
+    shrunk = json.loads(text)
+    for budget in (600, 300, 120):
+        _shrink(shrunk, budget)
+        text = json.dumps({**shrunk, "truncated": True}, ensure_ascii=False)
+        if len(text) <= limit:
+            return text
+    while len(text) > limit and _cut_longest_list(shrunk):
+        text = json.dumps({**shrunk, "truncated": True}, ensure_ascii=False)
+    return text if len(text) <= limit else text[:limit]
+
+
+def _cut_longest_list(node: Any) -> bool:
+    """가장 긴 목록의 뒤 절반을 잘라 냅니다. 자를 목록이 없으면 False."""
+    lists: list[list[Any]] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, list):
+            lists.append(value)
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+
+    walk(node)
+    longest = max((x for x in lists if len(x) > 1), key=lambda x: len(json.dumps(x, ensure_ascii=False)), default=None)
+    if longest is None:
+        return False
+    del longest[(len(longest) + 1) // 2 :]
+    return True
+
+
 def _with_progress(text: str, progress: dict[str, Any]) -> str:
     """도구 결과에 진행 사실을 붙입니다. 순서를 정해 주지 않고, 쓴 비용·남은 상한·이미 뽑은 섹션을 보고 에이전트가 중복·낭비를 스스로 피하게 합니다."""
     if not progress:
@@ -181,6 +223,9 @@ READ_SPECS = (
     ),
     ToolSpec("check_quote", "인용문이 원문에 글자 그대로 있는지 확인합니다. 없으면 가장 비슷한 원문 줄을 보여 줍니다.", _object({"quote": STRING})),
 )
+
+
+READ_TOOLS = frozenset(spec.name for spec in READ_SPECS)
 
 
 class Reading:
@@ -252,8 +297,9 @@ class Reading:
             return _error("BAD_ARGUMENTS", "도구 입력은 객체여야 합니다.")
         # 차례·맡기기 결과는 「너무 길다」 오류로 바꾸지 않습니다: 맡긴 일은 이미 끝났고 비용도 들었는데 결과를 버리면 총괄이 같은 일을 다시 맡김
         # (2026-11-05 gh-809: 동시에 맡긴 담당 4개의 결과가 길어 버려지고 다시 맡겨 공고당 상한에 닿음). 길이는 결과를 만들 때 줄입니다
-        text = json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else _limit(result)
-        return _with_progress(text, self.env.progress())
+        text = json.dumps(result, ensure_ascii=False) if call.name in WHOLE_RESULTS else fit(result, RESULT_CHARS)
+        # 진행 사실은 초안을 바꾸거나 검사하는 도구에만 붙입니다(읽기 결과마다 붙이면 같은 글이 차례에 여러 번 쌓임, 2026-11-05 대역 시험)
+        return _with_progress(text, self.env.progress()) if call.name not in READ_TOOLS else text
 
 
 def _issue_section(candidate: dict[str, Any], target: str) -> str | None:
@@ -281,9 +327,15 @@ def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | N
     if sections:
         issues = [i for i in issues if _issue_section(report.candidate, i["target"]) in sections]
     shown = [{"code": i["code"], "target": i["target"], "description": i["description"][:220]} for i in issues[:ISSUES_SHOWN]]
+    by_section: dict[str, int] = {}
+    for issue in issues:
+        section = _issue_section(report.candidate, issue["target"]) or "notice"
+        by_section[section] = by_section.get(section, 0) + 1
     return {
         "assembled": True,
         "verifierStatus": quality["verification"]["status"],
+        # 섹션별 남은 문제 수(2026-11-05 대역 시험: 문제가 0개인 담당에게도 「처음 뽑기」를 맡겨 쪽 9개를 다 읽음 — 판단에 쓸 사실로 알림)
+        "issuesBySection": by_section,
         "issues": shown,
         "issueCount": len(issues),
         "notes": len(quality["notes"]),
@@ -311,6 +363,18 @@ WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
 - 차례 수가 제한됩니다(도구 결과의 turnsLeft). 마지막 차례에는 done만 부를 수 있습니다."""
 
 
+def _explain(error: Any, skip: int) -> str:
+    """형식 오류를 「위치: 이유」로. 항목 전체 글자를 앞에 붙이지 않고, 여러 형식 중 하나·조건부 형식이면 가장 가까운 하위 오류를 씁니다
+    (2026-11-05 대역 시험: 오류가 항목 글자로 시작해 160자에서 잘려 이유가 안 보이자, 담당이 선정 항목 종류를 SCORING에서 OTHER로 바꿔 통과시킴)."""
+    leaf = best_match(error.context) if error.context else error
+    path = "/".join(str(x) for x in list(leaf.absolute_path)[skip:])
+    message = leaf.message
+    shown = repr(leaf.instance)
+    if len(shown) > 40 and message.startswith(shown):
+        message = "이 값" + message[len(shown) :]
+    return f"/{path}: {message[:240]}"
+
+
 JUDGED_SECTIONS = ("notice", "eligibility")
 
 
@@ -328,8 +392,9 @@ class WorkerTools(Reading):
             ToolSpec("extract_section", "기존 섹션 추출기를 불러 맡은 섹션 전체를 초안에 넣습니다(초안의 이 섹션을 바꿈).", _object({})),
             ToolSpec(
                 "upsert_item",
-                "항목 하나를 넣거나 고칩니다. notice는 객체 하나입니다. quotes는 새로 쓴 인용(ref·text).",
-                _object({"section": section, "item_json": STRING, "quotes": QUOTES}),
+                "항목 하나를 넣거나 고칩니다. notice는 객체 하나입니다. quotes는 새로 쓴 인용(ref·text). quoteRefs는 있던 근거에 더해지고, "
+                "틀린 근거를 바꿀 때만 replace_quote_refs를 true로 둡니다.",
+                _object({"section": section, "item_json": STRING, "quotes": QUOTES, "replace_quote_refs": {"type": "boolean"}}),
             ),
             ToolSpec("remove_item", "항목 하나를 뺍니다(원문에 없거나 중복).", _object({"section": section, "item_id": STRING, "reason": STRING})),
             ToolSpec(
@@ -366,7 +431,7 @@ class WorkerTools(Reading):
             result["message"] = "다시 뽑아 위치·공급 ID가 바뀌었습니다. dependentItems는 사라진 ID를 가리킵니다(그 담당이 고쳐야 함)."
         return result
 
-    def _upsert_item(self, section: str, item_json: str, quotes: list[dict[str, str]]) -> dict[str, Any]:
+    def _upsert_item(self, section: str, item_json: str, quotes: list[dict[str, str]], replace_quote_refs: bool = False) -> dict[str, Any]:
         if section not in self.sections:
             return {"error": "NOT_MY_SECTION", "message": f"맡은 섹션은 {', '.join(self.sections)}입니다."}
         item = _parse_item(item_json)
@@ -377,8 +442,7 @@ class WorkerTools(Reading):
         missing = [q["text"][:60] for q in _clean_quotes(quotes) if not self.env.reader._check_quote(q["text"]).get("found")]
         if missing:
             return {"error": "QUOTE_NOT_FOUND", "message": "원문에 없는 인용이 있습니다. check_quote로 고칩니다.", "quotes": missing}
-        current = self.env.draft.item(section, None if section == "notice" else item.get("id"))
-        merged = _merge(current, item) if isinstance(current, dict) else item
+        merged = self.env.draft.preview(section, item, bool(replace_quote_refs))
         errors = self._format_errors(section, merged)
         if errors:  # 형식이 틀린 항목은 결합할 때 빠지므로 넣기 전에 돌려줍니다(2026-11-05 첫 실행: 손으로 넣은 공급 묶음이 모두 빠짐)
             return {"error": "BAD_FORMAT", "message": "공통 지시의 출력 형식에 맞지 않습니다.", "errors": errors}
@@ -387,7 +451,7 @@ class WorkerTools(Reading):
         if dangling:  # 없는 인용을 가리키면 결합할 때 근거 없음으로 빠집니다(2026-11-05 점검)
             message = "quoteRefs가 가리키는 인용이 없습니다. quotes에 그 ref의 원문을 함께 냅니다."
             return {"error": "UNKNOWN_QUOTE_REF", "message": message, "refs": dangling[:10]}
-        return {"ok": self.env.draft.upsert(section, item, _clean_quotes(quotes))}
+        return {"ok": self.env.draft.upsert(section, item, _clean_quotes(quotes), bool(replace_quote_refs))}
 
     def _format_errors(self, section: str, merged: dict[str, Any]) -> list[str]:
         """고친 결과(같은 id의 지금 항목에 합친 것)가 그 섹션 출력 형식에 맞는지. 틀린 곳 최대 5개."""
@@ -398,9 +462,8 @@ class WorkerTools(Reading):
             "missingFields": [],
         }
         validator = Draft202012Validator(call_schema((section,), document_ids(self.env.material)))
-        return [
-            f"/{'/'.join(str(x) for x in list(e.absolute_path)[2 if section != 'notice' else 1 :])}: {e.message[:160]}" for e in validator.iter_errors(part)
-        ][:5]
+        skip = 2 if section != "notice" else 1
+        return [_explain(e, skip) for e in validator.iter_errors(part)][:5]
 
     def _remove_item(self, section: str, item_id: str, reason: str) -> dict[str, Any]:
         return {"removed": section in self.sections and self.env.draft.remove(section, item_id)}
@@ -612,7 +675,15 @@ class SupervisorTools(Reading):
                 self.env.draft.put_parts(owner, parts)
         self.env.note_extraction(run)  # 초안에 넣은 뒤(코드가 만든 위치를 초안에서 찾음)
         failed = [f"{name}: {reason[:120]}" for name, reason in run.failed_calls]
-        return {"extracted": [c.name for c in missing], "skipped": skipped, "failedCalls": failed, "draft": self.env.draft.summary()}
+        view = issues_view(self.env.evaluate(self.env.draft.as_parts()))
+        return {
+            "extracted": [c.name for c in missing],
+            "skipped": skipped,
+            "failedCalls": failed,
+            "draft": self.env.draft.counts(),
+            "verifierStatus": view.get("verifierStatus"),
+            "issuesBySection": view.get("issuesBySection", {}),
+        }
 
     def _check_all(self) -> dict[str, Any]:
         return issues_view(self.env.evaluate(self.env.draft.as_parts()))

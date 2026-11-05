@@ -3,7 +3,7 @@
 모델 (결정 C12, 2026-10-15)
   EXTRACTION_MODEL_MODE=auto (기본)  로컬 AI를 먼저 쓰고, 연결이 안 되거나 결과가 부족하면 유료 API(gpt-6-luna)
   EXTRACTION_MODEL_MODE=recorded     녹화한 응답을 재생 (개발·시연용 가짜 추출기, 유료 호출 없음)
-  EXTRACTION_MODEL_MODE=standin      요청을 파일로 쓰고 답 파일을 기다림(EXTRACTION_STANDIN_DIR, Claude 대역으로 흐름 시험, 유료 호출 없음)
+  EXTRACTION_MODEL_MODE=standin      요청을 파일로 쓰고 답 파일을 기다림(EXTRACTION_STANDIN_DIR, 대역 모델로 흐름 시험, 유료 호출 없음)
   LOCAL_AI_URL       로컬 AI 주소 (OpenAI 호환 /v1/chat/completions. 예: http://localhost:11434/v1). 비우면 로컬 AI 없음으로 보고 바로 유료 API
   OPENAI_API_KEY     유료 API 키. 환경 변수가 없으면 services/extraction/.env 파일에서 읽습니다. 키는 출력·저장하지 않습니다
 
