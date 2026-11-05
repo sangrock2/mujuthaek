@@ -22,6 +22,7 @@ from typing import Any
 from mujuthaek_extraction.config import Settings
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ModelResponse, StopReason
 from mujuthaek_extraction.model.call_cache import CachedModel, CallCache
+from mujuthaek_extraction.model.file_exchange import FileExchangeModel
 from mujuthaek_extraction.model.local_ai import LocalChatModel
 from mujuthaek_extraction.model.openai_responses import OpenAIResponsesModel
 from mujuthaek_extraction.model.pricing import Budget, BudgetedModel
@@ -83,11 +84,14 @@ class ModelFactory:
                     runaway_check=runaway,
                 )
         self._replay = ReplayModel(settings.recorded_dir) if settings.model_mode == "recorded" and settings.recorded_dir else None
+        self._standin = FileExchangeModel(settings.standin_dir) if settings.model_mode == "standin" and settings.standin_dir else None
 
     def describe(self) -> str:
         """로그용 요약. 키는 넣지 않습니다."""
         if self.settings.model_mode == "recorded":
             return f"recorded({self.settings.recorded_dir})"
+        if self.settings.model_mode == "standin":
+            return f"standin({self.settings.standin_dir})"
         local = self.settings.local_ai_url or "없음"
         paid = self.settings.openai_model if self._paid else "키 없음"
         return f"auto(로컬 AI {local} → 유료 {paid}, 공고당 ${self.settings.notice_budget_usd:.2f})"
@@ -98,6 +102,9 @@ class ModelFactory:
         if self.settings.model_mode == "recorded":
             model = self._replay or UnavailableModel("EXTRACTION_RECORDED_DIR가 없습니다.")
             return NoticeModels(model, None, names={"primary": "recorded"})
+        if self.settings.model_mode == "standin":
+            model = self._standin or UnavailableModel("EXTRACTION_STANDIN_DIR가 없습니다.")
+            return NoticeModels(model, None, names={"primary": "standin"})
         cache = cache if self.settings.call_cache else None
         local: ExtractionModel = self._local
         if cache is not None and self.settings.local_ai_url:

@@ -803,7 +803,7 @@ def main() -> None:
     parser.add_argument("--misses", type=int, default=5, help="항목마다 보여 줄 놓친 것 수")
     args = parser.parse_args()
 
-    overall, published = Score(), Score()
+    overall, published, released = Score(), Score(), Score()
     for folder in sorted(p for p in args.keys.iterdir() if p.is_dir()):
         notice = folder.name
         expected = _load_key(args.keys, notice)
@@ -835,6 +835,7 @@ def main() -> None:
                     for atom in _atoms(item["rule"]["expression"])
                 ]
                 published.merge(wrong_values(expected, neutral), f"{notice}: ")
+                released.merge(compare(expected, neutral))  # 검수 없이 쓰이는 정답 값(보류 밖). 재현율과의 차이가 사람 확인으로 가는 값
         else:
             actual = _load_key(args.other_keys, notice)
             if actual is None:
@@ -858,6 +859,9 @@ def main() -> None:
         _print_unchecked(overall, section, "    ")
     found, total = sum(v for k, v in overall.found.items() if "찾은" not in k), sum(v for k, v in overall.total.items() if "찾은" not in k)
     print(f"  {'합계(재현율)':<28} {found:>5}/{total:<5} {found / total if total else 0:6.1%}")
+    if released.total:  # 2026-11-05: 에이전트의 값은 검수로 남는 값을 줄이는 데 있어 재현율과 함께 봅니다(검수 공고는 0으로 셈)
+        got = sum(v for k, v in released.found.items() if "찾은" not in k)
+        print(f"  {'자동 게시 재현율(검수 없이)':<26} {got:>5}/{total:<5} {got / total if total else 0:6.1%}")
     if published.total:
         print()
         print("## 자동 게시 값 중 정답표에 없는 값 (완료 전부 + 부분 완료의 보류 밖)")

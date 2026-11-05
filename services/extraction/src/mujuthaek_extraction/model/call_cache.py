@@ -159,6 +159,42 @@ class MemoryCallCache:
         return len(old)
 
 
+class FileCallCache:
+    """평가용 파일 저장소(열쇠마다 JSON 파일 하나). 평가 실행 사이에 성공한 호출을 다시 써서, 같은 첫 추출 위에서 두 방식을 비교하고
+    유료 비용은 바뀐 호출에만 씁니다(2026-11-05 보강 설계). 운영은 PostgresCallCache."""
+
+    def __init__(self, folder: Path, clock: Callable[[], float] = time.time):
+        self.folder = Path(folder)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self._clock = clock
+        self._lock = threading.Lock()
+
+    def _path(self, key: str) -> Path:
+        return self.folder / f"{key}.json"
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        path = self._path(key)
+        if not path.exists():
+            return None
+        try:
+            return dict(json.loads(path.read_text(encoding="utf-8"))["response"])
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def put(self, key: str, model: str, call_name: str, response: dict[str, Any], usage: dict[str, Any] | None) -> None:
+        row = {"model": model, "callName": call_name, "response": dict(response), "usage": usage, "createdAt": self._clock()}
+        with self._lock:
+            if not self._path(key).exists():
+                self._path(key).write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
+
+    def purge(self, older_than_days: int) -> int:
+        limit = self._clock() - older_than_days * 86_400
+        old = [p for p in self.folder.glob("*.json") if json.loads(p.read_text(encoding="utf-8")).get("createdAt", 0) < limit]
+        for path in old:
+            path.unlink(missing_ok=True)
+        return len(old)
+
+
 class PostgresCallCache:
     """extraction_call_cache 표 (migrations/V202610201010). autocommit 연결을 받습니다(psycopg 3 연결은 여러 스레드가 함께 써도 됩니다)."""
 
