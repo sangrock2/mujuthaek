@@ -71,6 +71,8 @@ def main() -> None:
             clock=lambda: datetime.now(UTC),
             new_event=new_event,
             api_provider=FixedApi(case.api_reference),
+            parallel_calls=settings.parallel_calls,  # 운영 워커와 같은 동시 호출(시간 비교를 공정하게)
+            parallel_stagger=settings.parallel_stagger_seconds,
         )
         total += outcome.cost_usd
         folder = args.out / notice_id
