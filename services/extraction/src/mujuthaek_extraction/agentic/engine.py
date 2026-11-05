@@ -15,6 +15,7 @@ from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.agentic.agents import Decision, Env, workers_of
 from mujuthaek_extraction.agentic.draft import Draft
 from mujuthaek_extraction.contracts import tools
+from mujuthaek_extraction.extract import ExtractionRun, run_extraction
 from mujuthaek_extraction.recheck import RecheckResult
 from mujuthaek_extraction.rules.base import FieldRules
 from mujuthaek_extraction.verify import VerificationReport
@@ -36,11 +37,14 @@ def make_env(rules: FieldRules, intake: Any, rt: pipeline.Runtime) -> Env:
         model=rt.models.primary,
         evaluate=lambda parts: None,
         read_images=lambda material, context: pipeline.read_images(material, context, rt),
+        extract_all=lambda: ExtractionRun(),
         workers=workers,
         draft=Draft(owners, intake.material.text_document_id),
         stagger=rt.parallel_stagger,
     )
     env.evaluate = lambda parts: pipeline.evaluate_parts(parts, env.material, env.context, rt)
+    # 지금 흐름과 같은 호출(작은 공고는 자격·선정·서류를 한 호출로). 여러 담당 섹션을 담은 조각은 extract_all이 담당별로 나눔
+    env.extract_all = lambda: run_extraction(rules, env.material, env.model, usage=rt.usage, parallel=rt.parallel_calls, stagger=rt.parallel_stagger)
     return env
 
 
