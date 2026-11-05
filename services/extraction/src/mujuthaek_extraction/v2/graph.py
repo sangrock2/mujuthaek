@@ -3,17 +3,19 @@
     intake ─(준비 안 됨·규칙 없음)─▶ END
       └▶ document ▶ plan ▶ structure ─▶ section(일정·자격·선정·서류, 담당마다 Send 병렬) ▶ conclude ▶ END
 
-- document: 원문(그림 쪽은 지금은 V1 그림 판독으로 글자를 붙임, 5단계에서 그림 판독 에이전트로) → 문서 모델(줄·표·칸 id)
-- plan: 계획 에이전트가 표 해석·섹션별 담당 범위를 정함(2단계). 지금은 담당 목록만
-- structure: 공고 기본·위치·공급. 다른 담당이 그 id를 쓰므로 먼저
-- section: 나머지 담당이 동시에. 담당이 낸 V1 AI 조각을 parts에 더함(리듀서)
+- document: 원문(그림 쪽은 지금은 V1 그림 판독으로 글자를 붙임, 그림 판독 에이전트로 바꿀 자리) → 문서 모델(줄·표·칸 id)
+- plan: 계획 에이전트가 표 해석·섹션별 담당 범위를 정할 자리. 지금은 담당 목록만
+- structure: 공고 기본·위치·공급. 공급·가격 표는 코드가 옮기고(V1 공급표 장치, 열 의미만 AI) 공고·위치는 한 번 호출 — V1과 같은 방식.
+  다른 담당이 그 id를 쓰므로 먼저(2026-11-06 첫 실제 실행: 에이전트가 공급 묶음을 손으로 넣다 가격이 거의 다 빠짐)
+- section: 판단이 많은 나머지 담당이 에이전트로 동시에. 담당이 낸 V1 AI 조각·호출 기록·대화 기록을 리듀서로 합침
 - conclude: V1과 같은 결합·검증·계약 정리·게시·기록(틀린 값 0을 지키는 결정론 부분은 V1의 검증된 코드)
 
-담당은 섹션 에이전트(v2/agents/section.py)이고, AGENTS(담당 이름 → 실행 함수)에 꽂으면 그것을 씁니다(시험).
+AGENTS(담당 이름 → 실행 함수)에 꽂으면 그것을 씁니다(시험). 꽂힌 것이 없으면 구조는 V1 방식, 나머지는 섹션 에이전트(v2/agents/section.py).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import operator
 from collections.abc import Callable
 from typing import Annotated, Any, TypedDict
@@ -38,18 +40,21 @@ class V2State(TypedDict, total=False):
     intake: Any  # V1 IntakeResult
     rules: FieldRules
     material: Any  # V1 ExtractionMaterial(그림 판독 글자 포함)
+    context: Any  # V1 TrustedContext(그림 판독 뒤 문서 기록 — 판독 글을 붙인 원문의 해시)
     image_run: ExtractionRun | None
+    structure_run: ExtractionRun | None  # 구조(V1 방식) 호출 기록
     document: DocumentModel
     plan: dict[str, Any]
-    structure: dict[str, Any] | None  # 구조 담당이 낸 id·이름 요약(뒤 담당이 참조)
+    structure: dict[str, Any] | None  # 구조가 낸 id·이름 요약(뒤 담당이 참조)
     worker: str  # Send로 넘기는 담당 이름
     parts: Annotated[list[dict[str, Any]], operator.add]
     usage: Annotated[list[dict[str, Any]], operator.add]
+    traces: Annotated[list[dict[str, Any]], operator.add]  # 담당 대화 기록(도구 호출·결과 앞부분)
     outcome: pipeline.Outcome
 
 
-# 담당 실행 함수: (담당 호출 정의, 상태, 실행 환경) → (V1 AI 조각들, 모델 호출 기록)
-SectionAgent = Callable[[CallSpec, V2State, pipeline.Runtime], tuple[list[dict[str, Any]], list[dict[str, Any]]]]
+# 담당 실행 함수: (담당 호출 정의, 상태, 실행 환경) → (V1 AI 조각들, 모델 호출 기록[, 대화 기록])
+SectionAgent = Callable[[CallSpec, V2State, pipeline.Runtime], tuple[Any, ...]]
 AGENTS: dict[str, SectionAgent] = {}
 
 Context = GraphRuntime[pipeline.Runtime]
@@ -66,8 +71,9 @@ def intake(state: V2State, runtime: Context) -> dict[str, Any]:
 
 
 def document(state: V2State, runtime: Context) -> dict[str, Any]:
-    material, _, image_run = pipeline.read_images(state["intake"].material, state["intake"].context, runtime.context)
-    return {"material": material, "image_run": image_run, "document": build_document(material), "parts": [], "usage": []}
+    # 판독이 돌려준 문서 기록을 씁니다(2026-11-06: 원래 기록으로 검증해 그림 공고의 근거 55개가 모두 해시 불일치)
+    material, context, image_run = pipeline.read_images(state["intake"].material, state["intake"].context, runtime.context)
+    return {"material": material, "context": context, "image_run": image_run, "document": build_document(material), "parts": [], "usage": [], "traces": []}
 
 
 def plan(state: V2State, runtime: Context) -> dict[str, Any]:
@@ -76,28 +82,44 @@ def plan(state: V2State, runtime: Context) -> dict[str, Any]:
 
 def structure(state: V2State, runtime: Context) -> dict[str, Any]:
     spec = workers(state["rules"])[STRUCTURE]
-    parts, usage = _run(spec, state, runtime.context)
-    return {"parts": parts, "usage": usage, "structure": structure_summary(parts[0]) if parts else None}
+    if STRUCTURE in AGENTS:
+        parts, usage, trace = _unpack(AGENTS[STRUCTURE](spec, state, runtime.context))
+        return {"parts": parts, "usage": usage, "traces": trace, "structure": structure_summary(parts[0]) if parts else None}
+    only = dataclasses.replace(state["rules"], calls=(spec,), split_calls=(), large_text_chars=None)
+    run = pipeline.extract_parts(only, state["material"], runtime.context).run
+    summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
+    return {"parts": list(run.parts), "structure": summary, "structure_run": run}
 
 
 def fan_out(state: V2State) -> list[Send]:
     names = [name for name in state["plan"]["workers"] if name != STRUCTURE]
-    return [Send("section", {**state, "worker": name, "parts": [], "usage": []}) for name in names]
+    return [Send("section", {**state, "worker": name, "parts": state.get("parts") or [], "usage": [], "traces": []}) for name in names]
 
 
 def section(state: V2State, runtime: Context) -> dict[str, Any]:
     spec = workers(state["rules"])[state["worker"]]
-    parts, usage = _run(spec, state, runtime.context)
-    return {"parts": parts, "usage": usage}
+    agent = AGENTS.get(spec.name)
+    if agent is None:
+        from mujuthaek_extraction.v2.agents.section import run_section  # 섹션 담당 에이전트(LangChain)
+
+        agent = run_section
+    parts, usage, trace = _unpack(agent(spec, state, runtime.context))
+    return {"parts": parts, "usage": usage, "traces": trace}
 
 
 def conclude(state: V2State, runtime: Context) -> dict[str, Any]:
     rt = runtime.context
-    material, context = state["material"], state["intake"].context
-    parts = state.get("parts") or []
-    run = ExtractionRun(parts=list(parts))
+    material, context = state["material"], state["context"]
+    base = state.get("structure_run") or ExtractionRun()
+    run = ExtractionRun(
+        parts=list(state.get("parts") or []),
+        attempts=list(base.attempts),
+        failed_calls=list(base.failed_calls),
+        raw_responses=list(base.raw_responses),
+        structure=state.get("structure"),
+    )
     extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), rt.models.primary)
-    rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"]})
+    rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
     report = pipeline.evaluate_parts(run.parts, material, context, rt)
     if report is None:
         return {"outcome": pipeline.extraction_failed_outcome(extracted, state.get("image_run"), material, rt)}
@@ -118,13 +140,10 @@ def workers(rules: FieldRules) -> dict[str, CallSpec]:
     return {call.name: call for parent in rules.calls for call in split.get(parent.name, (parent,))}
 
 
-def _run(spec: CallSpec, state: V2State, rt: pipeline.Runtime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    agent = AGENTS.get(spec.name)
-    if agent is None:
-        from mujuthaek_extraction.v2.agents.section import run_section  # 섹션 담당 에이전트(LangChain)
-
-        agent = run_section
-    return agent(spec, state, rt)
+def _unpack(result: tuple[Any, ...]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    parts, usage = result[0], result[1]
+    trace = [result[2]] if len(result) > 2 and result[2] else []
+    return parts, usage, trace
 
 
 def _done_or(next_node: str):
