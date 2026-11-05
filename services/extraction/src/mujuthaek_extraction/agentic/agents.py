@@ -20,7 +20,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from mujuthaek_extraction import supply_tables
-from mujuthaek_extraction.agentic.draft import COVERAGE, Draft
+from mujuthaek_extraction.agentic.draft import COVERAGE, Draft, split_by_owner
 from mujuthaek_extraction.agentic.loop import AgentLog, run_loop
 from mujuthaek_extraction.extract import ExtractionRun, run_extraction
 from mujuthaek_extraction.image_reading import BLOCK_HEAD, image_targets
@@ -32,7 +32,7 @@ from mujuthaek_extraction.rules.base import CallSpec, FieldRules, call_schema, d
 from mujuthaek_extraction.verify import VerificationReport
 
 SUPERVISOR_TURNS = 16
-WORKER_TURNS = 10
+WORKER_TURNS = 6  # 10 → 6(2026-11-05: 담당 차례 214번 중 항목을 고친 것은 5번, 나머지는 읽기만)
 MAX_DELEGATIONS = 3  # 하위 에이전트 하나를 다시 맡길 수 있는 횟수(비용 상한)
 OUTLINE_CHARS = 6_000
 SUMMARY_CHARS = 700  # 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게)
@@ -66,6 +66,7 @@ class Env:
     model: ExtractionModel
     evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None]
     read_images: Callable[[ExtractionMaterial, TrustedContext], tuple[ExtractionMaterial, TrustedContext, ExtractionRun | None]]
+    extract_all: Callable[[], ExtractionRun]  # 기존 섹션 추출기를 모든 섹션에 동시에(호출마다 섹션 하나씩 나눠, 담당과 조각이 맞게)
     workers: dict[str, CallSpec]
     draft: Draft
     run: ExtractionRun = field(default_factory=ExtractionRun)
@@ -216,11 +217,12 @@ def issues_view(report: VerificationReport | None, sections: tuple[str, ...] | N
 # ── 하위 에이전트 ─────────────────────────────────────────────────────────────────────────────────────
 
 WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
-「맡은 섹션」의 작업 초안을 원문에 맞게 채웁니다. 방법은 스스로 고릅니다.
-- extract_section: 기존 섹션 추출기를 한 번 불러 맡은 섹션 전체를 초안에 넣습니다(대량으로 뽑을 때 빠르고 쌈). 공급표 후보가 있으면 표 행은 코드가 옮깁니다.
-- upsert_item·remove_item·set_coverage: 원문을 읽고 항목을 직접 넣고·고치고·빼고, 섹션 상태를 정합니다.
-- check: 검증기를 돌려 맡은 섹션에 남은 문제를 봅니다. 문제를 보고 고치거나, 원문으로 확인해 문제가 아니면 그대로 둡니다.
-- done: 끝냅니다. summary에 무엇을 했고 무엇이 남았는지(원문으로 확인한 내용 포함) 적습니다. 총괄 에이전트가 이것을 읽고 다음을 정합니다.
+「맡은 섹션」의 작업 초안을 원문에 맞게 고칩니다. 「남은 문제」는 지금 초안에 검증기를 돌린 결과입니다(다시 check하지 않아도 됩니다).
+- upsert_item·remove_item·set_coverage: 원문을 읽고 항목을 직접 넣고·고치고·빼고, 섹션 상태를 정합니다. 문제 항목의 인용 위치부터 read_page로 읽습니다.
+- extract_section: 맡은 섹션을 기존 추출기로 처음부터 다시 뽑습니다(섹션이 비었거나 통째로 잘못됐을 때만. 초안의 이 섹션을 바꿈).
+- check: 고친 뒤 맡은 섹션에 남은 문제를 다시 봅니다.
+- done: 끝냅니다. summary에 고친 것, 원문으로 확인해 문제가 아니라고 본 것(근거 쪽), 남은 것을 짧게 적습니다. 총괄 에이전트가 이것을 읽고 다음을 정합니다.
+- 고칠 것이 없거나 원문으로 확인할 수 없으면 바로 done합니다. 읽기만 하는 차례도 비용이 듭니다.
 
 # 규칙
 - 근거는 공고 원문뿐입니다. 원문에서 확인하지 못한 값은 만들지 않습니다.
@@ -241,7 +243,7 @@ class WorkerTools(Reading):
         self.result = ""
         section = {"enum": list(self.sections)}
         self.specs = (
-            *READ_SPECS,
+            *(s for s in READ_SPECS if s.name != "outline"),  # 차례는 총괄이 봄(담당 첫 차례마다 outline을 불러 비용만 듦)
             ToolSpec("extract_section", "기존 섹션 추출기를 불러 맡은 섹션 전체를 초안에 넣습니다(초안의 이 섹션을 바꿈).", _object({})),
             ToolSpec(
                 "upsert_item",
@@ -328,6 +330,7 @@ def run_worker(env: Env, name: str, brief: str) -> dict[str, Any]:
     context = {
         "맡은 섹션": list(tools.sections),
         "총괄 지시": brief,
+        "남은 문제": issues_view(env.evaluate(env.draft.as_parts()), tools.sections).get("issues", []),  # 첫 차례를 check에 쓰지 않게 코드가 미리
         "지금 초안": env.draft.summary(tools.sections),
         "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": env.structure(),
     }
@@ -349,7 +352,11 @@ def run_worker(env: Env, name: str, brief: str) -> dict[str, Any]:
 
 SUPERVISOR_INSTRUCTIONS = """# 할 일 (총괄 에이전트)
 공고 하나의 추출을 맡습니다. 결과는 작업 초안이고, finish로 끝내면 그대로 게시 준비가 됩니다. 순서·방법은 스스로 정합니다.
-- outline·search_source·read_page·read_table로 공고를 파악합니다.
+- 「원문 차례」(outline 결과)는 처음 요청에 있습니다. 필요하면 search_source·read_page·read_table로 더 읽습니다.
+- extract_all: 기존 섹션 추출기를 모든 섹션에 한꺼번에(동시에) 돌려 초안을 채웁니다. 가장 싸고 빠른 첫 뽑기입니다.
+  그림 쪽(pictureOnlyPages)에 가격표 같은 내용이 있으면 read_images를 먼저 합니다.
+- 권하는 흐름: (read_images) → extract_all → check_all → 문제가 있는 섹션만 delegate_many로 고치게 맡김(brief에 그 문제) → check_all → finish.
+  문제가 없거나 남은 문제를 원문으로 판단할 수 있으면 담당에게 맡기지 않고 끝냅니다. 담당 차례는 비용이 큽니다.
 - read_images: 글자 없는 그림 쪽(가격표 등이 그림인 경우)의 글자를 옮겨 원문 끝에 붙입니다. outline의 pictureOnlyPages가 있을 때 판단해서 씁니다.
 - delegate: 하위 에이전트(섹션 담당)에 일을 맡깁니다. brief에 무엇을 할지(처음 뽑기, 특정 문제 고치기, 빠진 표 행 더하기 등) 구체적으로 적습니다.
   구조 담당(notice·위치·공급)이 먼저여야 다른 담당이 그 ID를 씁니다. 같은 담당은 최대 3번까지 맡길 수 있습니다.
@@ -373,6 +380,7 @@ class SupervisorTools(Reading):
         target = _object({"code": STRING, "target": STRING, "reason": STRING})
         self.specs = (
             *READ_SPECS,
+            ToolSpec("extract_all", "기존 섹션 추출기를 모든 섹션에 동시에 돌려 초안을 채웁니다(초안을 바꿈).", _object({})),
             ToolSpec("read_images", "글자 없는 그림 쪽을 그림으로 읽어 글자를 원문 끝에 붙입니다(한 번만).", _object({})),
             ToolSpec(
                 "delegate", "하위 에이전트에 일을 맡기고 결과(요약·초안 상태)를 받습니다.", _object({"worker": {"enum": list(env.workers)}, "brief": STRING})
@@ -438,6 +446,20 @@ class SupervisorTools(Reading):
                 futures.append(pool.submit(run_worker, self.env, task["worker"], str(task.get("brief") or "")))
             return {"results": [f.result() for f in futures]}
 
+    def _extract_all(self) -> dict[str, Any]:
+        run = self.env.extract_all()
+        self.env.run.attempts += run.attempts
+        self.env.run.raw_responses += run.raw_responses
+        self.env.run.failed_calls += run.failed_calls
+        owned: dict[str, list[dict[str, Any]]] = {}
+        for part in run.parts:  # 조각마다 그 섹션 담당에게(구조 추출의 공급 조각은 구조 담당, 여러 담당 섹션을 함께 담은 조각은 나눔)
+            if isinstance(part, dict):
+                for owner, piece in split_by_owner(part, self.env.draft.owners).items():
+                    owned.setdefault(owner, []).append(piece)
+        for owner, parts in owned.items():
+            self.env.draft.put_parts(owner, parts)
+        return {"failedCalls": [f"{name}: {reason[:120]}" for name, reason in run.failed_calls], "draft": self.env.draft.summary()}
+
     def _check_all(self) -> dict[str, Any]:
         return issues_view(self.env.evaluate(self.env.draft.as_parts()))
 
@@ -452,7 +474,11 @@ def run_supervisor(env: Env) -> None:
     tools = SupervisorTools(env)
     log = AgentLog("supervisor")
     env.logs.append(log)
-    context = {"하위 에이전트": {name: list(spec.sections) for name, spec in env.workers.items()}, "지금 초안": env.draft.summary()}
+    context = {
+        "하위 에이전트": {name: list(spec.sections) for name, spec in env.workers.items()},
+        "원문 차례": tools._outline(),  # 첫 차례를 outline에 쓰지 않게 코드가 미리
+        "지금 초안": env.draft.summary(),
+    }
     base = ModelRequest(
         prompt_version=f"{env.rules.field}/{env.rules.prompt_version}/agentic-supervisor",
         call_name="agentic:supervisor",
