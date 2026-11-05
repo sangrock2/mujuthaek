@@ -38,6 +38,7 @@ def make_env(rules: FieldRules, intake: Any, rt: pipeline.Runtime) -> Env:
         read_images=lambda material, context: pipeline.read_images(material, context, rt),
         workers=workers,
         draft=Draft(owners, intake.material.text_document_id),
+        stagger=rt.parallel_stagger,
     )
     env.evaluate = lambda parts: pipeline.evaluate_parts(parts, env.material, env.context, rt)
     return env

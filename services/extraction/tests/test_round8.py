@@ -130,3 +130,13 @@ def test_fixed_end_date_with_an_early_end_condition_stays_fixed():
     # 끝 날짜가 없는 조건부 종료는 그대로입니다
     open_ended = {"endsAt": None, "endStatus": "CONDITIONAL", "endCondition": "예산 소진 시 마감", "timeNote": None}
     assert fix_format_slips({"schedules": [open_ended]})["schedules"][0]["endStatus"] == "CONDITIONAL"
+
+
+def test_filler_reason_on_a_structured_rule_is_cleared():
+    # 2026-11-05 실측 sh-311087: 다시 요청한 선정 답이 구조화한 배점 6행의 사유에 「조건을 구조화했어요.」를 적어 형식 오류로 모두 빠짐
+    from mujuthaek_extraction.assemble.slips import fix_format_slips
+
+    structured = {"id": "s1", "rule": {"status": "STRUCTURED", "reason": "조건을 구조화했어요.", "expression": {"kind": "ATOMIC"}}}
+    unstructured = {"id": "s2", "rule": {"status": "UNSTRUCTURED", "reason": "조건식으로 표현할 수 없어요.", "expression": None}}
+    fixed = fix_format_slips({"selectionRules": [structured, unstructured]})["selectionRules"]
+    assert fixed[0]["rule"]["reason"] is None and fixed[1]["rule"]["reason"] == "조건식으로 표현할 수 없어요."

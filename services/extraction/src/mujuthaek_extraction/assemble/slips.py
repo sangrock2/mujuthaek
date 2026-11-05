@@ -2,7 +2,7 @@
 
 OpenAI 엄격 모드는 비울 칸도 채우게 해서 다음 실수가 생깁니다(실측 OpenAI LH 대전 영구임대: 가점표 12행이 형식 오류로 빠지고
 일정·선정 호출을 한 번씩 다시 요청함). 원문 사실을 지어내지 않는 고침만 둡니다.
-- 구조화된 조건의 사유를 null 대신 「""」로 적음 → null
+- 구조화된 조건(조건식 있음)의 사유를 null 대신 「""」나 「조건을 구조화했어요.」 같은 글로 적음 → null
 - 추첨 등 순서가 없는 선정 항목에 순서 번호를 적음 → null
 - 안내·신청 링크를 「www.lh.or.kr」처럼 프로토콜 없이 적음 → 「https://」를 붙임
 - 자격 조건 예외를 PRESENT로 적고 예외 목록은 비움 → NOT_REVIEWED(사람 확인). 실측 OpenAI 청약홈 에코델타: 이 실수와 링크 실수로
@@ -39,7 +39,10 @@ def fix_format_slips(part: Any) -> Any:
             item["order"] = None
     for section in ("eligibility", "selectionRules"):
         for node in _nodes(part.get(section)):
-            if node.get("reason") == "" and node.get("status") == "STRUCTURED":
+            # 조건식이 있는 구조화 조건의 사유 칸은 계약상 비어야 합니다. 「조건을 구조화했어요.」 같은 채움 글도 원문 사실이 아니라 비웁니다
+            # (2026-11-05 실측 sh-311087: 다시 요청한 선정 답의 소득·자산 배점 6행이 이 글 때문에 형식 오류로 모두 빠짐)
+            reason = node.get("reason")
+            if node.get("status") == "STRUCTURED" and (reason == "" or (isinstance(reason, str) and node.get("expression"))):
                 node["reason"] = None
     for section, key in (("guidance", "url"), ("schedules", "applicationUrl")):
         for item in part.get(section) or []:
