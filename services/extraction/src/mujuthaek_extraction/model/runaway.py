@@ -11,14 +11,18 @@ RUNAWAY_CHUNK = 200  # 이 길이의 같은 조각이
 RUNAWAY_REPEATS = 3  # 한 문자열 값 안에서 이만큼 나오면 폭주
 RUNAWAY_STEP = 100  # 조각을 뽑는 간격
 MAX_STRING_CHARS = 2_000  # 인용·설명 글 하나가 이보다 길면 폭주(인용은 원문 한 줄 안이고 지시는 300자 이내)
+# 그림 판독은 그림 한 장의 글자를 문자열 하나에 옮겨 적어 2,000자를 넘는 것이 정상입니다(2026-11-05 sh-311087 가격표 그림 판독이
+# 길이 규칙에 걸려 통째로 버려짐). 이런 호출에는 길이 규칙을 빼고 반복 규칙만 씁니다
+LONG_TEXT_CALLS = frozenset({"image_text"})
 JSON_STRING = re.compile(r'"((?:[^"\\]|\\.)*)(?:"|$)', re.S)
 
 
-def runaway(raw: str) -> str | None:
+def runaway(raw: str, call_name: str | None = None) -> str | None:
     """응답 글의 반복 폭주 이유(없으면 None). 잘린 응답의 마지막(닫히지 않은) 문자열 값도 봅니다."""
+    long_text = call_name in LONG_TEXT_CALLS
     for match in JSON_STRING.finditer(raw):
         value = match[1]
-        if len(value) > MAX_STRING_CHARS:
+        if not long_text and len(value) > MAX_STRING_CHARS:
             return f"글 하나가 {len(value):,}자입니다(한도 {MAX_STRING_CHARS:,}자)"
         if len(value) < RUNAWAY_CHUNK * RUNAWAY_REPEATS:
             continue

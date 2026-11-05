@@ -84,7 +84,7 @@ class OpenAIResponsesModel:
         light_calls: frozenset[str] = frozenset(),
         light_effort: str = "low",
         stream: bool = False,
-        runaway_check: Callable[[str], str | None] | None = None,
+        runaway_check: Callable[[str, str], str | None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._api_key = api_key
@@ -253,7 +253,7 @@ class OpenAIResponsesModel:
                 if self.runaway_check is not None and size - checked >= RUNAWAY_CHECK_CHARS:
                     checked = size
                     raw = "".join(parts)
-                    reason = self.runaway_check(raw)
+                    reason = self.runaway_check(raw, request.call_name)
                     if reason is not None:
                         return self._aborted(request, body, raw, reason)
             elif kind in ("response.completed", "response.incomplete"):
