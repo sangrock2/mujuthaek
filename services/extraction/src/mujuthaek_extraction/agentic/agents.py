@@ -27,7 +27,7 @@ from mujuthaek_extraction.extract import ExtractionRun, run_extraction
 from mujuthaek_extraction.image_reading import BLOCK_HEAD, image_targets
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 from mujuthaek_extraction.judgment.pages import PAGE_MARK
-from mujuthaek_extraction.model.base import ExtractionModel, ModelRequest, ToolCall, ToolSpec
+from mujuthaek_extraction.model.base import ExtractionModel, ModelRequest, ToolCall, ToolSpec, ToolTurn
 from mujuthaek_extraction.repair.tools import RepairTools, _clean_quotes, _error, _limit, _merge, _object, _parse_item, item_refs
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, call_schema, document_ids, structure_summary
 from mujuthaek_extraction.verify import VerificationReport
@@ -41,13 +41,38 @@ OUTLINE_CHARS = 6_000
 SUMMARY_CHARS = 700  # 맡긴 담당이 돌려주는 요약 글자 상한(동시에 넷을 맡겨도 결과가 한 차례 입력으로 적당하게)
 WHOLE_RESULTS = frozenset({"outline", "delegate", "delegate_many"})  # 길어도 버리지 않고 그대로 돌려주는 도구 결과
 ISSUES_SHOWN = 25
-TURN_OUTPUT_TOKENS = 8_000
+# 차례 출력 한도 8,000 → 4,000(2026-11-05 점검): 실측 차례 출력은 100~1,000토큰인데, 공고당 상한은 차례마다 최악 비용(출력 한도 전부)을
+# 잡아 두어 동시 담당 넷이면 실제 비용이 적어도 상한이 막혔음
+TURN_OUTPUT_TOKENS = 4_000
+SESSION_CHARS = 60_000  # 다시 맡긴 담당의 대화를 이어 갈 최대 길이(앞선 차례 글자). 넘으면 새 대화로
+WHERE_ISSUES = 12  # 담당 첫 요청에서 원문 위치를 붙여 줄 문제 수
 SECTION_HEAD = re.compile(r"^\s*(?:\d{1,2}\s*[.)]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\s*\.?|[■□◆◇▶])\s*\S.{0,58}$")
 STRING, INTEGER = {"type": "string"}, {"type": "integer"}
 QUOTES = {"type": "array", "items": _object({"ref": STRING, "text": STRING})}
 
 
-def turns(env_name: str, default: int) -> int:
+SECTION_RULES = re.compile(r"^## 2-\d+\. .*\(`(\w+)`\)")
+# 담당 섹션 → 공통 지시에서 남길 섹션 규칙(선정은 조건식·속성 사전이 자격 규칙에 있어 함께)
+PROMPT_SECTIONS = {"selectionRules": ("selectionRules", "eligibility")}
+
+
+def section_prompt(full: str, sections: tuple[str, ...]) -> str:
+    """공통 지시에서 「2. 섹션별로 넣을 것」 중 맡은 섹션의 규칙만 남깁니다(원칙·근거 인용·값 작성·누락 규칙은 그대로).
+    2026-11-05 점검: 담당·총괄 모두 공통 지시 전체(24,694자)를 받아 차례마다 그만큼 입력(자격 담당에 필요한 것은 약 9,100자)."""
+    keep_sections = {k for s in sections for k in PROMPT_SECTIONS.get(s, (s,))}
+    out, keep = [], True
+    for line in full.split("\n"):
+        match = SECTION_RULES.match(line)
+        if match:
+            keep = match.group(1) in keep_sections
+        elif line.startswith("# "):
+            keep = True
+        if keep:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _turns(env_name: str, default: int) -> int:
     value = os.getenv(env_name, "")
     return max(2, int(value)) if value.strip().isdigit() else default
 
@@ -77,9 +102,14 @@ class Env:
     logs: list[AgentLog] = field(default_factory=list)
     image_run: ExtractionRun | None = None
     decision: Decision | None = None
+    decision_dropped: list[dict[str, Any]] = field(default_factory=list)  # 결정 중 근거가 확인되지 않아 버린 것(기록)
     delegations: dict[str, int] = field(default_factory=dict)
     stagger: float = 0.0  # 동시에 맡길 때 담당을 내보내는 간격(초, 설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)
     progress: Callable[[], dict[str, Any]] = lambda: {}  # noqa: E731 — 도구 결과마다 붙일 진행 사실(쓴 비용·남은 상한·뽑아 둔 담당)
+    # 담당 대화(요청 바탕, 쌓인 차례, 다음 차례 번호): 같은 담당을 다시 맡기면 이어 갑니다(새 대화는 공통 지시 캐시 쓰기를 다시 하고 읽은 것을 잃음)
+    sessions: dict[str, tuple[ModelRequest, list[ToolTurn], int]] = field(default_factory=dict)
+    # 코드가 주소마다 만든 위치: 담당에게 주는 구조 요약에서 뺍니다(지금 흐름과 같게, 큰 공고에서 수백 곳)
+    hidden_locations: set[str] = field(default_factory=set)
     _reader: RepairTools | None = None
 
     @property
@@ -99,7 +129,21 @@ class Env:
         if notice is None:
             return None
         groups = [g for p in owned for g in p.get("supplyGroups") or []]
-        return structure_summary({**notice, "supplyGroups": groups})
+        summary = structure_summary({**notice, "supplyGroups": groups})
+        if summary and self.hidden_locations:
+            summary["locations"] = [loc for loc in summary.get("locations") or [] if loc.get("id") not in self.hidden_locations]
+        return summary
+
+    def note_extraction(self, run: ExtractionRun) -> None:
+        """추출기가 뒤 호출에 넘긴 구조 요약에 없는 위치(코드가 주소마다 만든 위치)를 기억해 담당 요약에서 뺍니다."""
+        if run.structure is None:
+            return
+        shown = {loc.get("id") for loc in run.structure.get("locations") or []}
+        self.hidden_locations |= {i for i in self.draft.structure_ids() if i not in shown} - {g for g in self._group_ids()}
+
+    def _group_ids(self) -> set[str]:
+        owned = self.draft.parts.get(self.draft.owners.get("supplyGroups", ""), [])
+        return {g.get("id") for p in owned for g in p.get("supplyGroups") or [] if isinstance(g, dict)}
 
 
 def _with_progress(text: str, progress: dict[str, Any]) -> str:
@@ -255,7 +299,8 @@ WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
 - extract_section: 맡은 섹션을 기존 추출기로 처음부터 다시 뽑습니다(초안의 이 섹션을 바꿈). 모델 호출 1번(약 $0.004, 40~60초).
 - check: 고친 뒤 맡은 섹션에 남은 문제를 다시 봅니다.
 - done: 끝냅니다. summary에 고친 것, 원문으로 확인해 문제가 아니라고 본 것(근거 쪽), 남은 것을 짧게 적습니다. 총괄 에이전트가 이것을 읽고 다음을 정합니다.
-- 차례마다 비용이 듭니다(읽기만 하는 차례 포함, 1번 약 $0.0004).
+- 차례마다 비용이 듭니다(읽기만 하는 차례 포함, 1번 약 $0.0004). 한 차례에 도구 여럿을 부를 수 있습니다(쪽 여러 개 읽기 등).
+- 「남은 문제」의 where는 그 항목 근거가 원문 어디에 있는지(쪽·pageChar·앞뒤 글)입니다.
 
 # 규칙
 - 근거는 공고 원문뿐입니다. 원문에서 확인하지 못한 값은 만들지 않습니다.
@@ -264,6 +309,9 @@ WORKER_INSTRUCTIONS = """# 할 일 (하위 에이전트)
 - upsert_item의 item_json은 고칠 때 바꿀 칸만 적어도 됩니다(같은 id의 나머지 칸은 그대로). 새 항목은 모든 칸을 적습니다.
 - 「총괄 지시」가 있으면 그것을 먼저 합니다. 이미 초안이 있으면 처음부터 다시 뽑지 말고 필요한 곳만 고칩니다.
 - 차례 수가 제한됩니다(도구 결과의 turnsLeft). 마지막 차례에는 done만 부를 수 있습니다."""
+
+
+JUDGED_SECTIONS = ("notice", "eligibility")
 
 
 class WorkerTools(Reading):
@@ -307,6 +355,8 @@ class WorkerTools(Reading):
             return {"error": "EXTRACT_FAILED", "message": "; ".join(r for _, r in run.failed_calls)[:300] or "응답이 없습니다."}
         before = self.env.draft.structure_ids() if "notice" in self.sections else set()
         self.env.draft.put_parts(self.name, parts)  # 구조 추출은 공고·위치 조각과 코드가 표에서 옮긴 공급 조각 둘을 냄
+        if "notice" in self.sections:
+            self.env.note_extraction(run)
         result: dict[str, Any] = {"ok": True, "draft": self.env.draft.summary(self.sections)}
         gone = before - self.env.draft.structure_ids()
         dependents = self.env.draft.referencing(gone, self.name) if gone else []
@@ -358,6 +408,9 @@ class WorkerTools(Reading):
     def _set_coverage(self, section: str, status: str, reason: str) -> dict[str, Any]:
         if section not in self.sections or status not in COVERAGE:
             return {"error": "BAD_ARGUMENTS", "message": "맡은 섹션과 정해진 상태만 씁니다."}
+        if section in JUDGED_SECTIONS and status in ("NOT_IN_SOURCE", "NOT_APPLICABLE"):
+            # 판정에 쓰는 섹션을 비우면 「조건 없음 = 누구나 지원 가능」이 될 수 있어(2026-11-05 점검) 에이전트는 비우지 못합니다
+            return {"error": "NOT_ALLOWED", "message": f"{section}은 판정에 쓰여 비울 수 없습니다. 원문에 없으면 그대로 두고 총괄이 보류합니다."}
         self.env.draft.set_coverage(section, status, reason)
         return {"ok": True}
 
@@ -369,27 +422,66 @@ class WorkerTools(Reading):
         return {"received": True}
 
 
+def _where(env: Env, report: VerificationReport | None, target: str) -> dict[str, Any] | None:
+    """문제 항목의 첫 근거가 원문 어디에 있는지(쪽·쪽 안 위치·앞뒤 글). 담당이 찾는 차례를 쓰지 않게 코드가 미리 찾습니다(#17 locate와 같은 방식)."""
+    if report is None:
+        return None
+    parts = target.split(" ", 1)[0].lstrip("/").split("/")
+    candidate = report.candidate
+    if len(parts) < 2 or parts[0] not in candidate or not parts[1].isdigit():
+        return None
+    items = candidate[parts[0]]
+    index = int(parts[1])
+    if not isinstance(items, list) or index >= len(items):
+        return None
+    ids = items[index].get("evidenceIds") or []
+    evidence = next((e for e in candidate.get("evidence") or [] if e["id"] in ids and e["locator"]["kind"] == "TEXT_RANGE"), None)
+    if evidence is None:
+        return None
+    return env.reader._hit(evidence["locator"]["start"], evidence["locator"]["end"])
+
+
+def _worker_context(env: Env, sections: tuple[str, ...], brief: str) -> dict[str, Any]:
+    report = env.evaluate(env.draft.as_parts())
+    issues = issues_view(report, sections).get("issues", [])
+    for issue in issues[:WHERE_ISSUES]:
+        where = _where(env, report, issue["target"])
+        if where:
+            issue["where"] = where
+    return {
+        "맡은 섹션": list(sections),
+        "총괄 지시": brief,
+        "남은 문제": issues,  # 첫 차례를 check·찾기에 쓰지 않게 코드가 미리(문제 항목의 근거 위치 포함)
+        "지금 초안": env.draft.summary(sections),
+        "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": env.structure(),
+    }
+
+
 def run_worker(env: Env, name: str, brief: str) -> dict[str, Any]:
     tools = WorkerTools(env, name)
     log = AgentLog(f"worker:{name}")
     env.logs.append(log)
-    context = {
-        "맡은 섹션": list(tools.sections),
-        "총괄 지시": brief,
-        "남은 문제": issues_view(env.evaluate(env.draft.as_parts()), tools.sections).get("issues", []),  # 첫 차례를 check에 쓰지 않게 코드가 미리
-        "지금 초안": env.draft.summary(tools.sections),
-        "이미 추출한 구조 (scope·locationId에는 이 ID만 사용)": env.structure(),
-    }
-    base = ModelRequest(
-        prompt_version=f"{env.rules.field}/{env.rules.prompt_version}/agentic-worker",
-        call_name=f"agentic:{name}",
-        system=env.rules.system_prompt(),
-        user=json.dumps(context, ensure_ascii=False, indent=1),
-        instructions=WORKER_INSTRUCTIONS,
-        output_schema=call_schema(tools.sections, document_ids(env.material)),
-        max_output_tokens=TURN_OUTPUT_TOKENS,
-    )
-    run_loop(env.model, base, tools, turns("EXTRACTION_AGENTIC_WORKER_TURNS", WORKER_TURNS), env.run, log)
+    context = _worker_context(env, tools.sections, brief)
+    session = env.sessions.get(name)
+    if session is not None and session[1] and sum(len(r) for t in session[1] for r in t.results) < SESSION_CHARS:
+        # 같은 담당을 다시 맡김: 앞선 대화에 새 지시를 덧붙여 이어 갑니다(공통 지시 캐시를 다시 쓰지 않고, 앞서 읽은 것을 기억)
+        base, previous, first = session
+        note = "# 다시 맡김\n" + json.dumps(context, ensure_ascii=False, indent=1)
+        turns = [*previous[:-1], ToolTurn(previous[-1].calls, previous[-1].results, note)] if previous else []
+    else:
+        base = ModelRequest(
+            prompt_version=f"{env.rules.field}/{env.rules.prompt_version}/agentic-worker",
+            call_name=f"agentic:{name}",
+            system=section_prompt(env.rules.system_prompt(), tools.sections),
+            user=json.dumps(context, ensure_ascii=False, indent=1),
+            instructions=WORKER_INSTRUCTIONS,
+            output_schema=call_schema(tools.sections, document_ids(env.material)),
+            max_output_tokens=TURN_OUTPUT_TOKENS,
+            parallel_tools=True,
+        )
+        turns, first = [], 1
+    turns = run_loop(env.model, base, tools, _turns("EXTRACTION_AGENTIC_WORKER_TURNS", WORKER_TURNS), env.run, log, turns=turns, first=first)
+    env.sessions[name] = (base, turns, first + log.turns)
     counts = {k: v["count"] if isinstance(v, dict) and "count" in v else v for k, v in env.draft.summary(tools.sections).items()}
     return {"worker": name, "outcome": log.outcome, "turns": log.turns, "summary": tools.result[:SUMMARY_CHARS], "draft": counts}
 
@@ -402,12 +494,14 @@ SUPERVISOR_INSTRUCTIONS = """# 할 일 (총괄 에이전트)
 - extract_all: 기존 섹션 추출기를 모든 섹션에 동시에 돌려 초안을 채웁니다(초안을 바꿈). 모델 호출 3~5번을 동시에(약 $0.02, 1~2분).
 - 그림 쪽(pictureOnlyPages)의 글자는 read_images를 하기 전에는 원문에 없습니다(약 $0.004, 20~40초).
 - 비용·시간 참고: 담당을 처음 부를 때 약 $0.002, 그 뒤 담당·총괄 차례 1번 약 $0.0004·5~15초. 공고당 비용 상한이 있습니다.
+  한 차례에 도구 여럿을 부를 수 있습니다. 같은 담당을 다시 맡기면 그 담당의 앞선 대화를 이어 갑니다.
 - read_images: 글자 없는 그림 쪽(가격표 등이 그림인 경우)의 글자를 옮겨 원문 끝에 붙입니다. outline의 pictureOnlyPages가 있을 때 판단해서 씁니다.
 - delegate: 하위 에이전트(섹션 담당)에 일을 맡깁니다. brief에 무엇을 할지(처음 뽑기, 특정 문제 고치기, 빠진 표 행 더하기 등) 구체적으로 적습니다.
   구조 담당(notice·위치·공급)이 먼저여야 다른 담당이 그 ID를 씁니다. 같은 담당은 최대 3번까지 맡길 수 있습니다.
 - delegate_many: 서로 기대지 않는 담당 여럿을 동시에 맡깁니다(하나씩 맡길 때보다 시간이 줄어듦).
 - check_all: 초안 전체에 검증기를 돌려 남은 문제를 봅니다.
-- finish: 끝냅니다. 검증기 문제 중 원문으로 확인해 문제가 아니라고 판단한 것은 accept에(code·target을 check_all 결과 그대로, reason에 확인한 근거),
+- finish: 끝냅니다. 검증기 문제 중 원문으로 확인해 문제가 아니라고 판단한 것은 accept에(code·target을 check_all 결과 그대로, reason에 판단,
+  quote에 확인한 원문 구간 그대로 — 프로그램이 원문에 있는지·값 문제면 그 값이 quote에 있는지 확인하고, 맞지 않으면 한 번 돌려보냄),
   확인이 필요한 곳은 hold에 적습니다. accept한 값은 사람 확인 없이 게시되므로 원문으로 확인한 것만 넣습니다. 남긴 문제는 그 범위만 보류됩니다.
   IMAGE_READING_DISAGREES(그림을 두 번 읽은 글자가 다름)는 원문 그림과 맞춰야 해서 받아들일 수 없습니다.
 
@@ -422,7 +516,9 @@ class SupervisorTools(Reading):
     def __init__(self, env: Env):
         self.env = env
         self.done = False
-        target = _object({"code": STRING, "target": STRING, "reason": STRING})
+        self.final = False  # 마지막 차례(run_loop가 알려 줌): 결정 오류를 돌려보내지 않고 맞는 것만 받습니다
+        self.returned = False  # 결정 오류를 한 번 돌려보냈는지
+        target = _object({"code": STRING, "target": STRING, "reason": STRING, "quote": STRING})
         self.specs = (
             *READ_SPECS,
             ToolSpec("extract_all", "기존 섹션 추출기를 모든 섹션에 동시에 돌려 초안을 채웁니다(초안을 바꿈).", _object({})),
@@ -438,7 +534,7 @@ class SupervisorTools(Reading):
             ToolSpec("check_all", "초안 전체에 검증기를 돌려 남은 문제와 검증기가 낼 상태를 봅니다.", _object({})),
             ToolSpec(
                 "finish",
-                "끝냅니다. accept: 받아들인 검증기 문제(code·target·reason), hold: 보류할 위치(target·reason).",
+                "끝냅니다. accept: 받아들인 검증기 문제(code·target·reason·quote — quote는 확인한 원문 구간 그대로), hold: 보류할 위치(target·reason).",
                 _object(
                     {
                         "accept": {"type": "array", "items": target},
@@ -514,6 +610,7 @@ class SupervisorTools(Reading):
         for owner, parts in owned.items():
             if owner not in filled:  # 합쳐진 호출을 다시 돌려도 이미 있던 담당 몫(담당이 고친 것)은 덮어쓰지 않습니다(2026-11-05 점검)
                 self.env.draft.put_parts(owner, parts)
+        self.env.note_extraction(run)  # 초안에 넣은 뒤(코드가 만든 위치를 초안에서 찾음)
         failed = [f"{name}: {reason[:120]}" for name, reason in run.failed_calls]
         return {"extracted": [c.name for c in missing], "skipped": skipped, "failedCalls": failed, "draft": self.env.draft.summary()}
 
@@ -521,10 +618,67 @@ class SupervisorTools(Reading):
         return issues_view(self.env.evaluate(self.env.draft.as_parts()))
 
     def _finish(self, accept: list[dict[str, str]], hold: list[dict[str, str]], note: str) -> dict[str, Any]:
-        clean = lambda rows, keys: [{k: str(r.get(k, ""))[:300] for k in keys} for r in rows or [] if isinstance(r, dict)]  # noqa: E731
-        self.env.decision = Decision(clean(accept, ("code", "target", "reason")), clean(hold, ("target", "reason")), (note or "")[:1_000])
+        def clean(rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
+            return [{k: str(r.get(k, ""))[:300] for k in keys} for r in rows or [] if isinstance(r, dict)]
+
+        accept, hold = clean(accept, ("code", "target", "reason", "quote")), clean(hold, ("target", "reason"))
+        problems = decision_problems(self.env, accept, hold)
+        if problems and not self.returned and not self.final:
+            # 결정 오류를 조용히 버리지 않고 한 번 돌려보내 고치게 합니다(2026-11-05 점검, 재확인 submit_fix 되돌리기와 같은 방식)
+            self.returned = True
+            return {"received": False, "error": "DECISION_PROBLEMS", "problems": problems[:15], "message": "고쳐서 다시 finish합니다(맞는 것만 남겨도 됨)."}
+        bad_accepts = {p["index"] for p in problems if p["kind"] == "accept"}
+        bad_holds = {p["index"] for p in problems if p["kind"] == "hold"}
+        self.env.decision = Decision(
+            [a for i, a in enumerate(accept) if i not in bad_accepts], [h for i, h in enumerate(hold) if i not in bad_holds], (note or "")[:1_000]
+        )
+        self.env.decision_dropped = problems
         self.done = True
-        return {"received": True}
+        return {"received": True, **({"dropped": len(problems)} if problems else {})}
+
+
+# 받아들이기에 값이 그 인용에 있는지까지 확인하는 문제(값–근거 대조 문제)
+VALUE_CODES = frozenset({"VALUE_NOT_IN_QUOTE", "VALUE_POSITION_SUSPECTED", "CLAIM_UNSUPPORTED"})
+DIGITS = re.compile(r"\d")
+
+
+def decision_problems(env: Env, accept: list[dict[str, str]], hold: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """총괄 결정의 잘못: 지금 없는 문제·받아들일 수 없는 문제·원문에 없는 인용·인용에 없는 값(받아들이기), 보류할 수 없는 위치(보류).
+    받아들이기는 공개 판단을 에이전트에게 맡기되(사용자 결정 2026-11-05), 근거가 확인된 것만 받습니다."""
+    from mujuthaek_extraction.agentic.engine import UNACCEPTABLE, _pointer  # engine이 이 모듈을 가져다 써서 실행할 때 가져옵니다
+    from mujuthaek_extraction.contracts import tools as contract_tools
+
+    report = env.evaluate(env.draft.as_parts())
+    if report is None:
+        return []
+    candidate = report.candidate
+    current = {(i["code"], i["target"]) for i in candidate["quality"]["reviewIssues"]}
+    problems: list[dict[str, Any]] = []
+    for index, row in enumerate(accept):
+        code, target, quote = row["code"], row["target"], row.get("quote", "").strip()
+        reason = None
+        if (code, target) not in current:
+            reason = "check_all 결과에 없는 문제입니다(code·target을 그대로 적습니다)."
+        elif code in UNACCEPTABLE:
+            reason = "원문 그림과 맞춰야 하는 문제라 받아들일 수 없습니다."
+        elif not quote or not env.reader._check_quote(quote).get("found"):
+            reason = "quote가 원문에 글자 그대로 있어야 합니다(check_quote로 확인)."
+        elif code in VALUE_CODES:
+            try:
+                value = contract_tools().resolve(candidate, target)
+            except (KeyError, IndexError, TypeError, ValueError):
+                value = None
+            digits = "".join(DIGITS.findall(str(value))) if isinstance(value, int | float) else ""
+            if digits and digits not in "".join(DIGITS.findall(quote)):
+                reason = f"값 {value}이(가) quote에 없습니다. 그 값이 적힌 원문 구간을 quote로 냅니다."
+        if reason:
+            problems.append({"kind": "accept", "index": index, "code": code, "target": target, "message": reason})
+    for index, row in enumerate(hold):
+        if _pointer(candidate, row["target"]) is None:
+            problems.append(
+                {"kind": "hold", "index": index, "target": row["target"], "message": "보류할 수 있는 위치가 아닙니다(예: /eligibility/3, /supplyGroups)."}
+            )
+    return problems
 
 
 def run_supervisor(env: Env) -> None:
@@ -539,10 +693,11 @@ def run_supervisor(env: Env) -> None:
     base = ModelRequest(
         prompt_version=f"{env.rules.field}/{env.rules.prompt_version}/agentic-supervisor",
         call_name="agentic:supervisor",
-        system=env.rules.system_prompt(),
+        system=section_prompt(env.rules.system_prompt(), ()),  # 총괄은 항목을 쓰지 않아 섹션 규칙을 뺌
         user=json.dumps(context, ensure_ascii=False, indent=1),
         instructions=SUPERVISOR_INSTRUCTIONS,
         output_schema=call_schema(("notice",), document_ids(env.material)),  # 도구 요청이라 쓰이지 않음(요청 형식상 필요)
         max_output_tokens=TURN_OUTPUT_TOKENS,
+        parallel_tools=True,
     )
-    run_loop(env.model, base, tools, turns("EXTRACTION_AGENTIC_SUPERVISOR_TURNS", SUPERVISOR_TURNS), env.run, log)
+    run_loop(env.model, base, tools, _turns("EXTRACTION_AGENTIC_SUPERVISOR_TURNS", SUPERVISOR_TURNS), env.run, log)

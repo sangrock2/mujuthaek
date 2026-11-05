@@ -77,7 +77,8 @@ def apply_decision(report: VerificationReport, decision: Decision | None) -> dic
         if reason is None:
             kept.append(issue)
             continue
-        description = f"{issue['code']} — 에이전트가 원문으로 확인: {reason} (검증기: {issue['description']})"
+        quote = next((a.get("quote", "") for a in decision.accept if (a["code"], a["target"]) == (issue["code"], issue["target"])), "")
+        description = f"{issue['code']} — 에이전트가 원문으로 확인: {reason} 근거 「{quote[:200]}」 (검증기: {issue['description']})"
         quality["notes"].append({"code": ACCEPTED, "target": issue["target"], "description": description[:1_000]})
         record["accepted"].append({"code": issue["code"], "target": issue["target"]})
     record["unmatched"] = [{"code": code, "target": target} for code, target in wanted]
@@ -155,6 +156,7 @@ def _record(env: Env, rt: pipeline.Runtime, before: list[dict[str, str]] | None,
             "agents": [log.summary() for log in env.logs],
             "delegations": dict(env.delegations),
             "decision": None if decision is None else {"accept": decision.accept, "hold": decision.hold, "note": decision.note},
+            "decisionDropped": env.decision_dropped,  # 근거가 확인되지 않아 버린 받아들이기·보류할 수 없는 위치
             "verifierIssues": before,
             "applied": applied,
         },

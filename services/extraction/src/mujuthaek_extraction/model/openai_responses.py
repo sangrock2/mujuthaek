@@ -160,7 +160,7 @@ class OpenAIResponsesModel:
                 for t in request.tools
             ]
             body["tool_choice"] = {"type": "function", "name": request.forced_tool} if request.forced_tool else "required"
-            body["parallel_tool_calls"] = False
+            body["parallel_tool_calls"] = request.parallel_tools
             # 같은 공통 지시를 쓰는 항목들을 같은 캐시로 보내는 열쇠(2026-11-05 실측: 항목마다 첫 차례가 공통 지시 1.5만 토큰을 다시 씀)
             body["prompt_cache_key"] = "repair-" + hashlib.sha256((request.system + request.instructions).encode("utf-8")).hexdigest()[:32]
             del body["text"]
@@ -168,6 +168,8 @@ class OpenAIResponsesModel:
             for call, output in zip(turn.calls, turn.results, strict=True):
                 body["input"].append({"type": "function_call", "call_id": call.call_id, "name": call.name, "arguments": call.arguments})
                 body["input"].append({"type": "function_call_output", "call_id": call.call_id, "output": output})
+            if turn.note:
+                body["input"].append({"role": "user", "content": [{"type": "input_text", "text": turn.note}]})
         if shared:
             body["prompt_cache_options"] = {"mode": "explicit"}
             # 같은 공고의 호출을 같은 캐시로 보내는 열쇠(원문 해시). 실측: 같은 원문인데 일정 호출에서 캐시를 다시 씀

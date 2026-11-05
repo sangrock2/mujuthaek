@@ -93,6 +93,8 @@ class ExtractionRun:
     failed_calls: list[tuple[str, str]] = field(default_factory=list)
     raw_responses: list[tuple[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # 잘림 뒤 나눠 부르기·항목 살리기처럼 결과를 만든 방법 (로그·작업 기록용)
+    # 뒤 호출에 넘긴 구조 요약(코드가 주소마다 만든 위치는 뺀 것). 에이전트 방식이 같은 요약을 담당에게 줍니다
+    structure: dict[str, Any] | None = None
 
 
 GUARD_NOTE = (
@@ -562,6 +564,7 @@ def run_extraction(
 
     with timed(usage, "sections"):
         run_calls()
+    run.structure = structure
     return run
 
 
