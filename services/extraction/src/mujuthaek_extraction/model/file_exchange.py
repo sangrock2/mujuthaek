@@ -8,11 +8,15 @@
   도구 요청이면 tools(이름·설명·입력 형식)·toolChoice(required 또는 반드시 부를 도구)·parallelTools·turns(앞선 도구 호출·결과·덧붙인 글)
   도구 요청이 아니면 outputSchema(답 JSON 형식)
   answerPath·answerFormat: 답을 쓸 곳과 모양
-답 파일(answerPath)  도구 요청: {"tool_calls": [{"name": "...", "arguments": {...}}]}  /  그 밖: {"text": "<출력 형식에 맞는 JSON 글자>"}
+답 파일(answerPath)  도구 요청: {"tool_calls": [{"name": "...", "arguments": {...}}]}  /  그 밖: {"json": {<출력 형식에 맞는 객체>}} (text도 받음)
+
+replay(EXTRACTION_STANDIN_REPLAY_DIR): 앞선 실행 폴더에 같은 요청(경로 빼고 내용이 같고, 그림은 내용이 같음)의 답이 있으면 그 답을 먼저 써 두고
+요청에 replayedFrom을 남깁니다. 고친 흐름을 같은 첫 추출 위에서 다시 시험할 때 대역이 같은 요청에 또 답하지 않게(호출 캐시와 같은 쓰임).
 """
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import re
@@ -27,13 +31,24 @@ from mujuthaek_extraction.model.base import ModelError, ModelRequest, ModelRespo
 SAFE = re.compile(r"[^0-9A-Za-z가-힣_.-]+")
 TOOL_FORMAT = '{"tool_calls": [{"name": "<도구 이름>", "arguments": {<그 도구 입력 형식에 맞는 값>}}]}'
 TEXT_FORMAT = '{"json": {<outputSchema에 맞는 JSON 객체를 그대로>}}'
+KEY_SKIP = ("answerPath", "images", "replayedFrom")  # 같은 요청인지 볼 때 빼는 칸(번호가 든 경로·기록)
 
 
 class FileExchangeModel:
     supports_tools = True
 
-    def __init__(self, folder: Path, *, timeout_seconds: float = 3_600, poll_seconds: float = 1.0, sleep: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        folder: Path,
+        *,
+        replay: Path | None = None,
+        timeout_seconds: float = 3_600,
+        poll_seconds: float = 1.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         self.folder = Path(folder)
+        self.replay = Path(replay) if replay else None
+        self._earlier: dict[str, Path] | None = None
         self.folder.mkdir(parents=True, exist_ok=True)
         self.timeout_seconds = timeout_seconds
         self.poll_seconds = poll_seconds
@@ -72,6 +87,10 @@ class FileExchangeModel:
             )
         else:
             body.update(outputSchema=request.output_schema, answerFormat=TEXT_FORMAT)
+        earlier = self._earlier_answer(_key(body, [image.data for image in request.images]))
+        if earlier is not None:
+            body["replayedFrom"] = str(earlier)
+            answer.write_bytes(earlier.read_bytes())  # 요청보다 먼저 써서 기다리는 요청으로 보이지 않게
         (self.folder / f"{stem}.request.md").write_text(_markdown(body), encoding="utf-8")  # 대역이 읽는 글(긴 줄 없이)
         temporary = self.folder / f"{stem}.request.tmp"
         temporary.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -85,6 +104,36 @@ class FileExchangeModel:
 
     def cache_identity(self, request: ModelRequest) -> dict[str, Any]:
         return {"provider": "standin"}
+
+    def _earlier_answer(self, key: str) -> Path | None:
+        if self.replay is None:
+            return None
+        with self._lock:
+            if self._earlier is None:
+                self._earlier = _answers_by_key(self.replay)
+            return self._earlier.get(key)
+
+
+def _key(body: dict[str, Any], images: list[bytes]) -> str:
+    keyed = {name: value for name, value in body.items() if name not in KEY_SKIP}
+    keyed["images"] = [hashlib.sha256(data).hexdigest() for data in images]
+    return hashlib.sha256(json.dumps(keyed, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _answers_by_key(folder: Path) -> dict[str, Path]:
+    """앞선 실행 폴더의 답 있는 요청들(같은 열쇠가 여럿이면 먼저 것)."""
+    found: dict[str, Path] = {}
+    for path in sorted(folder.glob("*.request.json")):
+        answer = path.with_name(path.name.removesuffix(".request.json") + ".answer.json")
+        if not answer.exists():
+            continue
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+            images = [Path(image).read_bytes() for image in body.get("images") or []]
+        except (OSError, ValueError):
+            continue
+        found.setdefault(_key(body, images), answer)
+    return found
 
 
 def _response(path: Path, number: int, tools: bool) -> ModelResponse:

@@ -4,8 +4,10 @@ import json
 import threading
 from pathlib import Path
 
+import pytest
+
 from mujuthaek_extraction.model import ModelRequest
-from mujuthaek_extraction.model.base import ModelImage, ToolCall, ToolSpec, ToolTurn
+from mujuthaek_extraction.model.base import ModelError, ModelImage, ToolCall, ToolSpec, ToolTurn
 from mujuthaek_extraction.model.call_cache import FileCallCache
 from mujuthaek_extraction.model.file_exchange import FileExchangeModel
 
@@ -61,6 +63,25 @@ def test_plain_request_answer_is_the_json_text(tmp_path):
     response = FileExchangeModel(tmp_path, poll_seconds=0.01).complete(request())
     thread.join()
     assert response.raw_text == '{"quotes": []}' and json.loads((tmp_path / "seen.json").read_text(encoding="utf-8"))["outputSchema"] == {"type": "object"}
+
+
+def test_replay_reuses_the_earlier_answer_for_the_same_request_only(tmp_path):
+    """앞선 실행에 같은 요청(경로는 달라도 내용·그림이 같음)의 답이 있으면 기다리지 않고 그 답을 씁니다. 다른 요청은 대역을 기다립니다."""
+    earlier, now = tmp_path / "earlier", tmp_path / "now"
+    earlier.mkdir()
+    image = ModelImage("그림 1", "image/png", b"png")
+    thread = answer_when_asked(earlier, {"json": {"quotes": ["앞선 답"]}})
+    FileExchangeModel(earlier, poll_seconds=0.01).complete(request(images=(image,)))
+    thread.join()
+
+    model = FileExchangeModel(now, replay=earlier, timeout_seconds=0.05, poll_seconds=0.01)
+    response = model.complete(request(images=(image,)))
+    assert json.loads(response.raw_text) == {"quotes": ["앞선 답"]}
+    written = json.loads(next(now.glob("*.request.json")).read_text(encoding="utf-8"))
+    assert written["replayedFrom"].startswith(str(earlier)) and written["answerPath"].startswith(str(now))
+    with pytest.raises(ModelError) as waited:
+        model.complete(request(images=(image,), user="다른 원문"))
+    assert waited.value.code == "STANDIN_TIMEOUT"
 
 
 def test_file_call_cache_keeps_the_first_answer_across_runs(tmp_path):

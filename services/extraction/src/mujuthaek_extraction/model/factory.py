@@ -84,7 +84,9 @@ class ModelFactory:
                     runaway_check=runaway,
                 )
         self._replay = ReplayModel(settings.recorded_dir) if settings.model_mode == "recorded" and settings.recorded_dir else None
-        self._standin = FileExchangeModel(settings.standin_dir) if settings.model_mode == "standin" and settings.standin_dir else None
+        self._standin = (
+            FileExchangeModel(settings.standin_dir, replay=settings.standin_replay_dir) if settings.model_mode == "standin" and settings.standin_dir else None
+        )
 
     def describe(self) -> str:
         """로그용 요약. 키는 넣지 않습니다."""
