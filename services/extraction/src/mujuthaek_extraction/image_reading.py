@@ -15,7 +15,9 @@ import dataclasses
 import hashlib
 import io
 import logging
+import os
 import re
+from collections import Counter
 from typing import Any
 
 from mujuthaek_extraction.extract import CallAttempt, ExtractionRun, _parse, schema_errors
@@ -109,7 +111,8 @@ def _render_tiles(data: bytes, page_number: int) -> list[bytes]:
     width, height = picture.size
     overlap = int(height * TILE_OVERLAP)
     tiles = []
-    for top, bottom in ((0, height // 2 + overlap), (height // 2 - overlap, height)):
+    # 위·가운데·아래 세 조각(가운데는 위·아래 경계를 덮음): 행이 적어 행 하나가 큰 표도 어느 조각엔가 행 전체가 들어가게
+    for top, bottom in ((0, height // 2 + overlap), (height // 4, height * 3 // 4), (height // 2 - overlap, height)):
         out = io.BytesIO()
         picture.crop((0, top, width, bottom)).save(out, format="PNG")
         tiles.append(out.getvalue())
@@ -144,6 +147,63 @@ def _clean(text: str) -> str:
 
 def _key(line: str) -> str:
     return "".join(line.split())
+
+
+NUMBER_CELL = re.compile(r"^\d[\d,]*(?:\.\d+)?$")
+NUMBER_WORD = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _cells(line: str) -> list[str] | None:
+    stripped = line.strip()
+    return [c.strip() for c in stripped.strip("|").split("|")] if stripped.startswith("|") else None
+
+
+def _numbers(cells: list[str]) -> tuple[str, ...]:
+    return tuple(c.replace(",", "") for c in cells if NUMBER_CELL.match(c))
+
+
+def _labels(cells: list[str]) -> tuple[str, ...]:
+    return tuple("".join(c.split()) for c in cells if c and not NUMBER_CELL.match(c))
+
+
+def _agrees(line: str, second: str, ocr: Counter[str] | None) -> bool:
+    """처음 판독한 줄이 다른 판독들과 맞는지.
+    표 행은 칸으로 비교합니다(2026-11-05 보강): 숫자 칸이 모두 같은 행이 다시 읽기에 있고 글 칸(단지·동 이름)이 같거나 한쪽에 없으면 맞음.
+    줄 전체를 비교하면 띄어쓰기·합친 칸 적기 차이로 거짓 불일치가 납니다. OCR 숫자(ocr)가 있으면 행의 숫자 칸이 모두 OCR에도 있어야 맞음
+    (같은 그림을 AI가 두 번 같게 잘못 읽은 250,600 → 250,500을 OCR은 바르게 읽음). 표 행이 아닌 줄은 줄 전체로 비교합니다."""
+    cells = _cells(line)
+    numbers = _numbers(cells) if cells else ()
+    if not numbers:
+        return _key(line) in {_key(other) for other in second.split("\n")}
+    labels = _labels(cells)
+    rows = [(_numbers(c), _labels(c)) for c in map(_cells, second.split("\n")) if c]
+    if not any(n == numbers and (lab == labels or not lab or not labels) for n, lab in rows):
+        return False
+    return ocr is None or all(ocr[n] > 0 for n in numbers)
+
+
+_OCR: Any = None
+
+
+def _ocr_numbers(data: bytes, page_number: int) -> Counter[str] | None:
+    """그림 영역의 숫자(쉼표 뺀 글자)를 OCR로 셉니다. 숫자만 쓰는 독립된 세 번째 판독(무료·결정적, AI와 실수 방식이 다름).
+    OCR(RapidOCR, Apache-2.0, 선택 의존성 ocr)이 없거나 설정 EXTRACTION_IMAGE_OCR=false거나 실패하면 None(두 판독만 비교)."""
+    global _OCR
+    if os.getenv("EXTRACTION_IMAGE_OCR", "true").lower() == "false":
+        return None
+    try:
+        if _OCR is None:
+            from rapidocr_onnxruntime import RapidOCR
+
+            _OCR = RapidOCR()
+        result, _ = _OCR(_render(data, page_number))
+    except Exception as error:  # 설치 안 됨·그리기 실패·OCR 오류: 두 판독만 비교
+        log.info("그림 숫자 OCR을 쓰지 않습니다", extra={"error": f"{type(error).__name__}: {str(error)[:120]}"})
+        return None
+    found: Counter[str] = Counter()
+    for _, text, _ in result or []:
+        found.update(m.replace(",", "") for m in NUMBER_WORD.findall(text))
+    return found or None
 
 
 def _read(model: ExtractionModel, request: ModelRequest, run: ExtractionRun) -> dict[str, Any] | None:
@@ -185,7 +245,7 @@ def _check_read(model: ExtractionModel, request: ModelRequest, targets: list[tup
     owner, images, listing = [], [], []
     try:
         for index, (_, name, data, page) in enumerate(targets, start=1):
-            for part, tile in zip(("위", "아래"), _render_tiles(data, page), strict=False):
+            for part, tile in zip(("위", "가운데", "아래"), _render_tiles(data, page), strict=False):
                 images.append(ModelImage(f"그림 {len(images) + 1}", "image/png", tile))
                 listing.append(f"- 그림 {len(images)}: {name} {page}쪽 {part} 부분(앞뒤 그림과 몇 줄 겹침)")
                 owner.append(index)
@@ -246,8 +306,8 @@ def read_image_tables(
         if text and 1 <= index <= len(targets):
             _, name, _, number = targets[index - 1]
             blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{text}")
-            agreed = {_key(line) for line in second.get(index, "").split("\n")}
-            disputed += [line for line in text.split("\n") if line.strip() and _key(line) not in agreed]
+            numbers = _ocr_numbers(targets[index - 1][2], targets[index - 1][3])
+            disputed += [line for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers)]
     if not blocks:
         return material, context, run
     if disputed:
