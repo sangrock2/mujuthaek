@@ -7,6 +7,8 @@
     EXTRACTION_STANDIN_REPLAY_DIR    앞선 대역 실행 폴더. 같은 요청은 그 답을 다시 씀(같은 첫 추출 위에서 고친 흐름만 다시 시험)
   LOCAL_AI_URL       로컬 AI 주소 (OpenAI 호환 /v1/chat/completions. 예: http://localhost:11434/v1). 비우면 로컬 AI 없음으로 보고 바로 유료 API
   OPENAI_API_KEY     유료 API 키. 환경 변수가 없으면 services/extraction/.env 파일에서 읽습니다. 키는 출력·저장하지 않습니다
+  LANGSMITH_TRACING·LANGSMITH_API_KEY·LANGSMITH_PROJECT·LANGSMITH_ENDPOINT  V2(LangChain·LangGraph) 실행 추적(2026-11-06).
+                     환경 변수가 없으면 .env에서 읽어 실행 환경에 넘깁니다(export_tracing). V1은 영향 없음. 키는 출력하지 않습니다
 
 유료 API 비용 줄이기 (2026-10-18, 끄면 이전 방식)
   OPENAI_SHARED_SCHEMA=true      모든 호출이 같은 출력 형식을 보내고 원문 끝에 캐시 지점을 둡니다(원문 캐시 읽기). false면 호출마다 형식
@@ -54,6 +56,8 @@ SERVICE_DIR = Path(__file__).resolve().parents[2]
 LOCAL_S3_ENDPOINT = "http://127.0.0.1:9000"  # infra/docker-compose.yml의 MinIO
 LOCAL_S3_KEYS = ("minio", "minio-pass")  # infra/.env.example의 MINIO_ROOT_USER·MINIO_ROOT_PASSWORD
 MODEL_MODES = {"auto", "recorded", "standin"}
+# LangChain·LangGraph는 추적 설정을 환경 변수로만 읽으므로 .env의 값을 넘깁니다(Settings.export_tracing)
+TRACING_ENV_NAMES = ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT", "LANGSMITH_ENDPOINT", "LANGSMITH_WORKSPACE_ID")
 SLACK_WEBHOOK_ENV_NAMES = ("EXTRACTION_SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL")  # 서비스 전용 이름 먼저(이전 이름 유지), 공통 이름은 나중
 
 
@@ -159,6 +163,17 @@ class Settings:
             parallel_stagger_seconds=max(0.0, float(os.getenv("EXTRACTION_PARALLEL_STAGGER_SECONDS", "1.5"))),
             benefit_enabled=os.getenv("EXTRACTION_BENEFIT_ENABLED", "false").lower() == "true",
         )
+
+    def export_tracing(self) -> list[str]:
+        """LangSmith 추적 설정(LANGSMITH_*)을 .env에서 읽어 환경 변수에 둡니다(이미 있으면 그대로). V2(LangChain·LangGraph) 실행만
+        추적되고 V1(OpenAI SDK 직접 호출)은 영향이 없습니다. 값은 출력하지 않고 넘긴 이름만 돌려줍니다."""
+        exported = []
+        for name in TRACING_ENV_NAMES:
+            value = None if name in os.environ else read_env_value(name, self.env_file)
+            if value:
+                os.environ[name] = value
+                exported.append(name)
+        return exported
 
     def openai_api_key(self) -> str | None:
         """환경 변수 → .env 파일 순서로 찾습니다. 돌려주기만 하고 출력하지 않습니다."""
