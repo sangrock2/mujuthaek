@@ -242,6 +242,54 @@ def test_recheck_changes_only_problem_fields_of_notice():
     assert merge_recheck(parts, answer, (), sent_scope(whole))[0]["notice"]["title"] == "다른 제목"
 
 
+def test_missing_records_of_values_the_recheck_filled_are_dropped_and_a_whole_notice_answer_brings_its_coverage():
+    # 2026-11-06 V2 5건 재측정 sh-310672: 재확인 답이 공급 기관·모집 수를 채우고 범위를 EXTRACTED로 고쳤는데, 처음 답의 「원문에 없음」 기록과
+    # PARTIAL이 그대로 남아 「누락이라면서 값이 있음」 새 문제로 답이 버려지고 공고 전체가 검수로 감
+    from mujuthaek_extraction.recheck import merge_recheck, sent_scope
+
+    notice = {"title": "공실세대 입주자 모집", "publisher": None, "counts": [{"id": "offered", "value": None}], "quoteRefs": ["q1"]}
+    missing = [
+        {"target": "/notice/publisher", "reason": "NOT_IN_SOURCE", "description": "공급 기관명이 없어요."},
+        {"target": "/notice/counts/0/value", "reason": "NOT_IN_SOURCE", "description": "모집 수가 없어요."},
+        {"target": "/notice/announcedOn", "reason": "NOT_IN_SOURCE", "description": "공고일이 없어요."},
+    ]
+    partial = {"notice": {"status": "PARTIAL", "reason": "모집 수를 확정하지 못했어요."}}
+    parts = [{"notice": notice, "quotes": [], "missingFields": missing, "coverage": partial}]
+    filled = {**notice, "publisher": "가상협동조합", "counts": [{"id": "offered", "value": 1}], "quoteRefs": ["q2"]}
+    answer = {"notice": filled, "coverage": {"notice": {"status": "EXTRACTED", "reason": None}}}
+    whole = sent_scope([{"section": "notice", "id": None, "problems": ["MISSING_NOTICE_CORE /notice"]}])
+    merged = merge_recheck(parts, answer, (), whole)[0]
+    assert [m["target"] for m in merged["missingFields"]] == ["/notice/announcedOn"]  # 아직 빈 칸의 기록은 둠
+    assert merged["coverage"]["notice"] == {"status": "EXTRACTED", "reason": None}
+    assert parts[0]["missingFields"] == missing and parts[0]["coverage"] == partial  # 처음 조각은 그대로
+    # 누락으로 적힌 칸을 하나도 채우지 않은 답은 범위 상태를 바꾸지 않습니다(「다 넣었다」고 적기만 해서 통과되지 않게)
+    retitled = merge_recheck(parts, {**answer, "notice": {**notice, "title": "다른 제목"}}, (), whole)[0]
+    assert retitled["missingFields"] == missing and retitled["coverage"] == partial
+    # 칸 일부만 받으면 그 칸의 기록만 지우고 범위 상태는 두지 않습니다(응답의 범위 상태는 받지 않은 칸까지 말함)
+    one = sent_scope([{"section": "notice", "id": None, "problems": ["API_MISMATCH /notice/publisher: 공급 기관이 다릅니다"]}])
+    narrow = merge_recheck(parts, answer, (), one)[0]
+    assert [m["target"] for m in narrow["missingFields"]] == ["/notice/counts/0/value", "/notice/announcedOn"] and narrow["coverage"] == partial
+
+
+def test_missing_record_of_a_list_item_value_the_recheck_filled_is_dropped():
+    from mujuthaek_extraction.recheck import merge_recheck, sent_scope
+
+    group = {"id": "g1", "prices": [{"kind": "DEPOSIT", "amountKrw": None}], "quoteRefs": ["q1"]}
+    other = {"id": "g2", "prices": [{"kind": "DEPOSIT", "amountKrw": None}], "quoteRefs": ["q1"]}
+    missing = [
+        {"target": "/supplyGroups/0/prices/0/amountKrw", "reason": "UNREADABLE", "description": "보증금 칸을 읽지 못했어요."},
+        {"target": "/supplyGroups/1/prices/0/amountKrw", "reason": "UNREADABLE", "description": "보증금 칸을 읽지 못했어요."},
+    ]
+    parts = [{"supplyGroups": [group, other], "quotes": [], "missingFields": missing}]
+    answer = {
+        "supplyGroups": [{**group, "prices": [{"kind": "DEPOSIT", "amountKrw": 1_000_000}]}, {**other, "prices": [{"kind": "DEPOSIT", "amountKrw": 2_000_000}]}]
+    }
+    sent = sent_scope([{"section": "supplyGroups", "id": "g1", "problems": ["SUPPLY_PRICE_MISSING /supplyGroups/0: 없음"]}])
+    merged = merge_recheck(parts, answer, (), sent)[0]
+    assert merged["supplyGroups"][0]["prices"][0]["amountKrw"] == 1_000_000 and merged["supplyGroups"][1] == other  # 보낸 항목만 받음
+    assert merged["missingFields"] == missing[1:]  # 받은 항목의 채운 칸 기록만 지움
+
+
 def schedule_part(ends_at, quote_ref="q-end", quote="등기우편 신청: 2026. 11. 3.(화) 도착분까지"):
     item = {"id": "mail-apply", "kinds": ["APPLICATION"], "startsAt": None, "endsAt": ends_at, "quoteRefs": [quote_ref]}
     return {"quotes": [{"ref": quote_ref, "documentId": "text1", "text": quote}], "schedules": [item]}

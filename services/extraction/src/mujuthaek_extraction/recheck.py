@@ -423,10 +423,12 @@ def merge_recheck(
     """고친 항목만 같은 섹션·같은 id 자리에 바꿔 넣습니다. 처음에 없던 id는 섹션 전체를 다시 본 경우(add_sections)에만 뒤에 붙입니다.
     그 섹션의 범위 상태는 새 항목을 하나라도 받았을 때만 재확인 응답 것으로 바꿉니다(AI가 "다 넣었다"고 적기만 해서 통과되지 않게).
     sent(sent_scope): 보낸 항목만 바꾸고, 공고 기본 정보는 문제가 난 칸만 바꿉니다(2026-10-21 검토: 보내지 않은 일정·가격이 응답에 섞여
-    다른 값으로 바뀌어도 메모만 생기면 채택될 수 있었음). None이면 응답의 모든 항목을 받습니다(이전 동작)."""
+    다른 값으로 바뀌어도 메모만 생기면 채택될 수 있었음). None이면 응답의 모든 항목을 받습니다(이전 동작).
+    바꾼 범위의 누락 기록은 _settle_missing이 정리합니다."""
     merged = copy.deepcopy(parts)
     quotes = [{**q, "ref": REF_PREFIX + q["ref"]} for q in recheck_part.get("quotes") or []]
     touched: set[int] = set()
+    replaced: dict[int, list[str]] = {}  # 조각 → 재확인 답으로 바꾼 범위(조각 안 위치)
     for section in SECTIONS:
         if section not in recheck_part:
             continue
@@ -440,10 +442,12 @@ def merge_recheck(
                 fields = None if sent is None else sent["notice"]
                 if fields is None:
                     target["notice"] = answer
+                    replaced.setdefault(index, []).append("/notice")
                 else:  # 문제가 난 칸(과 그 근거 참조)만
                     keep = {**target["notice"], **{k: v for k, v in answer.items() if k in fields or k == "quoteRefs"}}
                     if fields:
                         target["notice"] = keep
+                        replaced.setdefault(index, []).extend(f"/notice/{field}" for field in fields)
                 touched.add(index)
             continue
         allowed = None if sent is None else sent["items"].get(section, set())
@@ -454,6 +458,7 @@ def merge_recheck(
         }
         replace = fixed if allowed is None else {k: v for k, v in fixed.items() if k in allowed}
         if replace:
+            replaced.setdefault(index, []).extend(f"/{section}/{i}" for i, item in enumerate(target[section]) if item["id"] in replace)
             target[section] = [replace.get(item["id"], item) for item in target[section]]
             touched.add(index)
         if section in add_sections:
@@ -465,9 +470,45 @@ def merge_recheck(
                 if isinstance(target.get("coverage"), dict) and isinstance(new_coverage, dict):
                     target["coverage"][section] = new_coverage
                 touched.add(index)
+    for index, scopes in replaced.items():
+        _settle_missing(merged[index], scopes, recheck_part.get("coverage"))
     for index in touched:
         merged[index]["quotes"] = [*(merged[index].get("quotes") or []), *quotes]
     return merged
+
+
+def _settle_missing(part: dict[str, Any], scopes: list[str], coverage: Any) -> None:
+    """재확인 답으로 바꾼 범위에서 이제 값이 있는 칸을 가리키는 처음 답의 누락 기록을 지웁니다(아직 빈 칸의 기록은 둠). 공고 기본 정보를 통째로
+    바꿨고 처음 답이 누락으로 적은 칸을 하나라도 채웠으면 범위 상태도 재확인 응답 것으로 바꿉니다(목록 섹션이 새 항목을 받았을 때만 바꾸는 것과
+    같은 기준. 칸 일부만 받았으면 응답의 범위 상태가 받지 않은 칸까지 말하므로 두지 않음).
+    2026-11-06 V2 5건 재측정 sh-310672: 재확인 답이 공급 기관·모집 수를 채우고 범위를 EXTRACTED로 고쳤는데, 처음 답의 「원문에 없음」 기록과
+    PARTIAL이 그대로 남아 「누락이라면서 값이 있음」(MISSING_FIELD_HAS_VALUE) 새 문제로 답이 버려지고 공고 전체가 검수로 감."""
+    kept, filled = [], []
+    for entry in part.get("missingFields") or []:
+        pointer = str(entry.get("target") or "") if isinstance(entry, dict) else ""
+        if any(pointer == scope or pointer.startswith(scope + "/") for scope in scopes) and _has_value(part, pointer):
+            filled.append(pointer)
+        else:
+            kept.append(entry)
+    if not filled:
+        return
+    part["missingFields"] = kept
+    notice = coverage.get("notice") if isinstance(coverage, dict) else None
+    if (
+        "/notice" in scopes
+        and any(pointer.startswith("/notice/") for pointer in filled)
+        and isinstance(notice, dict)
+        and isinstance(part.get("coverage"), dict)
+    ):
+        part["coverage"]["notice"] = notice
+
+
+def _has_value(part: dict[str, Any], pointer: str) -> bool:
+    try:
+        value = tools().resolve(part, pointer)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return value is not None and value != []
 
 
 # 항목 문제를 보낼 섹션 순서(2026-10-24 네 번째 채점: 자격 세부 항목 6개가 자리 8개를 늘 먼저 차지해, 화면에 보이는 일정의 지워진
