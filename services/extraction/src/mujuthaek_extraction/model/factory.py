@@ -15,6 +15,7 @@ recorded: 녹화 응답 재생(가짜 추출기). 유료 호출 없음
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ class ModelFactory:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        settings.export_tracing()  # V2 실행 추적(LangSmith): 공고를 처리하기 전에 실행 환경에 둠
         self._local = LocalChatModel(settings.local_ai_url, settings.local_ai_model)  # 연결 실패 기억을 공고 사이에 유지합니다
         self._paid: OpenAIResponsesModel | None = None
         if settings.model_mode == "auto":
@@ -103,7 +105,8 @@ class ModelFactory:
             return f"standin({self.settings.standin_dir})"
         local = self.settings.local_ai_url or "없음"
         paid = self.settings.openai_model if self._paid else "키 없음"
-        return f"auto(로컬 AI {local} → 유료 {paid}, 공고당 ${self.settings.notice_budget_usd:.2f})"
+        tracing = f", 추적 LangSmith({os.getenv('LANGSMITH_PROJECT') or 'default'})" if os.getenv("LANGSMITH_TRACING", "").lower() == "true" else ""
+        return f"auto(로컬 AI {local} → 유료 {paid}, 공고당 ${self.settings.notice_budget_usd:.2f}{tracing})"
 
     def for_notice(self, cache: CallCache | None = None, spent_before_usd: float = 0.0, ledger: Any = None) -> NoticeModels:
         """cache: 성공한 호출을 다시 쓸 저장소(설정이 꺼져 있으면 쓰지 않음). spent_before_usd: 같은 원본 버전의 앞선 처리가 쓴 유료 비용.

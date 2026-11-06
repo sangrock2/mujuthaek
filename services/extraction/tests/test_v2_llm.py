@@ -1,6 +1,7 @@
 """V2 모델 층: 보내기 전 예산 예약(넘으면 부르지 않음)·실제 사용량 정산·호출 기록, 파일 캐시(다시 쓴 답은 비용 0), 모델 설정. 유료 호출 없음."""
 
 import dataclasses
+import os
 
 import pytest
 from langchain.agents import create_agent
@@ -9,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from test_v2_document import TEXT, ToolCallingFake
 
-from mujuthaek_extraction.config import Settings
+from mujuthaek_extraction.config import TRACING_ENV_NAMES, Settings
 from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2.context import V2Context
 from mujuthaek_extraction.v2.document import parse
@@ -86,3 +87,16 @@ def test_chat_model_uses_the_responses_api_without_storing_or_retrying(monkeypat
     model = chat_model(settings, effort="low", max_output_tokens=1_500, cache_key="notice-abc")
     assert model.model_name == "gpt-6-luna" and model.use_responses_api is True and model.store is False and model.max_retries == 0
     assert model.reasoning == {"effort": "low"} and model.max_tokens == 1_500 and model.model_kwargs == {"prompt_cache_key": "notice-abc"}
+
+
+def test_langsmith_settings_in_env_file_are_handed_to_the_environment_without_overriding(tmp_path, monkeypatch):
+    # LangChain·LangGraph는 추적 설정을 환경 변수로만 읽음 → .env의 LANGSMITH_*를 넘김(이미 있는 값은 그대로, 시험은 conftest가 꺼 둠)
+    for name in TRACING_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LANGSMITH_PROJECT", "already-set")
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test\nLANGSMITH_TRACING=true\nLANGSMITH_API_KEY=lsv2_pt_test\nLANGSMITH_PROJECT=from-file\n", encoding="utf-8")
+    settings = dataclasses.replace(Settings.from_env(), env_file=env)
+    assert settings.export_tracing() == ["LANGSMITH_TRACING", "LANGSMITH_API_KEY"]
+    assert os.environ["LANGSMITH_TRACING"] == "true" and os.environ["LANGSMITH_PROJECT"] == "already-set"
+    assert settings.export_tracing() == []  # 두 번째부터는 넘길 것이 없음
