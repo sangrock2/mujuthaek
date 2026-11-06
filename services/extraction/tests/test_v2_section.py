@@ -8,6 +8,7 @@ from events import raw_event
 from helpers import ai_part, example
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import tool
 from test_pipeline import answers, run
 from test_v2_contract import sparse
 from test_v2_document import TEXT, ToolCallingFake
@@ -292,3 +293,32 @@ def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypa
     assert traces["eligibility"]["stopped"].startswith("APITimeoutError") and traces["schedules"]["stopped"] is None
     failed = [c for c in outcome.usage["v2"]["calls"] if c.get("agent") == "eligibility" and "error" in c]
     assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈
+
+
+def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agent_goes_on():
+    # 2026-11-06 23건 측정: 넣기 도구에 evidence를 항목 밖에 적어 TypeError → 도구 실행기가 오류를 올려 측정 전체가 멈춤
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+
+    @tool
+    def broken(note: str) -> str:
+        """시험용: 늘 실패하는 도구."""
+        raise RuntimeError("도구 결함")
+
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule], evidence=["p1.2"]), call("broken", note="x")]),
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    agent = create_agent(
+        ToolCallingFake(messages=iter(turns)),
+        tools=[add_tool("schedules", ("text",)), broken],
+        middleware=[section.ToolErrorMiddleware()],
+        context_schema=SectionContext,
+    )
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert answers[0]["error"] == "BAD_ARGS" and "evidence" in answers[0]["message"]
+    assert answers[1] == {"error": "TOOL_FAILED", "message": "RuntimeError: 도구 결함"}
+    assert answers[2]["added"] == ["apply"] and result["messages"][-1].content == "끝"  # 다음 차례에 고쳐 넣고 끝냄
