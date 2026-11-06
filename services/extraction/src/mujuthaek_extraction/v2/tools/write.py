@@ -44,6 +44,7 @@ class SectionDraft:
     coverage: dict[str, dict[str, Any]] = field(default_factory=dict)
     missing: list[dict[str, Any]] = field(default_factory=list)
     version: int = 0  # 바뀔 때마다 1씩(검증 미들웨어가 바뀐 차례에만 다시 검증)
+    finished: str | None = None  # finish로 남긴 한두 문장(검증에 새 문제가 나오면 검증 미들웨어가 거둠)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def find(self, section: str, item_id: str | None) -> int | None:
@@ -161,7 +162,17 @@ def report_missing(section: str, item_id: str, field: str, reason: str, descript
     return _dump({"ok": "적음"})
 
 
-WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
+@tool
+def finish(summary: str, runtime: ToolRuntime[SectionContext, Any]) -> str:
+    """맡은 섹션을 다 넣고 고쳤으면 부릅니다. 마지막 넣기·고치기와 같은 차례에 함께 부르면 차례가 줄어듭니다: 그 차례의 도구가 실행된 뒤
+    검증에 새 문제가 없으면 그대로 끝나고, 새 문제가 있으면 검증 결과로 알려 줍니다. summary는 넣은 것·남은 문제 한두 문장."""
+    draft = runtime.context.draft
+    with draft._lock:
+        draft.finished = summary.strip() or "끝"
+    return _dump({"ok": "끝냄(검증에 새 문제가 있으면 알려 줌)"})
+
+
+WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, finish)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
 
 
 def _problems(context: SectionContext, section: str, item: Any, adding: bool) -> list[str]:

@@ -19,6 +19,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
+from langchain.agents.middleware.types import hook_config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from mujuthaek_extraction import pipeline
@@ -36,10 +37,15 @@ from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
 PRIME = "prime"
-PRIME_TASK = "# 준비 호출\n담당들이 같은 앞부분(지시·도구·원문)을 다시 읽도록 캐시에 올리는 호출입니다. 도구를 부르지 말고 「준비」라고만 답합니다."
 PRIME_OUTPUT_TOKENS = 512
-# 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거 위치를 못 정함(그림 판독 표시·전환 부호 고침처럼 담당이 고칠 수 없는 것은 뺌)
-LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {"IMAGE_TRANSCRIBED_VALUES", "CONVERSION_DIRECTION_CORRECTED"}
+# 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
+# 담당이 고칠 수 없는 표시(그림 판독·전환 부호 고침)는 뺌(2026-11-06 네 번째 실행: 세로 글자 표 칸 「청」·「계」 짧은 인용 13개를 세 차례 내내 받음)
+LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
+    "IMAGE_TRANSCRIBED_VALUES",
+    "CONVERSION_DIRECTION_CORRECTED",
+    "EVIDENCE_AMBIGUOUS",
+    "EVIDENCE_QUOTE_TOO_SHORT",
+}
 
 
 def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -67,14 +73,15 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
         "stopped": stopped,
-        "draft": {"items": draft.items, "coverage": draft.coverage, "missing": draft.missing},
+        "draft": {"items": draft.items, "coverage": draft.coverage, "missing": draft.missing, "finished": draft.finished},
     }
     return parts_of(spec, draft, document, documents), context.usage, trace
 
 
 def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
-    """담당들의 같은 앞부분(지시·도구·원문)을 한 번 캐시에 올립니다. 짧게 답하는 호출 하나라 쓰기 값 한 번과 출력 몇 토큰만 듭니다.
-    실패해도 담당은 그대로 돕니다(캐시만 못 씀)."""
+    """담당들의 같은 앞부분(지시·도구·원문)을 한 번 캐시에 올립니다. 요청은 원문 메시지에서 끝냅니다: OpenAI 캐시는 앞 요청이 끝난 곳까지를
+    다시 쓰므로, 원문 뒤에 「준비」 같은 메시지를 더 붙이면 담당은 지시·도구까지만 캐시에서 읽음(2026-11-06 네 번째 실제 실행: 4.24만 중 3.21만).
+    답은 버리고 도구도 실행하지 않습니다(출력 상한이 작아 몇백 토큰). 실패해도 담당은 그대로 돕니다(캐시만 못 씀)."""
     chat = getattr(rt.models, "chat", None)
     if chat is None:
         return []
@@ -82,12 +89,20 @@ def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
     documents = tuple(document_ids(state["material"]))
     context = SectionContext(document=document, budget=rt.models.budget, documents=documents)
     model = chat(PRIME, max_output_tokens=PRIME_OUTPUT_TOKENS)  # 추론 강도도 담당과 같게(다르면 앞부분이 도구 정의 다음부터 달라짐)
-    agent = _agent(model, PRIME, state, documents, [ModelCallLimitMiddleware(run_limit=1, exit_behavior="end")])
+    agent = _agent(model, PRIME, state, documents, [StopAfterModel()])
     try:
-        agent.invoke({"messages": [shared_message(document), HumanMessage(PRIME_TASK)]}, context=context)
+        agent.invoke({"messages": [shared_message(document)]}, context=context)
     except Exception as error:  # 캐시 데우기는 할 수 있는 만큼만: 실패를 기록하고 넘어감
         context.usage.append({"agent": PRIME, "stopped": f"{type(error).__name__}: {error}"[:300]})
     return context.usage
+
+
+class StopAfterModel(AgentMiddleware):
+    """모델 답을 받으면 도구를 실행하지 않고 끝냅니다(캐시 데우기)."""
+
+    @hook_config(can_jump_to=["end"])
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return {"jump_to": "end"}
 
 
 def shared_message(document: DocumentModel) -> HumanMessage:
