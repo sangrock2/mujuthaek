@@ -10,6 +10,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 from test_v2_document import TEXT, ToolCallingFake
 
 from mujuthaek_extraction.config import TRACING_ENV_NAMES, Settings
@@ -17,7 +18,7 @@ from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2.context import V2Context
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.llm import retry
-from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware, cost_usd
+from mujuthaek_extraction.v2.llm.budget import CACHE_HIT, BudgetExceeded, BudgetMiddleware, cost_usd
 from mujuthaek_extraction.v2.llm.cache import FileLLMCache
 from mujuthaek_extraction.v2.llm.models import chat_model
 
@@ -82,6 +83,43 @@ def test_cached_answers_are_reused_for_the_same_request_and_cost_nothing(tmp_pat
     assert budget.spent_usd == pytest.approx(spent) and context2.usage[0]["cacheHit"] is True and context2.usage[0]["costUsd"] == 0
     second.invoke({"messages": [HumanMessage("다른 요청")]}, context=context2)
     assert again.calls == 1
+
+
+class TurnModel(CountingModel):
+    """첫 차례는 도구를 부르고, 도구 결과를 받은 다음 차례에 끝내는 가짜 모델."""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        if any(m.type == "tool" for m in messages):
+            message = AIMessage(content="끝", usage_metadata=USAGE)
+        else:
+            message = AIMessage(content="", tool_calls=[{"name": "note", "args": {"text": "메모"}, "id": "call-1"}], usage_metadata=USAGE)
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+@tool
+def note(text: str) -> str:
+    """메모를 남깁니다."""
+    return "남김"
+
+
+def test_every_turn_of_the_same_conversation_is_reused_not_only_the_first(tmp_path):
+    # 2026-11-06 5건 재측정: 다시 쓴 답에 붙인 캐시 표시가 다음 차례 요청에 들어가 처음 실행과 요청이 달라짐 → 담당마다 첫 차례만 다시 씀
+    def run(model):
+        agent = create_agent(model, tools=[note], middleware=[BudgetMiddleware("schedules")], context_schema=V2Context)
+        context = V2Context(document=parse(TEXT), budget=Budget(model="gpt-6-luna", limit_usd=0.5))
+        return agent.invoke({"messages": [HumanMessage("일정")]}, context=context), context
+
+    first = TurnModel(cache=FileLLMCache(tmp_path))
+    run(first)
+    again = TurnModel(cache=FileLLMCache(tmp_path))
+    result, context = run(again)
+    assert first.calls == 2 and again.calls == 0 and result["messages"][-1].content == "끝"
+    assert [r["cacheHit"] for r in context.usage] == [True, True]
+    assert not any(CACHE_HIT in m.response_metadata for m in result["messages"] if isinstance(m, AIMessage))
 
 
 def test_chat_model_uses_the_responses_api_without_storing_or_retrying(monkeypatch):

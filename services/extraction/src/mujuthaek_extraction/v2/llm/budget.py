@@ -34,7 +34,9 @@ class BudgetMiddleware(AgentMiddleware):
         context = request.runtime.context
         budget = getattr(context, "budget", None)
         if budget is None:
-            return handler(request)
+            response = handler(request)
+            _from_cache(_ai_message(response))
+            return response
         limit = self.max_output_tokens or getattr(request.model, "max_tokens", None) or DEFAULT_MAX_OUTPUT_TOKENS
         worst = worst_case_usd(request, budget.model, limit)
         ticket = budget.reserve_usd(worst)
@@ -52,7 +54,7 @@ class BudgetMiddleware(AgentMiddleware):
             raise
         message = _ai_message(response)
         usage = (message.usage_metadata or {}) if message is not None else {}
-        hit = message is not None and bool(message.response_metadata.get(CACHE_HIT))
+        hit = _from_cache(message)
         cost = 0.0 if hit else cost_usd(budget.model, usage)
         budget.settle_usd(ticket, cost)
         record = getattr(context, "usage", None)
@@ -104,6 +106,17 @@ def _chars(message: BaseMessage) -> int:
         )
     calls = getattr(message, "tool_calls", None) or []
     return size + sum(len(json.dumps(call.get("args", {}), ensure_ascii=False)) + len(call.get("name", "")) for call in calls)
+
+
+def _from_cache(message: AIMessage | None) -> bool:
+    """파일 캐시에서 꺼낸 답이면 캐시가 바꾼 곳(우리 표시, LangChain이 usage_metadata에 더하는 total_cost 0)을 지우고 True.
+    이 답은 다음 차례 요청에 그대로 들어가므로, 남겨 두면 요청이 처음 실행 때와 달라 다음 차례부터 캐시가 맞지 않습니다
+    (2026-11-06 5건 재측정: 담당마다 첫 차례만 다시 쓰고 나머지 차례는 모두 다시 삼)."""
+    if message is None or not message.response_metadata.pop(CACHE_HIT, False):
+        return False
+    if message.usage_metadata:
+        message.usage_metadata.pop("total_cost", None)
+    return True
 
 
 def _ai_message(response: Any) -> AIMessage | None:
