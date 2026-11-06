@@ -160,7 +160,7 @@ def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_noti
         "selection": ("selectionRules",),
         "documents": ("requiredDocuments",),
     }
-    prefixes = []
+    prefixes, lengths = [], {}
 
     class Recording(ToolCallingFake):
         """받은 앞부분(지시·첫 메시지·도구 이름)을 적어 두는 가짜 모델."""
@@ -171,18 +171,22 @@ def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_noti
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             prefixes.append((messages[0].content, messages[1].content, self.__dict__.get("tool_names", ())))
+            lengths.setdefault(self.__dict__.get("agent"), len(messages))
             return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     def script(name):
-        if name == section.PRIME:
-            return iter([AIMessage(content="준비")])
+        if name == section.PRIME:  # 데우기가 도구를 불러도 실행하지 않고 끝냄
+            return iter([AIMessage(content="", tool_calls=[call("add_schedules", items=[])])])
         adds = [call(f"add_{s}", **({"item": items(s)[0]} if s == "notice" else {"items": items(s)})) for s in sections[name]]
         usage = {"input_tokens": 1_000, "output_tokens": 100, "total_tokens": 1_100}
         return iter([AIMessage(content="", tool_calls=adds, usage_metadata=usage), AIMessage(content="다 넣었어요.")])
 
-    models = NoticeModels(
-        RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=lambda name, **kw: Recording(messages=script(name))
-    )
+    def chat(name, **kwargs):
+        model = Recording(messages=script(name))
+        model.__dict__["agent"] = name
+        return model
+
+    models = NoticeModels(RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=chat)
     outcome = run(raw_event(), models)
     assert outcome.status == "COMPLETED" and outcome.error is None
     assert tools().validate(outcome.event, "events/extraction.completed.v1.json") == []
@@ -191,6 +195,8 @@ def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_noti
     assert len(calls) == 2 * len(sections) + 1  # 캐시 데우기 1번 + 담당마다 넣기·끝 2번(검증은 미들웨어가 차례를 쓰지 않고)
     # 데우기와 모든 담당이 같은 앞부분: 지시·첫 메시지(원문 전체)·도구 목록(모든 담당 섹션의 add 도구 + 쓰기 도구)
     assert len(set(prefixes)) == 1 and prefixes[0][1].startswith("# 원문") and "p1.1 " in prefixes[0][1]
+    # 데우기 요청은 원문 메시지에서 끝남(OpenAI 캐시는 앞 요청이 끝난 곳까지 다시 씀), 담당은 그 뒤에 맡은 일
+    assert lengths[section.PRIME] == 2 and {lengths[name] for name in sections} == {3}
     assert prefixes[0][2][:5] == ("add_schedules", "add_guidance", "add_eligibility", "add_selectionRules", "add_requiredDocuments")
     traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
     assert set(traces) == set(sections) and traces["eligibility"]["turns"][0]["calls"][0]["name"] == "add_eligibility"
@@ -214,3 +220,36 @@ def test_lost_values_the_verifier_moved_to_notes_are_reported_to_the_agent(monke
     state = {"document": parse(TEXT), "material": None, "context": None, "parts": []}
     found = section._issues(spec, SectionDraft(("selectionRules",)), state, None, ("text",))
     assert [(f["code"], f.get("item")) for f in found] == [("VALUE_NOT_IN_QUOTE", "score-1"), ("ITEM_DROPPED_NO_EVIDENCE", None)]
+
+
+def test_finish_ends_without_another_model_call_unless_verification_finds_a_new_problem():
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    add = call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])
+
+    def agent_run(turns, issues_by_version):
+        draft = SectionDraft(("schedules",))
+        context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+        context.check = lambda: issues_by_version.get(draft.version, [])
+        agent = create_agent(
+            ToolCallingFake(messages=iter(turns)),
+            tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+            middleware=[VerifyMiddleware()],
+            context_schema=SectionContext,
+        )
+        result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+        return draft, [m for m in result["messages"] if m.type == "ai"]
+
+    # 넣기와 끝내기를 한 차례에: 검증에 문제가 없으면 모델을 다시 부르지 않음
+    draft, said = agent_run([AIMessage(content="", tool_calls=[add, call("finish", summary="일정 1개를 넣었어요.")]), AIMessage(content="불리면 안 됨")], {})
+    assert len(said) == 1 and draft.finished == "일정 1개를 넣었어요." and len(draft.items["schedules"]) == 1
+    # 새 문제가 나오면 끝내기를 거두고 알림 → 고친 뒤 다시 끝내기: 남은 문제가 앞서 알린 것(「다시」)뿐이면 끝
+    issue = {"code": "VALUE_NOT_IN_QUOTE", "target": "/schedules/0/startsAt", "item": "apply", "description": "값이 인용에 없어요."}
+    turns = [
+        AIMessage(content="", tool_calls=[add, call("finish", summary="다 넣었어요.")]),
+        AIMessage(
+            content="", tool_calls=[call("update_item", section="schedules", item_id="apply", changes={"label": "접수"}), call("finish", summary="고쳤어요.")]
+        ),
+        AIMessage(content="불리면 안 됨"),
+    ]
+    draft, said = agent_run(turns, {1: [issue], 2: [issue]})
+    assert len(said) == 2 and draft.finished == "고쳤어요."
