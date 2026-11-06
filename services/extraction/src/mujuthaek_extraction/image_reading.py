@@ -151,6 +151,7 @@ def _key(line: str) -> str:
 
 NUMBER_CELL = re.compile(r"^\d[\d,]*(?:\.\d+)?$")
 NUMBER_WORD = re.compile(r"\d[\d,]*(?:\.\d+)?")
+LABEL_WORD = re.compile(r"[가-힣]+|[0-9]+|[A-Za-z]+")  # 글자 종류가 바뀌는 곳마다(「암사도전숙2동」 → 암사도전숙·2·동)
 
 
 def _cells(line: str) -> list[str] | None:
@@ -166,20 +167,39 @@ def _labels(cells: list[str]) -> tuple[str, ...]:
     return tuple("".join(c.split()) for c in cells if c and not NUMBER_CELL.match(c))
 
 
-def _agrees(line: str, second: str, ocr: Counter[str] | None) -> bool:
+def _agrees(line: str, second: str, ocr: Counter[str] | None, known: str = "") -> bool:
     """처음 판독한 줄이 다른 판독들과 맞는지.
     표 행은 칸으로 비교합니다(2026-11-05 보강): 숫자 칸이 모두 같은 행이 다시 읽기에 있고 글 칸(단지·동 이름)이 같거나 한쪽에 없으면 맞음.
     줄 전체를 비교하면 띄어쓰기·합친 칸 적기 차이로 거짓 불일치가 납니다. OCR 숫자(ocr)가 있으면 행의 숫자 칸이 모두 OCR에도 있어야 맞음
-    (같은 그림을 AI가 두 번 같게 잘못 읽은 250,600 → 250,500을 OCR은 바르게 읽음). 표 행이 아닌 줄은 줄 전체로 비교합니다."""
+    (같은 그림을 AI가 두 번 같게 잘못 읽은 250,600 → 250,500을 OCR은 바르게 읽음). 표 행이 아닌 줄은 줄 전체로 비교합니다.
+    글 칸만 다르면 공고 본문 글자(known, 공백 뺀 판독 전 원문)로 정합니다(2026-11-06 보강, _attested). 실측 SH 강동구 청년창업가주택:
+    숫자 칸은 두 판독이 모두 같고 단지 이름만 「암사도전숙」·「암사도전축」으로 달라 가격표 32행이 모두 사람 확인으로 감(본문에는 「암사도전숙」만 있음)."""
     cells = _cells(line)
     numbers = _numbers(cells) if cells else ()
     if not numbers:
         return _key(line) in {_key(other) for other in second.split("\n")}
     labels = _labels(cells)
-    rows = [(_numbers(c), _labels(c)) for c in map(_cells, second.split("\n")) if c]
-    if not any(n == numbers and (lab == labels or not lab or not labels) for n, lab in rows):
+    rows = [(_numbers(c), _labels(c), c) for c in map(_cells, second.split("\n")) if c]
+    if not any(n == numbers and (lab == labels or not lab or not labels or _attested(cells, other, known)) for n, lab, other in rows):
         return False
     return ocr is None or all(ocr[n] > 0 for n in numbers)
+
+
+def _attested(first_cells: list[str], second_cells: list[str], known: str) -> bool:
+    """글 칸이 다를 때 처음 판독(원문에 붙이는 쪽)으로 정할 수 있는지: 칸 수·낱말 수가 같고, 다른 낱말마다 처음 판독 쪽은 공고 본문에 있고
+    다시 읽기 쪽은 없음. 둘 다 본문에 있으면(1동·2동) 어느 쪽인지 정할 수 없고, 처음 판독 쪽이 본문에 없으면 그 글자를 그대로 붙이게 되므로 불일치.
+    낱말은 띄어쓰기가 남은 칸 글자에서 나눕니다(「성내도전숙 나동」 → 성내도전숙·나동. 본문은 「성내도전숙 가동/나동」이라 붙여 쓰면 없음)."""
+    first = [c for c in first_cells if c and not NUMBER_CELL.match(c)]
+    second = [c for c in second_cells if c and not NUMBER_CELL.match(c)]
+    if not known or len(first) != len(second):
+        return False
+    for a, b in zip(first, second, strict=True):
+        words_a, words_b = LABEL_WORD.findall(a), LABEL_WORD.findall(b)
+        if len(words_a) != len(words_b):
+            return False
+        if any(x != y and not (x in known and y not in known) for x, y in zip(words_a, words_b, strict=True)):
+            return False
+    return True
 
 
 _OCR: Any = None
@@ -300,6 +320,7 @@ def read_image_tables(
     # 다시 읽기에 실패하면 모든 줄이 불일치입니다
     second = _check_read(model, request, targets, run)
 
+    known = "".join(material.text.split())  # 판독 전 원문(PDF 글자층): 두 판독의 글 칸이 다를 때 어느 쪽이 맞는지 정하는 데 씀
     blocks, disputed = [], []
     for page in answer["pages"]:
         index, text = page["image"], _clean(page["text"])
@@ -307,7 +328,7 @@ def read_image_tables(
             _, name, _, number = targets[index - 1]
             blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{text}")
             numbers = _ocr_numbers(targets[index - 1][2], targets[index - 1][3])
-            disputed += [line for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers)]
+            disputed += [line for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers, known)]
     if not blocks:
         return material, context, run
     if disputed:
