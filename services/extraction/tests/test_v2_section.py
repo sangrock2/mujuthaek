@@ -8,9 +8,11 @@ from events import raw_event
 from helpers import ai_part, example
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import tool
 from test_pipeline import answers, run
 from test_v2_contract import sparse
 from test_v2_document import TEXT, ToolCallingFake
+from test_v2_llm import FlakyFake
 
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.model import RecordedModel
@@ -21,6 +23,7 @@ from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.document import parse
+from mujuthaek_extraction.v2.llm import retry
 from mujuthaek_extraction.v2.tools.typed import add_tool
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 
@@ -268,3 +271,54 @@ def test_verification_separates_defects_to_fix_from_warnings_to_check():
     fix, check = report.index("## 고칠 것 1개"), report.index("## 확인할 것 1개")
     assert fix < report.index("CONTRACT_DUPLICATE_ID") < check < report.index("EXCEPTION_SUSPECTED")
     assert "다른 방법으로 한 번 더" in report and "원문상 맞으면 그대로" in report
+
+
+def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypatch):
+    # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤 → 재시도로도 안 되면 그 담당만 멈추고 섹션은 사람 확인으로
+    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
+    monkeypatch.setattr(retry, "FIRST_DELAY_SECONDS", 0.0)
+    recorded = answers()
+    monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
+
+    def chat(name, **kwargs):
+        if name == "eligibility":
+            model = FlakyFake(messages=iter([]))
+            model.__dict__["fail_times"] = 99
+            return model
+        return ToolCallingFake(messages=iter([AIMessage(content="끝")]))
+
+    outcome = run(raw_event(), NoticeModels(RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=chat))
+    assert outcome.status in ("PARTIAL", "IN_REVIEW") and outcome.candidate is not None
+    traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
+    assert traces["eligibility"]["stopped"].startswith("APITimeoutError") and traces["schedules"]["stopped"] is None
+    failed = [c for c in outcome.usage["v2"]["calls"] if c.get("agent") == "eligibility" and "error" in c]
+    assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈
+
+
+def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agent_goes_on():
+    # 2026-11-06 23건 측정: 넣기 도구에 evidence를 항목 밖에 적어 TypeError → 도구 실행기가 오류를 올려 측정 전체가 멈춤
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+
+    @tool
+    def broken(note: str) -> str:
+        """시험용: 늘 실패하는 도구."""
+        raise RuntimeError("도구 결함")
+
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule], evidence=["p1.2"]), call("broken", note="x")]),
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    agent = create_agent(
+        ToolCallingFake(messages=iter(turns)),
+        tools=[add_tool("schedules", ("text",)), broken],
+        middleware=[section.ToolErrorMiddleware()],
+        context_schema=SectionContext,
+    )
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert answers[0]["error"] == "BAD_ARGS" and "evidence" in answers[0]["message"]
+    assert answers[1] == {"error": "TOOL_FAILED", "message": "RuntimeError: 도구 결함"}
+    assert answers[2]["added"] == ["apply"] and result["messages"][-1].content == "끝"  # 다음 차례에 고쳐 넣고 끝냄

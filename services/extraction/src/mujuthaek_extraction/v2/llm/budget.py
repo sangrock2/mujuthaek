@@ -43,8 +43,12 @@ class BudgetMiddleware(AgentMiddleware):
         started = time.monotonic()
         try:
             response = handler(request)
-        except Exception:
+        except Exception as error:
             budget.settle_worst(ticket)  # 보냈다면 청구됐을 수 있음
+            record = getattr(context, "usage", None)
+            if record is not None:  # 실패한 시도도 기록(재시도·비용 추정을 작업 기록에서 보게)
+                seconds = round(time.monotonic() - started, 3)
+                record.append({"agent": self.agent, "seconds": seconds, "error": f"{type(error).__name__}: {error}"[:200], "maybeBilledUsd": round(worst, 8)})
             raise
         message = _ai_message(response)
         usage = (message.usage_metadata or {}) if message is not None else {}

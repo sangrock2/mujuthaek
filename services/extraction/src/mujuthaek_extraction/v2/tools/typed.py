@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from functools import lru_cache
 from typing import Any
 
@@ -51,14 +52,14 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
     item = item_schema(section, documents)
     if section == "notice":
 
-        def run_notice(item: dict[str, Any], runtime: ToolRuntime[SectionContext, Any]) -> str:
-            return add(runtime.context, section, [item])
+        def run_notice(item: dict[str, Any], runtime: ToolRuntime[SectionContext, Any], **unknown: Any) -> str:
+            return unknown_args(unknown) if unknown else add(runtime.context, section, [item])
 
         schema = {"type": "object", "properties": {"item": item}, "required": ["item"]}
         return StructuredTool.from_function(func=run_notice, name="add_notice", description="공고(notice) 항목 하나를 넣습니다.", args_schema=schema)
 
-    def run(items: list[dict[str, Any]], runtime: ToolRuntime[SectionContext, Any]) -> str:
-        return add(runtime.context, section, items)
+    def run(items: list[dict[str, Any]], runtime: ToolRuntime[SectionContext, Any], **unknown: Any) -> str:
+        return unknown_args(unknown) if unknown else add(runtime.context, section, items)
 
     schema = {"type": "object", "properties": {"items": {"type": "array", "items": item}}, "required": ["items"]}
     description = (
@@ -66,6 +67,16 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
         "값이 있는 칸만 적고 근거 evidence를 붙입니다."
     )
     return StructuredTool.from_function(func=run, name=f"add_{section}", description=description, args_schema=schema)
+
+
+def unknown_args(unknown: dict[str, Any]) -> str:
+    """도구 인자 맨 위에 모르는 칸이 오면 넣지 않고 고칠 방법을 돌려줍니다(2026-11-06 23건 측정: evidence를 항목 밖에 적어 TypeError로 측정이 멈춤)."""
+    names = ", ".join(sorted(unknown))
+    message = f"알 수 없는 인자 {names}: 항목은 items 목록에 넣고, 근거(evidence)는 항목마다 그 안에 넣습니다. 아무것도 넣지 않았습니다."
+    return json.dumps(
+        {"error": "BAD_ARGS", "message": message},
+        ensure_ascii=False,
+    )
 
 
 def shared_tools(sections: tuple[str, ...], documents: tuple[str, ...]) -> list[StructuredTool]:

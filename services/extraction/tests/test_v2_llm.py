@@ -3,6 +3,8 @@
 import dataclasses
 import os
 
+import httpx
+import openai
 import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
@@ -14,6 +16,7 @@ from mujuthaek_extraction.config import TRACING_ENV_NAMES, Settings
 from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2.context import V2Context
 from mujuthaek_extraction.v2.document import parse
+from mujuthaek_extraction.v2.llm import retry
 from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware, cost_usd
 from mujuthaek_extraction.v2.llm.cache import FileLLMCache
 from mujuthaek_extraction.v2.llm.models import chat_model
@@ -100,3 +103,29 @@ def test_langsmith_settings_in_env_file_are_handed_to_the_environment_without_ov
     assert settings.export_tracing() == ["LANGSMITH_TRACING", "LANGSMITH_API_KEY"]
     assert os.environ["LANGSMITH_TRACING"] == "true" and os.environ["LANGSMITH_PROJECT"] == "already-set"
     assert settings.export_tracing() == []  # 두 번째부터는 넘길 것이 없음
+
+
+class FlakyFake(ToolCallingFake):
+    """처음 몇 번은 시간 초과, 그다음은 준비한 답."""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        if self.__dict__.setdefault("failures", 0) < self.__dict__.get("fail_times", 1):
+            self.__dict__["failures"] += 1
+            raise openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+def test_transient_model_errors_are_retried_and_each_attempt_is_budgeted_and_recorded(monkeypatch):
+    # 2026-11-06 23건 측정: 시간 초과 한 번에 측정 전체가 멈춤 → 일시 오류만 다시 보냄(예산 초과·잘못된 요청은 아님)
+    monkeypatch.setattr(retry, "FIRST_DELAY_SECONDS", 0.0)
+    model = FlakyFake(messages=iter([AIMessage(content="끝", usage_metadata={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110})]))
+    context = V2Context(document=parse(TEXT), budget=Budget("gpt-6-luna", 0.5))
+    agent = create_agent(model, tools=[], middleware=[retry.retry_middleware(), BudgetMiddleware("schedules")], context_schema=V2Context)
+    result = agent.invoke({"messages": [HumanMessage("일정")]}, context=context)
+    assert result["messages"][-1].content == "끝"
+    assert [("error" in r, r["agent"]) for r in context.usage] == [(True, "schedules"), (False, "schedules")]
+    assert context.usage[0]["error"].startswith("APITimeoutError") and context.usage[0]["maybeBilledUsd"] > 0
+    req = httpx.Request("POST", "https://x")
+    assert retry.transient(openai.RateLimitError("x", response=httpx.Response(429, request=req), body=None))
+    assert not retry.transient(openai.BadRequestError("x", response=httpx.Response(400, request=req), body=None))
+    assert not retry.transient(BudgetExceeded("상한"))

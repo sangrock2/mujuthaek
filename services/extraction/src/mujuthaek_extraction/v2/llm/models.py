@@ -8,7 +8,7 @@ from pydantic import SecretStr
 
 from mujuthaek_extraction.config import Settings
 
-TIMEOUT_SECONDS = 180
+TIMEOUT_SECONDS = 180  # 기본 응답 대기 한도. 담당은 V1 같은 이름 호출의 한도를 받음(model/factory.py)
 
 
 def chat_model(
@@ -18,6 +18,7 @@ def chat_model(
     max_output_tokens: int = 4_000,
     cache_key: str | None = None,
     cache: BaseCache | None = None,
+    timeout: float = TIMEOUT_SECONDS,
 ) -> ChatOpenAI:
     """effort: 추론 강도(기본은 설정값). 기계적인 차례는 낮게, 판단이 큰 에이전트만 높게 둡니다.
     cache_key: OpenAI 프롬프트 캐시 열쇠(같은 공고·같은 에이전트의 차례들이 같은 앞부분을 다시 읽게).
@@ -30,7 +31,7 @@ def chat_model(
         reasoning={"effort": effort or settings.openai_effort},
         max_tokens=max_output_tokens,
         store=False,
-        timeout=TIMEOUT_SECONDS,
+        timeout=timeout,
         max_retries=0,
         stream_usage=True,
         model_kwargs={"prompt_cache_key": cache_key} if cache_key else {},

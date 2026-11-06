@@ -25,7 +25,7 @@ from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRe
 from mujuthaek_extraction.model.call_cache import CachedModel, CallCache
 from mujuthaek_extraction.model.file_exchange import FileExchangeModel
 from mujuthaek_extraction.model.local_ai import LocalChatModel
-from mujuthaek_extraction.model.openai_responses import OpenAIResponsesModel
+from mujuthaek_extraction.model.openai_responses import CALL_TIMEOUT_SECONDS, OpenAIResponsesModel
 from mujuthaek_extraction.model.pricing import Budget, BudgetedModel
 from mujuthaek_extraction.model.runaway import runaway
 
@@ -136,7 +136,8 @@ class ModelFactory:
         """V2 담당별 채팅 모델(LangChain ChatOpenAI). 공고 하나의 담당들이 같은 프롬프트 캐시 열쇠를 씁니다(공통 지시·도구·원문이 같은 앞부분).
         추론 강도는 모두 같게 둡니다: 강도가 다르면 도구 정의 다음부터 앞부분이 달라져 캐시를 반만 씀(2026-11-06 캐시 데우기만 낮은 강도로
         보냈더니 담당이 4.2만 토큰 중 3.2만만 캐시에서 읽음). 평가용 파일 저장소(FileCallCache)를 받으면 V2 채팅 답도 그 아래 v2-chat에 두고
-        같은 요청을 다시 사지 않습니다."""
+        같은 요청을 다시 사지 않습니다. 응답 대기 한도는 V1 같은 이름 호출과 같게(답을 한 번에 받아 긴 출력은 다 만들 때까지 연결이 조용함,
+        2026-11-06 23건 측정: 180초로 두었다가 자격 담당의 긴 차례가 끊김)."""
         import uuid
 
         key = f"v2-{uuid.uuid4().hex[:16]}"
@@ -153,6 +154,7 @@ class ModelFactory:
             return chat_model(
                 self.settings,
                 cache_key=key,
+                timeout=CALL_TIMEOUT_SECONDS.get(agent, 180),
                 max_output_tokens=max_output_tokens or V2_OUTPUT_TOKENS,
                 cache=saved[0] if saved else None,
             )

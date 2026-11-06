@@ -13,14 +13,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any
 
+import openai
 from jsonschema import Draft202012Validator, FormatChecker
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
 from langchain.agents.middleware.types import hook_config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.errors import GraphBubbleUp
 
 from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.assemble import ai_output
@@ -30,9 +33,12 @@ from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.contract import to_part
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware
+from mujuthaek_extraction.v2.llm.retry import retry_middleware
 from mujuthaek_extraction.v2.tools.typed import shared_tools
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
+
+log = logging.getLogger(__name__)
 
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
@@ -69,6 +75,16 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     except BudgetExceeded as error:
         stopped = str(error)
         context.usage.append({"agent": spec.name, "stopped": stopped})
+    except (openai.APIError, TimeoutError, ConnectionError) as error:
+        # 재시도로도 안 된 모델 호출 오류: 그때까지 넣은 항목만 남기고 이 담당 섹션만 사람 확인으로(공고·다른 담당은 계속)
+        # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤
+        stopped = f"{type(error).__name__}: {error}"[:300]
+        context.usage.append({"agent": spec.name, "stopped": stopped})
+        log.warning("섹션 담당이 모델 호출 오류로 멈췄습니다", extra={"agent": spec.name, "error": stopped})
+    except Exception as error:  # 그 밖의 예상 못 한 오류도 이 담당만 멈춤(결함은 로그의 추적으로 찾음)
+        stopped = f"{type(error).__name__}: {error}"[:300]
+        context.usage.append({"agent": spec.name, "stopped": stopped})
+        log.exception("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name})
     trace = {
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
@@ -95,6 +111,22 @@ def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
     except Exception as error:  # 캐시 데우기는 할 수 있는 만큼만: 실패를 기록하고 넘어감
         context.usage.append({"agent": PRIME, "stopped": f"{type(error).__name__}: {error}"[:300]})
     return context.usage
+
+
+class ToolErrorMiddleware(AgentMiddleware):
+    """도구 실행 중 예상 못 한 오류를 그 도구 호출의 오류 답으로 돌려줍니다(담당은 계속 일하고 다음 차례에 고침).
+    도구 실행기는 인자 형식 오류 말고는 오류를 그대로 올려 담당·공고 처리 전체가 멈춥니다(2026-11-06 23건 측정)."""
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        try:
+            return handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as error:
+            call = request.tool_call
+            log.warning("도구 호출이 오류로 끝났습니다", extra={"tool": call.get("name"), "error": f"{type(error).__name__}: {error}"[:200]})
+            content = json.dumps({"error": "TOOL_FAILED", "message": f"{type(error).__name__}: {error}"[:300]}, ensure_ascii=False)
+            return ToolMessage(content=content, tool_call_id=call["id"], name=call.get("name"), status="error")
 
 
 class StopAfterModel(AgentMiddleware):
@@ -134,7 +166,8 @@ def _agent(model: Any, name: str, state: Any, documents: tuple[str, ...], middle
         model,
         tools=[*shared_tools(tuple(state["plan"]["sections"]), documents), *WRITE_TOOLS],
         system_prompt=system_prompt(rules),
-        middleware=[BudgetMiddleware(name), *middleware],
+        # 재시도가 바깥: 다시 보낼 때마다 예산을 다시 예약. 도구 오류는 그 호출의 오류 답으로(담당은 계속)
+        middleware=[retry_middleware(), BudgetMiddleware(name), ToolErrorMiddleware(), *middleware],
         context_schema=SectionContext,
         name=name,
     )
