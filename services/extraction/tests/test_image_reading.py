@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections import Counter
 
 import pytest
 
@@ -191,3 +192,51 @@ def test_rows_are_compared_by_cells_so_spacing_or_a_missing_label_is_not_a_dispu
 def test_ocr_is_skipped_when_turned_off(monkeypatch):
     monkeypatch.setenv("EXTRACTION_IMAGE_OCR", "false")
     assert image_reading._ocr_numbers(b"not a pdf", 1) is None
+
+
+ROW = "| 202호 | 26.71 | 12,744,000 | 166,100 |"
+BOXES = [("26.71", 100.0, 120.0), ("12744000", 100.0, 120.0), ("166100", 101.0, 121.0)]  # OCR 숫자와 그 위·아래(그 행)
+
+
+def third_reading(monkeypatch, ocr, boxes=BOXES):
+    monkeypatch.setenv(image_reading.THIRD_ENV, "true")
+    monkeypatch.setattr(image_reading, "_ocr_numbers", lambda data, page: ocr)
+    monkeypatch.setattr(image_reading, "_ocr_number_boxes", lambda data, page: boxes)
+    monkeypatch.setattr(image_reading, "_render_band", lambda data, page, band: b"band")
+
+
+def three(first, second, close_up):
+    return RecordedModel({"image_text": [answer(first)], "image_text_check": [answer(second)], "image_text_third": [answer(close_up)]})
+
+
+def test_a_close_up_third_reading_settles_a_disputed_row_when_it_and_ocr_agree_with_the_first(pictured, monkeypatch):
+    # V2 5단계: 두 판독이 다른 행을 OCR로 위치를 찾아 크게 잘라 한 번 더 읽음
+    material, context = pictured
+    third_reading(monkeypatch, Counter({"26.71": 1, "12744000": 1, "166100": 1}))
+    model = three(TABLE, TABLE.replace("166,100", "166,700"), ROW)
+    new_material, _, run = image_reading.read_image_tables(material, context, model)
+    assert "불일치 줄" not in new_material.text and ROW in new_material.text and model.requests[-1].call_name == "image_text_third"
+    assert any("처음 판독" in note for note in run.notes)
+
+
+def test_the_row_is_rewritten_from_the_second_reading_only_when_ocr_never_saw_the_first_readings_number(pictured, monkeypatch):
+    material, context = pictured
+    third_reading(monkeypatch, Counter({"26.71": 1, "12744000": 1, "166100": 1}))
+    new_material, _, _ = image_reading.read_image_tables(material, context, three(TABLE.replace("166,100", "166,700"), TABLE, ROW))
+    assert ROW in new_material.text and "166,700" not in new_material.text and "불일치 줄" not in new_material.text
+
+
+def test_a_row_stays_disputed_when_ocr_cannot_tell_or_is_missing_or_the_reading_is_off(pictured, monkeypatch):
+    material, context = pictured
+    wrong = TABLE.replace("166,100", "166,700")
+    third_reading(monkeypatch, Counter({"26.71": 1, "12744000": 1, "166100": 1, "166700": 1}))  # OCR이 두 숫자를 다 봄
+    assert "불일치 줄" in image_reading.read_image_tables(material, context, three(wrong, TABLE, ROW))[0].text
+    third_reading(monkeypatch, None, None)  # OCR 없음: 세 번째 판독을 하지 않음
+    model = three(wrong, TABLE, ROW)
+    assert "불일치 줄" in image_reading.read_image_tables(material, context, model)[0].text
+    assert "image_text_third" not in [r.call_name for r in model.requests]
+    third_reading(monkeypatch, Counter({"26.71": 1, "12744000": 1, "166100": 1}))
+    monkeypatch.delenv(image_reading.THIRD_ENV)  # 기본은 꺼짐
+    model = three(wrong, TABLE, ROW)
+    assert "불일치 줄" in image_reading.read_image_tables(material, context, model)[0].text
+    assert "image_text_third" not in [r.call_name for r in model.requests]
