@@ -353,6 +353,23 @@ def test_items_refused_when_added_are_reported_to_fix_until_they_are_added_again
     assert len([m for m in result["messages"] if m.type == "ai"]) == 3
 
 
+def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
+    # 2026-11-06 5건 재측정 bmc-106: 조건식·예외에만 근거를 붙이고 항목 자체 evidence를 비운 성년·무주택·소득·자산·자동차 기준이
+    # 「근거 id를 1개 이상 붙입니다」만 두 번 받고 거절된 채 끝남
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
+    age["rule"]["expression"]["evidence"] = ["p1.2"]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    turn = AIMessage(content="", tool_calls=[call("add_eligibility", items=[age])])
+    agent = create_agent(
+        ToolCallingFake(messages=iter([turn, AIMessage(content="끝")])), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext
+    )
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    failed = json.loads(next(m.content for m in result["messages"] if m.type == "tool"))["failed"]
+    assert failed[0]["id"] == "age" and "항목 자체의 evidence" in failed[0]["errors"][0] and "하위 칸에 붙인 근거: p1.2" in failed[0]["errors"][0]
+    assert draft.rejected == {("eligibility", "age"): failed[0]["errors"]}
+
+
 def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     # 2026-11-06 23건 측정: 출생자녀 수에 따라 한도가 달라지는 자산 기준을 「하나의 조건식으로 표현할 수 없다」며 글로만 남기고 경고도 넘김
     draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
