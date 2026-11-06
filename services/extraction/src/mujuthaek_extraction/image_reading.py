@@ -44,6 +44,12 @@ TILE_RESOLUTION = 300  # 다시 읽기 조각의 해상도(처음 판독과 다�
 TILE_OVERLAP = 0.04  # 위·아래 조각이 겹치는 높이 비율(경계의 행이 잘리지 않게)
 IMAGE_SHARE = 0.25  # pdf_reader.IMAGE_PAGE_SHARE와 같은 기준으로 자를 그림을 고릅니다
 PROMPT_VERSION = "image_text/v1"
+# 세 번째 판독(V2 5단계): 두 판독이 다른 표 행을 OCR로 위치를 찾아 그 부근만 크게 잘라 한 번 더 읽습니다. 유료 측정 전이라 기본은 꺼짐
+THIRD_CALL = "image_text_third"
+THIRD_ENV = "EXTRACTION_IMAGE_THIRD_READING"
+THIRD_RESOLUTION = 400  # 처음 판독(200)·다시 읽기(300)와 다른 입력
+THIRD_OUTPUT_TOKENS = 4_000  # 행 부근 조각만 읽음
+BAND_MARGIN = 1.5  # 찾은 행 높이의 몇 배를 위·아래로 더 자를지(두 줄 칸·합친 칸이 잘리지 않게)
 # 실측 최대 2,019(GH 783, 시도 6건)지만 한 호출에 쪽 그림을 6장까지 보내 표가 빽빽하면 쪽마다 수천 토큰이라 그대로 둡니다
 # (잘리면 판독 글자를 모두 잃음). 설정 EXTRACTION_MAX_OUTPUT_TOKENS의 image_text로 바꿀 수 있습니다
 MAX_OUTPUT_TOKENS = 16_000
@@ -73,6 +79,13 @@ SCHEMA: dict[str, Any] = {
 
 def _render(data: bytes, page_number: int) -> bytes:
     """그 쪽의 큰 그림 영역만 잘라 RESOLUTION dpi로 그립니다(쪽 전체를 그리면 작은 숫자가 뭉개짐)."""
+    out = io.BytesIO()
+    _picture(data, page_number, RESOLUTION).save(out, format="PNG")
+    return out.getvalue()
+
+
+def _picture(data: bytes, page_number: int, resolution: int) -> Any:
+    """그 쪽의 큰 그림 영역(PIL 그림)."""
     import pdfplumber
 
     with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -85,10 +98,17 @@ def _render(data: bytes, page_number: int) -> bytes:
         boxes = [b for b in boxes if (b[2] - b[0]) * (b[3] - b[1]) / area >= IMAGE_SHARE]
         if boxes:
             page = page.crop((min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)))
-        picture = page.to_image(resolution=RESOLUTION).original
-        out = io.BytesIO()
-        picture.save(out, format="PNG")
-        return out.getvalue()
+        return page.to_image(resolution=resolution).original
+
+
+def _render_band(data: bytes, page_number: int, band: tuple[float, float]) -> bytes:
+    """세 번째 판독용: 같은 그림 영역을 THIRD_RESOLUTION으로 그려 band(RESOLUTION 그림의 위·아래 화소) 부분만 자릅니다."""
+    picture = _picture(data, page_number, THIRD_RESOLUTION)
+    scale = THIRD_RESOLUTION / RESOLUTION
+    top, bottom = max(0, int(band[0] * scale)), min(picture.size[1], int(band[1] * scale) + 1)
+    out = io.BytesIO()
+    picture.crop((0, top, picture.size[0], bottom)).save(out, format="PNG")
+    return out.getvalue()
 
 
 def _render_tiles(data: bytes, page_number: int) -> list[bytes]:
@@ -226,6 +246,121 @@ def _ocr_numbers(data: bytes, page_number: int) -> Counter[str] | None:
     return found or None
 
 
+def _ocr_number_boxes(data: bytes, page_number: int) -> list[tuple[str, float, float]] | None:
+    """OCR 숫자(쉼표 뺀 글자)와 그 글자 상자의 위·아래(RESOLUTION 그림의 화소). 세 번째 판독이 불일치 행의 위치를 찾는 데 씁니다."""
+    global _OCR
+    if os.getenv("EXTRACTION_IMAGE_OCR", "true").lower() == "false":
+        return None
+    try:
+        if _OCR is None:
+            from rapidocr_onnxruntime import RapidOCR
+
+            _OCR = RapidOCR()
+        result, _ = _OCR(_render(data, page_number))
+    except Exception as error:
+        log.info("그림 숫자 위치를 OCR로 찾지 못했습니다", extra={"error": f"{type(error).__name__}: {str(error)[:120]}"})
+        return None
+    found = []
+    for box, text, _ in result or []:
+        ys = [float(point[1]) for point in box]
+        found += [(m.replace(",", ""), min(ys), max(ys)) for m in NUMBER_WORD.findall(text)]
+    return found or None
+
+
+def _row_band(numbers: set[str], boxes: list[tuple[str, float, float]]) -> tuple[float, float] | None:
+    """그 행의 숫자 중 그림에 한 번만 나오는 것들의 상자로 행의 위·아래를 정합니다. 그런 숫자가 없거나 서로 다른 행에 있으면 None."""
+    counts = Counter(number for number, _, _ in boxes)
+    spots = [(top, bottom) for number, top, bottom in boxes if number in numbers and counts[number] == 1]
+    if not spots:
+        return None
+    height = max(bottom - top for top, bottom in spots) or 1.0
+    centers = [(top + bottom) / 2 for top, bottom in spots]
+    if max(centers) - min(centers) > height:
+        return None  # 한 행이 아님
+    return min(top for top, _ in spots) - height * BAND_MARGIN, max(bottom for _, bottom in spots) + height * BAND_MARGIN
+
+
+def _counterpart(cells: list[str], second: str) -> list[str] | None:
+    """다시 읽기에서 같은 행(칸 수와 글 칸이 같고 숫자 칸이 있는 행)이 하나뿐이면 그 칸들."""
+    rows = [c for c in map(_cells, second.split("\n")) if c and len(c) == len(cells) and _labels(c) == _labels(cells) and _numbers(c)]
+    return rows[0] if len(rows) == 1 else None
+
+
+def _settle(line: str, counterpart: list[str] | None, third: str, ocr: Counter[str]) -> str | None:
+    """세 번째 판독으로 불일치 표 행을 정합니다(엄격). 처음 판독이 맞으면 그 줄, 다시 읽기가 맞으면 다시 읽기 칸으로 만든 줄, 못 정하면 None.
+    - 처음 판독: 세 번째 판독에 숫자 칸이 모두 같은 행이 있고, 그 숫자가 모두 OCR에도 있음(지금 두 판독 + OCR이 맞는 기준과 같음)
+    - 다시 읽기: 같은 행의 숫자가 세 번째 판독과 같고 모두 OCR에 있으며, 처음 판독에만 있는 숫자는 OCR에 하나도 없음
+    그림 숫자는 여러 번 읽어도 같은 쪽으로 틀릴 수 있어(8과 6) AI 판독끼리 맞는 것만으로는 정하지 않습니다."""
+    cells = _cells(line)
+    numbers = _numbers(cells) if cells else ()
+    if not numbers:
+        return None
+    rows = [_numbers(c) for c in map(_cells, third.split("\n")) if c]
+    if numbers in rows and all(ocr[n] > 0 for n in numbers):
+        return line
+    other = _numbers(counterpart) if counterpart else ()
+    only_first = set(numbers) - set(other)
+    if other and other != numbers and other in rows and all(ocr[n] > 0 for n in other) and only_first and all(ocr[n] == 0 for n in only_first):
+        return "| " + " | ".join(counterpart or []) + " |"
+    return None
+
+
+def _third_reading(
+    model: ExtractionModel,
+    request: ModelRequest,
+    targets: list[tuple[str, str, bytes, int]],
+    texts: dict[int, str],
+    disputes: list[tuple[int, str, Counter[str] | None]],
+    second: dict[int, str],
+    run: ExtractionRun,
+) -> list[tuple[int, str, Counter[str] | None]]:
+    """5단계 세 번째 판독: 불일치 표 행마다 OCR로 그 행의 위치를 찾아 크게 잘라 한 번에 읽고, _settle로 정한 행은 불일치에서 뺍니다.
+    다시 읽기가 맞으면 판독 글자(texts)의 그 줄을 바꿉니다. OCR이 없거나 위치를 못 찾았거나 정하지 못한 행은 그대로 불일치(사람 확인)."""
+    crops: list[ModelImage] = []
+    listing, owners = [], []
+    boxes: dict[int, list[tuple[str, float, float]] | None] = {}
+    for position, (index, line, ocr) in enumerate(disputes):
+        cells = _cells(line)
+        if ocr is None or not cells or not _numbers(cells):
+            continue
+        _, name, data, page = targets[index - 1]
+        if index not in boxes:
+            boxes[index] = _ocr_number_boxes(data, page)
+        counterpart = _counterpart(cells, second.get(index, ""))
+        band = _row_band(set(_numbers(cells)) | set(_numbers(counterpart) if counterpart else ()), boxes[index] or [])
+        if band is None:
+            continue
+        try:
+            crops.append(ModelImage(f"그림 {len(crops) + 1}", "image/png", _render_band(data, page, band)))
+        except Exception as error:  # 그리기 실패는 그 행만 불일치로 둠
+            log.warning("불일치 행을 잘라 그리지 못했습니다", extra={"error": str(error)[:200]})
+            continue
+        listing.append(f"- 그림 {len(crops)}: {name} {page}쪽 표의 한 행 부근(크게 자름)")
+        owners.append((position, counterpart))
+    if not crops:
+        return disputes
+    third = dataclasses.replace(
+        request,
+        call_name=THIRD_CALL,
+        user="# 첨부 그림\n" + "\n".join(listing),
+        images=tuple(crops),
+        max_output_tokens=output_limit(THIRD_CALL, THIRD_OUTPUT_TOKENS),
+    )
+    answer = _read(model, third, run)
+    readings = {page["image"]: _clean(page["text"]) for page in (answer or {}).get("pages", []) if 1 <= page["image"] <= len(crops)}
+    settled = set()
+    for number, (position, counterpart) in enumerate(owners, start=1):
+        index, line, ocr = disputes[position]
+        result = _settle(line, counterpart, readings.get(number, ""), ocr or Counter())
+        if result is None or (result != line and texts[index].count(line) != 1):
+            continue
+        texts[index] = texts[index].replace(line, result)
+        settled.add(position)
+        how = "처음 판독" if result == line else "다시 읽기로 바꿈"
+        run.notes.append(f"그림 판독 세 번째 판독으로 정함({how}): {result[:120]}")
+    return [dispute for position, dispute in enumerate(disputes) if position not in settled]
+
+
 def _read(model: ExtractionModel, request: ModelRequest, run: ExtractionRun) -> dict[str, Any] | None:
     """판독 호출 한 번. 실패·잘림·형식 오류면 None(기록은 run에)."""
     name = request.call_name
@@ -321,14 +456,18 @@ def read_image_tables(
     second = _check_read(model, request, targets, run)
 
     known = "".join(material.text.split())  # 판독 전 원문(PDF 글자층): 두 판독의 글 칸이 다를 때 어느 쪽이 맞는지 정하는 데 씀
-    blocks, disputed = [], []
+    texts: dict[int, str] = {}
+    disputes: list[tuple[int, str, Counter[str] | None]] = []  # (그림 번호, 불일치 줄, OCR 숫자)
     for page in answer["pages"]:
         index, text = page["image"], _clean(page["text"])
         if text and 1 <= index <= len(targets):
-            _, name, _, number = targets[index - 1]
-            blocks.append(f"{BLOCK_HEAD}{name} {number}쪽 {BLOCK_NOTE} ===\n{text}")
+            texts[index] = text
             numbers = _ocr_numbers(targets[index - 1][2], targets[index - 1][3])
-            disputed += [line for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers, known)]
+            disputes += [(index, line, numbers) for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers, known)]
+    if disputes and os.getenv(THIRD_ENV, "").lower() == "true":
+        disputes = _third_reading(model, request, targets, texts, disputes, second, run)
+    blocks = [f"{BLOCK_HEAD}{targets[index - 1][1]} {targets[index - 1][3]}쪽 {BLOCK_NOTE} ===\n{text}" for index, text in texts.items()]
+    disputed = [line for _, line, _ in disputes]
     if not blocks:
         return material, context, run
     if disputed:
