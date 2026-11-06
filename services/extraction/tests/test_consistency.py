@@ -242,6 +242,17 @@ def test_income_criterion_left_as_text_with_its_percent_is_not_auto_completed():
         assert "CRITERION_NOT_STRUCTURED" not in [f.code for f in found]
 
 
+def test_asset_limit_written_in_a_fill_in_blank_form_left_as_text_is_not_auto_completed():
+    # 2026-11-06 23건 측정: 「( 24,500 )만원 이하」 빈칸 양식이라 글로만 남긴 자산·자동차 기준이 경고 없이 게시됨
+    text = TABLE + "\n총 자산 가액 합산 기준 ( 24,500 )만원 이하\n개별 자동차가액 ( 4,542 )만원 이하"
+    assets = {"category": "ASSETS", "rule": {"status": "UNSTRUCTURED", "expression": None}, "scope": scope(), "evidenceIds": []}
+    assets["originalText"] = "총 자산 가액 합산 기준 ( 24,500 )만원 이하"
+    car = assets | {"category": "CAR_ASSETS", "originalText": "개별 자동차가액 ( 4,542 )만원 이하"}
+    found = check_consistency(candidate(text=text, eligibility=[assets, car]), SourceBundle(texts={"pdf-text": text}))
+    flagged = [f.target for f in found if f.code == "CRITERION_NOT_STRUCTURED"]
+    assert flagged == ["/eligibility/0", "/eligibility/1"]
+
+
 def test_attachment_that_is_a_qna_not_the_notice_is_sent_to_review():
     # 실측: 경남개발공사 전세임대 2차 공고의 첨부 PDF가 「… 관련 Q&A」인데 공고로 자동 완료되던 것
     from mujuthaek_extraction.verify.verifier import is_note

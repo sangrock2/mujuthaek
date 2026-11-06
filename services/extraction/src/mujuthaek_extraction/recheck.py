@@ -21,7 +21,7 @@ import copy
 import json
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -493,12 +493,15 @@ def ordered_problems(problems: dict[tuple[str, str | None], list[str]]) -> list[
     return whole + items
 
 
-def select_targets(parts: list[dict[str, Any]], first: VerificationReport) -> tuple[list[dict[str, Any]], list[str]]:
-    """다시 볼 항목(최대 MAX_ITEMS개, 합쳐 MAX_TARGET_CHARS자)과 그 섹션들을 고릅니다. 검증 문제 항목과 근거를 못 찾아 빠진 항목입니다."""
-    problems = problem_items(first)
+def select_targets(parts: list[dict[str, Any]], first: VerificationReport, scope: Collection[str] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    """다시 볼 항목(최대 MAX_ITEMS개, 합쳐 MAX_TARGET_CHARS자)과 그 섹션들을 고릅니다. 검증 문제 항목과 근거를 못 찾아 빠진 항목입니다.
+    scope: 이 섹션들의 문제만 봅니다(V2: 스스로 고치는 담당 섹션은 빼고 구조 단계 섹션만). None이면 모든 섹션."""
+    problems = {key: value for key, value in problem_items(first).items() if scope is None or key[0] in scope}
     # 근거를 못 찾아 아예 빠진 항목도 섹션과 상관없이 다시 봅니다 (가격·공급 같은 필수 데이터가 조용히 빠지지 않게).
     # 빠지면 이슈가 목록 전체를 가리켜 위에서 찾을 수 없습니다. 자격 조건을 먼저 봅니다.
     for section in ("eligibility", *[s for s in LIST_SECTIONS if s != "eligibility"]):
+        if scope is not None and section not in scope:
+            continue
         index = _part_with(parts, section)
         if index is None or not isinstance(parts[index].get(section), list):
             continue
@@ -623,12 +626,13 @@ def recheck_problems(
     parts: list[dict[str, Any]],
     evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
     strategy: RecheckStrategy = BATCH,
+    scope: Collection[str] | None = None,
     **run_options: Any,
 ) -> RecheckResult:
     """evaluate: 응답 조각들 → 결합·검증 결과. 처음 결과와 재확인 결과를 같은 함수로 판단합니다.
-    순서: 다시 볼 항목 고르기(select_targets) → 고친 답 받기(strategy) → 채택 판단(adopt)."""
+    순서: 다시 볼 항목 고르기(select_targets, scope 섹션만) → 고친 답 받기(strategy) → 채택 판단(adopt)."""
     first = evaluate(parts)
-    targets, sections = select_targets(parts, first)
+    targets, sections = select_targets(parts, first, scope)
     if not targets:
         return RecheckResult(parts, first, [], False, None)
     rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
@@ -648,6 +652,7 @@ def recheck_rounds(
     parts: list[dict[str, Any]],
     evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
     strategies: tuple[RecheckStrategy, ...],
+    scope: Collection[str] | None = None,
     **run_options: Any,
 ) -> RecheckResult:
     """재확인을 여러 라운드로: 앞 라운드에서 채택한 결과 위에서 남은 문제만 다음 전략으로 다시 봅니다(2026-11-05).
@@ -661,7 +666,7 @@ def recheck_rounds(
     accepted = False
     agent = None
     for number, strategy in enumerate(strategies, start=1):
-        result = recheck_problems(rules, material, model, current.parts if current else parts, evaluate, strategy=strategy, **run_options)
+        result = recheck_problems(rules, material, model, current.parts if current else parts, evaluate, strategy=strategy, scope=scope, **run_options)
         if current is None:
             current = result
         if result.run is not None:

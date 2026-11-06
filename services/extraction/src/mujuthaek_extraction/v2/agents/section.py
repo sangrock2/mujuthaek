@@ -46,6 +46,7 @@ PRIME = "prime"
 PRIME_OUTPUT_TOKENS = 512
 # 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
 # 담당이 고칠 수 없는 표시(그림 판독·전환 부호 고침)는 뺌(2026-11-06 네 번째 실행: 세로 글자 표 칸 「청」·「계」 짧은 인용 13개를 세 차례 내내 받음)
+NOT_ADDED = "ITEM_NOT_ADDED"  # 넣을 때 거절되어 아직 초안에 없는 항목(검증 미들웨어의 「고칠 것」)
 LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "IMAGE_TRANSCRIBED_VALUES",
     "CONVERSION_DIRECTION_CORRECTED",
@@ -89,7 +90,13 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
         "stopped": stopped,
-        "draft": {"items": draft.items, "coverage": draft.coverage, "missing": draft.missing, "finished": draft.finished},
+        "draft": {
+            "items": draft.items,
+            "coverage": draft.coverage,
+            "missing": draft.missing,
+            "finished": draft.finished,
+            "rejected": {f"{section}/{item_id}": reasons for (section, item_id), reasons in draft.rejected.items()},
+        },
     }
     return parts_of(spec, draft, document, documents), context.usage, trace
 
@@ -179,7 +186,7 @@ def _issues(spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtim
     판정 섹션 밖(일정·선정·서류 등)의 근거 문제는 검증기가 검토 이슈가 아닌 메모로 내리고 그 항목을 뺍니다(verifier.NOTE_CODES).
     그 메모도 알립니다(2026-11-06 세 번째 실제 실행: 결합기가 가점 5행을 「근거를 확인하지 못한 항목」으로 뺐는데 담당은 「문제 없음」을 받음)."""
     mine = parts_of(spec, draft, state["document"], documents)
-    found = _format_problems(mine, draft)
+    found = [*_not_added(draft), *_format_problems(mine, draft)]
     report = pipeline.evaluate_parts([*(state.get("parts") or []), *mine], state["material"], state["context"], rt)
     if report is None:
         return [*found, {"code": "NOT_ASSEMBLED", "target": "/notice", "description": "공고 기본 정보(notice)가 없어 결합하지 못했어요."}]
@@ -190,6 +197,19 @@ def _issues(spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtim
         if any(_belongs(issue["target"], section) for section in spec.sections):
             found.append({"code": issue["code"], "target": issue["target"], **_item_of(candidate, issue["target"]), "description": issue["description"][:220]})
     return found
+
+
+def _not_added(draft: SectionDraft) -> list[dict[str, Any]]:
+    """넣을 때 거절되어 아직 초안에 없는 항목. 도구 결과로 한 번 알려도 항목이 많으면 담당이 놓치므로 넣을 때까지 검증 결과에 남깁니다."""
+    return [
+        {
+            "code": NOT_ADDED,
+            "target": f"/{section}",
+            "item": item_id,
+            "description": f"넣을 때 거절되어 초안에 없습니다({'; '.join(reasons)}). 고쳐서 add_{section}으로 다시 넣습니다.",
+        }
+        for (section, item_id), reasons in list(draft.rejected.items())
+    ]
 
 
 def _format_problems(parts: list[dict[str, Any]], draft: SectionDraft) -> list[dict[str, Any]]:

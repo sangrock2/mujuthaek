@@ -29,6 +29,18 @@ def test_targets_are_the_problem_items():
     assert [t["id"] for t in targets] == [data["eligibility"][1]["id"]]
 
 
+def test_a_scope_limits_the_recheck_to_the_problems_of_those_sections():
+    # V2: 담당 섹션은 담당이 검증 미들웨어로 스스로 고치므로 구조 단계 섹션(공고·위치·공급)의 문제만 다시 봄
+    data, source, parts, evaluate = setup()
+    assert select_targets(parts, evaluate(parts), ("notice", "locations", "supplyGroups")) == ([], [])
+    skipped = FixedAnswer(_fixed_answer(data))
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=skipped, scope=("supplyGroups",))
+    assert skipped.seen is None and not result.rechecked and result.parts == parts
+    asked = FixedAnswer(_fixed_answer(data))
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=asked, scope=("eligibility",))
+    assert asked.seen is not None and result.accepted
+
+
 def test_worse_answer_from_any_strategy_is_not_adopted():
     data, source, parts, evaluate = setup()
     item = json.loads(json.dumps(parts[0]["eligibility"][1]))
