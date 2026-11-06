@@ -422,10 +422,44 @@ def test_an_item_refused_when_added_is_fixed_by_changing_only_the_wrong_fields()
     assert draft.rejected == {} and draft.pending == {}
 
 
+def test_changing_a_rule_status_clears_the_field_the_new_status_must_leave_empty():
+    # 2026-11-07 3건 표본: 조건을 「글로 남김」으로 바꾸며 조건식을 지우지 않아(칸마다 합치므로 앞 값이 남음) 거절 5번, 고치는 차례가 늘어남
+    document = parse(TEXT)
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
+    age = {**age, "evidence": ["p1.2"], "originalText": document.text("p1.2")}
+    structured = age["rule"]
+    text_only = {"status": "UNSTRUCTURED", "reason": "글로 남겨요."}
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[age, {**age, "id": "later", "evidence": []}])]),
+        AIMessage(
+            content="",
+            tool_calls=[
+                call("update_item", section="eligibility", item_id="age", changes={"rule": text_only}),
+                call("update_item", section="eligibility", item_id="later", changes={"evidence": ["p1.2"], "rule": {**text_only, "status": "UNSTRUCTURED"}}),
+            ],
+        ),
+        AIMessage(content="", tool_calls=[call("update_item", section="eligibility", item_id="later", changes={"rule": structured})]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=document, draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert (
+        answers[1] == {"ok": "eligibility/age 고침"} and answers[2] == {"ok": "eligibility/later 고쳐 넣음"} and answers[3] == {"ok": "eligibility/later 고침"}
+    )
+    rules = {row["id"]: row["rule"] for row in draft.items["eligibility"]}
+    assert rules["age"] == {**text_only, "expression": None}  # 글로 남기면 조건식을 비움
+    assert rules["later"]["status"] == "STRUCTURED" and rules["later"]["reason"] is None  # 조건식으로 바꾸면 남김 이유를 비움
+
+
 def test_the_whole_notice_scope_can_be_left_out_and_defaults_are_filled():
     # 2026-11-07 23건 측정: 넣기 인자 글자의 35~47%(서류·안내·일정·선정)가 공고 전체 범위를 그대로 적은 scope
     item = typed_item_schema("requiredDocuments", ("text",))
     assert "scope" not in item["required"] and {"supplyCategory", "resolution"}.isdisjoint(item["properties"]["scope"]["required"])
+    # 2026-11-07 3건 표본: 「모든 공급」 문구 뒤 공급 묶음 id 없이 SUPPLY_GROUP으로 적어 거절 5번(이전 38건 0) → 대상만 다르면 NOTICE + targetGroups
+    assert "targetGroups만" in item["properties"]["scope"]["description"]
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k not in ("quoteRefs", "scope")}), "evidence": ["p1.2"]}
     youth = {"level": "NOTICE", "targetGroups": ["청년"], "description": "청년에게 적용돼요."}
     draft = SectionDraft(("schedules",))
