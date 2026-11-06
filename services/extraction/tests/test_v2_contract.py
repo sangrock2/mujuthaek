@@ -7,7 +7,16 @@ from helpers import ai_part, example, source_for
 from test_v2_document import TEXT
 
 from mujuthaek_extraction.rules.base import document_ids
-from mujuthaek_extraction.v2.contract import LIST_SECTIONS, EvidenceError, complete, errors, fill_original_text, quote_text, to_part
+from mujuthaek_extraction.v2.contract import (
+    LIST_SECTIONS,
+    EvidenceError,
+    complete,
+    errors,
+    fill_original_text,
+    located_text,
+    quote_text,
+    to_part,
+)
 from mujuthaek_extraction.v2.document import parse
 
 SECTIONS = ("notice", *LIST_SECTIONS)
@@ -75,6 +84,19 @@ def test_wrong_fields_are_reported_as_location_and_reason():
     schedule["startsAt"] = 123
     found = errors("schedules", schedule, documents)
     assert found and found[0].startswith("/startsAt: ")
+
+
+def test_quotes_handed_to_the_assembler_are_widened_until_they_occur_once_in_the_source():
+    # V1 결합기는 인용 글을 원문에서 다시 찾아 위치를 정함: 짧거나 여러 곳에 있는 칸 글자는 그 행으로, 일부 글자는 그 줄로 넓힘
+    lines = ["--- 1쪽 ---", "배점은 아래 표와 같다", "[표 1-1]", "| 소득 50% 이하 | 50점 |", "| 자산 1억 이하 | 50점 |", "합계 100점, 50점 만점 항목 둘"]
+    doc = parse("\n".join(lines))
+    assert located_text(doc, "t1-1.r0.c1") == "| 소득 50% 이하 | 50점 |"  # 「50점」은 원문 3곳 + 너무 짧음
+    assert located_text(doc, "t1-1.r0.c0") == "소득 50% 이하"  # 한 곳뿐이고 충분히 길면 그대로
+    assert located_text(doc, {"id": "p1.2", "part": "50점"}) == "합계 100점, 50점 만점 항목 둘"  # 일부 글자도 그 줄로
+    assert located_text(doc, {"id": "p1.2", "part": "100점"}) == "100점"
+    assert located_text(doc, "p1.1") == "배점은 아래 표와 같다"
+    built = to_part("selectionRules", [{"id": "s", "kind": "SCORING", "evidence": ["t1-1.r0.c0", "t1-1.r0.c1"]}], doc, ("text",))
+    assert [q["text"] for q in built["quotes"]] == ["소득 50% 이하", "| 소득 50% 이하 | 50점 |"]
 
 
 def test_items_with_evidence_ids_become_the_same_v1_part():

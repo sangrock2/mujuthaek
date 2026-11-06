@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
@@ -18,10 +19,12 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 
+from mujuthaek_extraction.assemble.quotes import MIN_QUOTE_CHARS, normalize
 from mujuthaek_extraction.rules.base import call_schema
 from mujuthaek_extraction.v2.document import DocumentModel
 
 LIST_SECTIONS = ("locations", "supplyGroups", "schedules", "eligibility", "selectionRules", "requiredDocuments", "guidance")
+CELL_REF = re.compile(r"(.+\.r\d+)\.c\d+")
 ORIGINAL_TEXT_SECTIONS = ("eligibility", "selectionRules")  # 항목에 원문 문장 칸(originalText)이 꼭 있는 섹션
 
 
@@ -44,6 +47,23 @@ def quote_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
     if not text.strip():
         raise EvidenceError(f"{ref}는 빈 칸입니다(합쳐진 칸). 글자가 있는 칸이나 행을 가리킵니다")
     return text
+
+
+def located_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
+    """근거 하나 → V1 결합기에 넘길 인용 글. 결합기는 인용 글을 원문에서 다시 찾아 위치를 정하므로(V1 방식) 원문에 한 곳만 있고 너무 짧지 않은
+    가장 작은 범위를 넘깁니다: 그대로 쓸 수 없으면 칸·일부 글자 → 그 행·줄로 넓힘. 넓힌 글에도 값은 그대로 들어 있어 값 대조는 같습니다.
+    2026-11-06 세 번째 실제 실행: 가점표 칸 글자(「50점」은 원문 4곳, 「0점」은 40곳)를 그대로 넘겨 결합기가 위치를 못 정하고 가점 5행을 뺌."""
+    text = quote_text(document, evidence)
+    if _distinct(document, text):
+        return text
+    ref = evidence if isinstance(evidence, str) else str(evidence.get("id", ""))
+    cell = CELL_REF.fullmatch(ref)
+    wider = document.text(cell.group(1)) if cell else document.text(ref)  # 칸 → 그 행, 일부 글자 → 그 줄·행 전체
+    return wider if wider.strip() else text
+
+
+def _distinct(document: DocumentModel, text: str) -> bool:
+    return len(normalize(text)) >= MIN_QUOTE_CHARS and document.occurrences(text) == 1
 
 
 def source_sentence(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
@@ -165,7 +185,7 @@ def to_part(
     refs: dict[str, str] = {}
 
     def ref_of(entry: str | dict[str, Any]) -> str:
-        return refs.setdefault(quote_text(document, entry), f"q{len(refs) + 1}")
+        return refs.setdefault(located_text(document, entry), f"q{len(refs) + 1}")
 
     built = []
     for item in items:

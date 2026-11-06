@@ -2,15 +2,20 @@
 
 import json
 import threading
+from datetime import UTC, datetime
 
 import pytest
 from events import raw_event
+from helpers import REGIONS
 from test_pipeline import answers, run
 
 from mujuthaek_extraction.contracts import tools
+from mujuthaek_extraction.intake import InMemorySourceReader
 from mujuthaek_extraction.model import RecordedModel
 from mujuthaek_extraction.model.factory import NoticeModels
+from mujuthaek_extraction.pipeline import process
 from mujuthaek_extraction.v2 import graph
+from mujuthaek_platform.events import new_event
 
 
 def models():
@@ -49,3 +54,16 @@ def test_structure_is_extracted_the_v1_way_and_without_chat_models_the_other_wor
     outcome = run(raw_event(), NoticeModels(recorded, None, names={"primary": "local"}))
     assert [r.call_name for r in recorded.requests] == ["structure"]
     assert outcome.candidate["notice"]["title"] and outcome.usage["v2"]["calls"] == [] and outcome.status != "COMPLETED"
+
+
+def test_section_agents_start_one_parallel_stagger_apart_like_v1_section_calls(v2, monkeypatch):
+    # 한꺼번에 첫 호출을 보내면 하나는 데워 둔 캐시를 못 읽음(V1 섹션 호출과 같은 현상) → V1과 같은 간격으로 차례로 출발
+    recorded, waits = answers(), []
+    monkeypatch.setattr(graph, "SLEEP", waits.append)
+    for name in ("structure", "schedules", "eligibility", "selection", "documents"):
+        v2[name] = lambda spec, state, rt: ([json.loads(recorded[spec.name][0])], [])
+    clock = lambda: datetime(2026, 10, 15, tzinfo=UTC)  # noqa: E731
+    outcome = process(
+        raw_event(), models=models(), reader=InMemorySourceReader(), regions=REGIONS, clock=clock, new_event=new_event, require_pdf=False, parallel_stagger=1.5
+    )
+    assert outcome.status == "COMPLETED" and sorted(waits) == [0.0, 1.5, 3.0, 4.5]

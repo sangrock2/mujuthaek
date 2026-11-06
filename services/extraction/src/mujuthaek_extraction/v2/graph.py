@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import operator
+import time
 from collections.abc import Callable
 from typing import Annotated, Any, TypedDict
 
@@ -35,6 +36,7 @@ from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.document import build as build_document
 
 STRUCTURE = "structure"
+SLEEP: Callable[[float], None] = time.sleep  # 시험에서 바꿔 끼움
 
 
 class V2State(TypedDict, total=False):
@@ -50,6 +52,7 @@ class V2State(TypedDict, total=False):
     plan: dict[str, Any]
     structure: dict[str, Any] | None  # 구조가 낸 id·이름 요약(뒤 담당이 참조)
     worker: str  # Send로 넘기는 담당 이름
+    order: int  # 담당이 출발하는 차례(0부터). 병렬 간격만큼 늦게 출발
     parts: Annotated[list[dict[str, Any]], operator.add]
     usage: Annotated[list[dict[str, Any]], operator.add]
     traces: Annotated[list[dict[str, Any]], operator.add]  # 담당 대화 기록(도구 호출·결과 앞부분)
@@ -105,10 +108,16 @@ def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:
 
 def fan_out(state: V2State) -> list[Send]:
     names = [name for name in state["plan"]["workers"] if name != STRUCTURE]
-    return [Send("section", {**state, "worker": name, "parts": state.get("parts") or [], "usage": [], "traces": []}) for name in names]
+    return [
+        Send("section", {**state, "worker": name, "order": order, "parts": state.get("parts") or [], "usage": [], "traces": []})
+        for order, name in enumerate(names)
+    ]
 
 
 def section(state: V2State, runtime: Context) -> dict[str, Any]:
+    # 담당들이 한꺼번에 첫 호출을 보내면 하나는 데워 둔 캐시를 읽지 못합니다(V1 섹션 호출과 같은 현상, extract.py 병렬 간격).
+    # 그래서 V1과 같은 간격(설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)을 두고 차례로 출발합니다. 응답은 기다리지 않습니다
+    SLEEP(state.get("order", 0) * runtime.context.parallel_stagger)
     spec = workers(state["rules"])[state["worker"]]
     agent = AGENTS.get(spec.name)
     if agent is None:

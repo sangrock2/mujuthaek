@@ -2,6 +2,7 @@
 담당들이 같은 앞부분(지시·도구·원문)으로 도구로 쌓은 항목이 V1과 같은 결과로 게시됨. 유료 호출 없음."""
 
 import json
+from types import SimpleNamespace
 
 from events import raw_event
 from helpers import ai_part, example
@@ -90,18 +91,26 @@ def test_original_text_must_be_the_source_as_written_and_is_filled_when_left_out
     assert rejected["id"] == "rewritten" and rejected["errors"][0].startswith("/originalText: 원문에 그대로 있는 글이 아닙니다")
 
 
-def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_not_again_otherwise():
+def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_a_problem_left_after_a_fix_is_marked_again():
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
     turns = [
-        AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])]),
+        AIMessage(
+            content="", tool_calls=[call("add_schedules", items=[{**schedule, "id": "first", "evidence": ["p1.2"]}, {**schedule, "evidence": ["p1.2"]}])]
+        ),
+        AIMessage(content="", tool_calls=[call("remove_item", section="schedules", item_id="first")]),  # 앞 항목을 빼 순번이 바뀜
         AIMessage(content="", tool_calls=[call("update_item", section="schedules", item_id="nope", changes={})]),  # 실패: 초안 그대로
         AIMessage(content="끝"),
     ]
     checked = []
-    issue = {"code": "VALUE_NOT_IN_QUOTE", "target": "/schedules/0/startsAt", "item": "apply", "description": "값이 인용에 없어요."}
     draft = SectionDraft(("schedules",))
     context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
-    context.check = lambda: checked.append(draft.version) or [issue]
+
+    def check():
+        checked.append(draft.version)
+        index = next(i for i, row in enumerate(draft.items["schedules"]) if row["id"] == "apply")
+        return [{"code": "VALUE_NOT_IN_QUOTE", "target": f"/schedules/{index}/startsAt", "item": "apply", "description": "값이 인용에 없어요."}]
+
+    context.check = check
     agent = create_agent(
         ToolCallingFake(messages=iter(turns)),
         tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
@@ -110,10 +119,12 @@ def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_not
     )
     result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
     reports = [m.content for m in result["messages"] if m.type == "human" and m.content.startswith("# 검증 결과")]
-    assert checked == [1] and len(reports) == 1  # 바뀐 차례 다음에만 한 번
-    assert '"schedules": 1' in reports[0] and "VALUE_NOT_IN_QUOTE" in reports[0] and '"item": "apply"' in reports[0]
+    assert checked == [2, 3] and len(reports) == 2  # 바뀐 차례 다음에만(실패한 고치기 뒤에는 다시 보지 않음)
+    assert '"schedules": 2' in reports[0] and '"item": "apply"' in reports[0] and '"다시"' not in reports[0]
+    assert '"schedules": 1' in reports[1] and '"다시": true' in reports[1]  # 순번이 바뀌어도 같은 항목의 같은 문제
+    assert "사람이 확인할 후보" in reports[0] and "경고를 없애려고" in reports[0]
     traced = section._trace(result["messages"])
-    assert "VALUE_NOT_IN_QUOTE" in traced[0]["verify"] and "verify" not in traced[1]
+    assert "VALUE_NOT_IN_QUOTE" in traced[0]["verify"] and "verify" in traced[1] and "verify" not in traced[2]
 
 
 def test_format_errors_that_make_the_assembler_drop_items_or_the_whole_answer_are_reported():
@@ -185,3 +196,21 @@ def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_noti
     assert set(traces) == set(sections) and traces["eligibility"]["turns"][0]["calls"][0]["name"] == "add_eligibility"
     assert "남은 문제가 없습니다" in traces["eligibility"]["turns"][0]["verify"]  # 넣은 차례 다음 검증 결과(문제 없음)
     assert traces["eligibility"]["draft"]["items"]["eligibility"][0]["evidence"] == [line]  # 마지막 초안을 기록
+
+
+def test_lost_values_the_verifier_moved_to_notes_are_reported_to_the_agent(monkeypatch):
+    # 판정 섹션 밖의 근거 문제는 검증기가 메모로 내리고 항목을 뺌 → 담당에게는 검토 이슈처럼 알림(고칠 수 없는 표시는 빼고)
+    quality = {
+        "reviewIssues": [{"code": "VALUE_NOT_IN_QUOTE", "target": "/selectionRules/0/points", "description": "값이 인용에 없어요."}],
+        "notes": [
+            {"code": "ITEM_DROPPED_NO_EVIDENCE", "target": "/selectionRules", "description": "근거를 확인하지 못한 항목 1개를 뺐습니다: 50점"},
+            {"code": "IMAGE_TRANSCRIBED_VALUES", "target": "/selectionRules", "description": "그림 판독 글자를 근거로 썼어요."},
+            {"code": "EVIDENCE_AMBIGUOUS", "target": "/schedules/0", "description": "다른 담당의 섹션"},
+        ],
+    }
+    candidate = {"selectionRules": [{"id": "score-1"}], "quality": quality}
+    monkeypatch.setattr(section.pipeline, "evaluate_parts", lambda *args: SimpleNamespace(candidate=candidate))
+    spec = SimpleNamespace(name="selection", sections=("selectionRules",))
+    state = {"document": parse(TEXT), "material": None, "context": None, "parts": []}
+    found = section._issues(spec, SectionDraft(("selectionRules",)), state, None, ("text",))
+    assert [(f["code"], f.get("item")) for f in found] == [("VALUE_NOT_IN_QUOTE", "score-1"), ("ITEM_DROPPED_NO_EVIDENCE", None)]

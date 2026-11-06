@@ -131,7 +131,8 @@ class ModelFactory:
 
     def _chat_models(self, cache: CallCache | None = None):
         """V2 담당별 채팅 모델(LangChain ChatOpenAI). 공고 하나의 담당들이 같은 프롬프트 캐시 열쇠를 씁니다(공통 지시·도구·원문이 같은 앞부분).
-        light: 기계적인 호출(캐시 데우기)은 낮은 추론 강도로. 평가용 파일 저장소(FileCallCache)를 받으면 V2 채팅 답도 그 아래 v2-chat에 두고
+        추론 강도는 모두 같게 둡니다: 강도가 다르면 도구 정의 다음부터 앞부분이 달라져 캐시를 반만 씀(2026-11-06 캐시 데우기만 낮은 강도로
+        보냈더니 담당이 4.2만 토큰 중 3.2만만 캐시에서 읽음). 평가용 파일 저장소(FileCallCache)를 받으면 V2 채팅 답도 그 아래 v2-chat에 두고
         같은 요청을 다시 사지 않습니다."""
         import uuid
 
@@ -139,7 +140,7 @@ class ModelFactory:
         folder = getattr(cache, "folder", None)
         saved: list[Any] = []
 
-        def chat(agent: str, *, light: bool = False, max_output_tokens: int | None = None) -> Any:
+        def chat(agent: str, *, max_output_tokens: int | None = None) -> Any:
             # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
             from mujuthaek_extraction.v2.llm.cache import FileLLMCache
             from mujuthaek_extraction.v2.llm.models import chat_model
@@ -148,7 +149,6 @@ class ModelFactory:
                 saved.append(FileLLMCache(Path(folder) / "v2-chat"))
             return chat_model(
                 self.settings,
-                effort=self.settings.openai_light_effort if light else None,
                 cache_key=key,
                 max_output_tokens=max_output_tokens or V2_OUTPUT_TOKENS,
                 cache=saved[0] if saved else None,
