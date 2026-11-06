@@ -57,7 +57,8 @@ def test_write_tools_check_each_item_at_once_and_keep_judged_sections():
     assert answers[1]["error"] == "NOT_MY_SECTION" and answers[2]["error"] == "UNKNOWN_ITEM"
     assert draft.coverage["schedules"] == {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}
     assert draft.missing_for("schedules") == [{"target": "/schedules/0/startsAt", "reason": "TO_BE_ANNOUNCED", "description": "추후 알려요."}]
-    assert draft.version == 3  # 넣기·상태·누락 기록마다 판이 바뀜(실패한 고치기는 그대로)
+    assert draft.version == 4  # 넣기·거절된 넣기·상태·누락 기록마다 판이 바뀜(실패한 고치기는 그대로)
+    assert list(draft.rejected) == [("schedules", "bad")]  # 거절된 항목은 다시 넣을 때까지 남음
     judged = SectionDraft(("eligibility",))
     refused = create_agent(
         ToolCallingFake(
@@ -322,3 +323,41 @@ def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agen
     assert answers[0]["error"] == "BAD_ARGS" and "evidence" in answers[0]["message"]
     assert answers[1] == {"error": "TOOL_FAILED", "message": "RuntimeError: 도구 결함"}
     assert answers[2]["added"] == ["apply"] and result["messages"][-1].content == "끝"  # 다음 차례에 고쳐 넣고 끝냄
+
+
+def test_items_refused_when_added_are_reported_to_fix_until_they_are_added_again():
+    # 2026-11-06 23건 측정: 첫 차례에 근거 없이 거절된 자산·자동차 기준을 담당이 다시 넣지 않고 「등록했어요」로 끝내 16값이 빠짐
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    kept, later = {**schedule, "id": "kept", "evidence": ["p1.2"]}, {**schedule, "id": "later"}
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[kept])]),
+        # 거절만 있는 차례에 끝내기를 함께 불러도 끝나지 않음(이미 있는 id의 거절은 빠진 것이 아님)
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[kept, later]), call("finish", summary="다 넣었어요.")]),
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[{**later, "evidence": ["p1.2"]}]), call("finish", summary="고쳐 넣었어요.")]),
+        AIMessage(content="불리면 안 됨"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    context.check = lambda: section._not_added(draft)
+    agent = create_agent(
+        ToolCallingFake(messages=iter(turns)),
+        tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+        middleware=[VerifyMiddleware()],
+        context_schema=SectionContext,
+    )
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    reports = [m.content for m in result["messages"] if m.type == "human" and m.content.startswith("# 검증 결과")]
+    assert len(reports) == 2 and "남은 문제가 없습니다" in reports[0]
+    assert "## 고칠 것 1개" in reports[1] and '"code": "ITEM_NOT_ADDED"' in reports[1] and '"item": "later"' in reports[1] and "add_schedules" in reports[1]
+    assert [row["id"] for row in draft.items["schedules"]] == ["kept", "later"] and draft.rejected == {} and draft.finished == "고쳐 넣었어요."
+    assert len([m for m in result["messages"] if m.type == "ai"]) == 3
+
+
+def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
+    # 2026-11-06 23건 측정: 출생자녀 수에 따라 한도가 달라지는 자산 기준을 「하나의 조건식으로 표현할 수 없다」며 글로만 남기고 경고도 넘김
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    issue = {"code": "CRITERION_NOT_STRUCTURED", "target": "/eligibility/0", "item": "a", "description": "기준값 「24,500 )만원 이하」"}
+    shown = verify_report(draft, [issue, {**issue, "target": "/eligibility/1", "item": "b"}])
+    assert shown.index("## 확인할 것 2개") < shown.index("## 고치는 법") and shown.count("- CRITERION_NOT_STRUCTURED:") == 1
+    assert "exceptions(REPLACE" in shown and "그대로 둡니다" in shown
+    assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])

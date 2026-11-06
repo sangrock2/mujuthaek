@@ -67,3 +67,27 @@ def test_section_agents_start_one_parallel_stagger_apart_like_v1_section_calls(v
         raw_event(), models=models(), reader=InMemorySourceReader(), regions=REGIONS, clock=clock, new_event=new_event, require_pdf=False, parallel_stagger=1.5
     )
     assert outcome.status == "COMPLETED" and sorted(waits) == [0.0, 1.5, 3.0, 4.5]
+
+
+def test_conclude_rechecks_the_structure_sections_the_v1_way_and_leaves_agent_sections_to_the_agents(v2):
+    # 2026-11-06 23건 측정: 구조 단계는 V1 방식인데 V1의 재확인이 없어, V1이 재확인으로 되살린 가격·공고 핵심이 V2에서 검수로 감
+    recorded = answers()
+    clean = json.loads(recorded["structure"][0])
+    structure, eligibility = json.loads(recorded["structure"][0]), json.loads(recorded["eligibility"][0])
+    structure["supplyGroups"][0]["prices"][1]["sourceAmount"] = "120000"  # 인용에 없는 월임대료(원문은 100000원)
+    eligibility["quotes"].append({"ref": "fake", "documentId": "text", "text": "원문에 없는 무주택 문장입니다"})
+    eligibility["eligibility"][1]["quoteRefs"].append("fake")
+    broken = {"structure": structure, "eligibility": eligibility}
+    for name in ("structure", "schedules", "eligibility", "selection", "documents"):
+        v2[name] = lambda spec, state, rt: ([broken.get(spec.name) or json.loads(recorded[spec.name][0])], [])
+    fixed = {"quotes": clean["quotes"], "supplyGroups": [clean["supplyGroups"][0]], "coverage": {"supplyGroups": {"status": "EXTRACTED", "reason": None}}}
+    model = RecordedModel({"recheck": [json.dumps(fixed, ensure_ascii=False)]}, "local")
+    outcome = run(raw_event(), NoticeModels(model, None, names={"primary": "local"}))
+    group, condition = clean["supplyGroups"][0]["id"], eligibility["eligibility"][1]["id"]
+    assert [r.call_name for r in model.requests] == ["recheck"]
+    assert group in model.requests[0].instructions and condition not in model.requests[0].instructions  # 담당 섹션 문제는 담당 몫
+    assert outcome.usage["recheck"]["accepted"] and outcome.usage["recheck"]["rechecked"] == [f"supplyGroups/{group}"]
+    targets = [issue["target"] for issue in outcome.candidate["quality"]["reviewIssues"]]
+    assert not any(t.startswith("/supplyGroups") for t in targets) and "/eligibility/1" in targets
+    rent = next(p for p in outcome.candidate["supplyGroups"][0]["prices"] if p["kind"] == "MONTHLY_RENT")
+    assert rent["amountKrw"] == 100000

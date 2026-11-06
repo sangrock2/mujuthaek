@@ -45,6 +45,9 @@ class SectionDraft:
     missing: list[dict[str, Any]] = field(default_factory=list)
     version: int = 0  # 바뀔 때마다 1씩(검증 미들웨어가 바뀐 차례에만 다시 검증)
     finished: str | None = None  # finish로 남긴 한두 문장(검증에 새 문제가 나오면 검증 미들웨어가 거둠)
+    # 넣을 때 거절되어 초안에 없는 항목 (섹션, id) → 이유. 같은 id를 넣으면 지움. 검증 미들웨어가 「고칠 것」으로 계속 알림
+    # (2026-11-06 23건 측정: 첫 차례에 근거 없이 거절된 자산·자동차 기준을 담당이 다시 넣지 않고 「등록했어요」로 끝내 16값이 빠짐)
+    rejected: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def find(self, section: str, item_id: str | None) -> int | None:
@@ -84,11 +87,17 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
         if isinstance(item, dict):
             item = fill_original_text(section, item, context.document)
         problems = _problems(context, section, item, adding=True)
+        item_id = item.get("id") if isinstance(item, dict) else None
         if problems:
-            failed.append({"id": item.get("id") if isinstance(item, dict) else None, "errors": problems})
+            failed.append({"id": item_id, "errors": problems})
+            if isinstance(item_id, str) and item_id and draft.find(section, item_id) is None:  # 같은 id가 이미 있으면 빠진 것이 아님
+                with draft._lock:
+                    draft.rejected[(section, item_id)] = problems[:2]
+                    draft.version += 1  # 거절만 있는 차례에 finish를 함께 불러도 검증이 다시 보고 알리게
             continue
         with draft._lock:
             draft.items.setdefault(section, []).append(copy.deepcopy(item))
+            draft.rejected.pop((section, item_id), None)
             draft.version += 1
         added.append(item.get("id") or section)
     return _dump({"added": added, "failed": failed})

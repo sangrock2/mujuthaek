@@ -11,7 +11,10 @@
 - structure: 공고 기본·위치·공급. 공급·가격 표는 코드가 옮기고(V1 공급표 장치, 열 의미만 AI) 공고·위치는 한 번 호출 — V1과 같은 방식.
   다른 담당이 그 id를 쓰므로 먼저(2026-11-06 첫 실제 실행: 에이전트가 공급 묶음을 손으로 넣다 가격이 거의 다 빠짐)
 - section: 판단이 많은 나머지 담당이 에이전트로 동시에. 담당이 낸 V1 AI 조각·호출 기록·대화 기록을 리듀서로 합침
-- conclude: V1과 같은 결합·검증·계약 정리·게시·기록(틀린 값 0을 지키는 결정론 부분은 V1의 검증된 코드)
+- conclude: 구조 단계 섹션(공고·위치·공급)의 문제만 V1 재확인으로 한 번 더 보고(담당 섹션은 담당이 검증 미들웨어로 이미 고침),
+  V1과 같은 결합·검증·계약 정리·게시·기록(틀린 값 0을 지키는 결정론 부분은 V1의 검증된 코드).
+  2026-11-06 23건 측정: 구조 단계는 V1 방식인데 V1의 재확인이 없어, V1이 재확인으로 되살린 가격·공고 핵심이 V2에서 검수로 감
+  (bmc-106·sh-310976 가격 게시 −13씩, sh-310672 공고 전체 검수)
 
 AGENTS(담당 이름 → 실행 함수)에 꽂으면 그것을 씁니다(시험). 꽂힌 것이 없으면 구조는 V1 방식, 나머지는 섹션 에이전트(v2/agents/section.py).
 """
@@ -30,7 +33,6 @@ from langgraph.types import Send
 
 from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.extract import ExtractionRun
-from mujuthaek_extraction.recheck import RecheckResult
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, structure_summary
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.document import build as build_document
@@ -48,6 +50,7 @@ class V2State(TypedDict, total=False):
     context: Any  # V1 TrustedContext(그림 판독 뒤 문서 기록 — 판독 글을 붙인 원문의 해시)
     image_run: ExtractionRun | None
     structure_run: ExtractionRun | None  # 구조(V1 방식) 호출 기록
+    recheck_model: Any  # 구조 단계 재확인 모델(V1 extract_parts가 고른 것: 대체 모델로 넘어갔으면 그 모델)
     document: DocumentModel
     plan: dict[str, Any]
     structure: dict[str, Any] | None  # 구조가 낸 id·이름 요약(뒤 담당이 참조)
@@ -96,9 +99,10 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
         parts, usage, trace = _unpack(AGENTS[STRUCTURE](spec, state, runtime.context))
         return {"parts": parts, "usage": usage, "traces": trace, "structure": structure_summary(parts[0]) if parts else None}
     only = dataclasses.replace(state["rules"], calls=(spec,), split_calls=(), large_text_chars=None)
-    run = pipeline.extract_parts(only, state["material"], runtime.context).run
+    extracted = pipeline.extract_parts(only, state["material"], runtime.context)
+    run = extracted.run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
-    return {"parts": list(run.parts), "structure": summary, "structure_run": run}
+    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model}
 
 
 def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:
@@ -139,17 +143,19 @@ def conclude(state: V2State, runtime: Context) -> dict[str, Any]:
         raw_responses=list(base.raw_responses),
         structure=state.get("structure"),
     )
-    extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), rt.models.primary)
+    extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), state.get("recheck_model") or rt.models.primary)
     rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
     report = pipeline.evaluate_parts(run.parts, material, context, rt)
     if report is None:
         return {"outcome": pipeline.extraction_failed_outcome(extracted, state.get("image_run"), material, rt)}
-    recheck = RecheckResult(run.parts, report, [], False, None)
-    repairs: list[str] = []
+    scope = workers(state["rules"])[STRUCTURE].sections
+    recheck, repairs = pipeline.recheck_step(state["rules"], material, context, extracted, report, rt, scope=scope)
+    report = recheck.report
+    actions: list[str] = []
     if report.contract_errors:
         report, actions = pipeline.quarantine_step(report, recheck, material, context, rt)
         repairs += actions
-        pipeline.note_changes(report, extracted, recheck, actions)
+    pipeline.note_changes(report, extracted, recheck, actions)  # 재확인·계약 정리로 처음 값이 사라진 칸은 메모(V1 annotate와 같음)
     publication = pipeline.publish_step(report, state["raw_event"], material, rt)
     outcome = pipeline.finish(state["raw_event"], report, recheck, publication, extracted, state.get("image_run"), repairs, material, rt)
     return {"outcome": outcome}

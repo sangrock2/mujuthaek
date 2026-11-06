@@ -40,6 +40,7 @@ MUST_FIX = (
     "ORIGINAL_TEXT_NOT_FOUND",
     "QUOTE_REF_UNKNOWN",
     "ITEM_DROPPED",
+    "ITEM_NOT_ADDED",
     "CLAIM_UNSUPPORTED",
 )
 FIX_GUIDE = (
@@ -50,6 +51,15 @@ CHECK_GUIDE = (
     "확인할 것: 의심 경고입니다. 원문과 대조해 실제로 틀렸거나 빠졌을 때만 고치고, 원문상 맞으면 그대로 둡니다(그 항목만 사람이 확인). "
     "경고를 없애려고 원문에 없는 값·예외를 넣거나 맞는 값을 바꾸지 않습니다. 「다시」 표시는 한 번 고쳐 보고도 남은 것이라 더 고치지 않습니다."
 )
+# 경고 옆에 다시 보여 주는 고치는 법(공통 지시의 그 규칙). 2026-11-06 23건 측정: 대상군·출생자녀 수에 따라 한도가 달라지는 자산 기준을
+# 「하나의 조건식으로 표현할 수 없다」며 글로만 남기고 경고를 받고도 그대로 둠(V1은 기본 한도 + 자녀 수별 예외로 넣음, 16값 차이)
+HOW_TO = {
+    "CRITERION_NOT_STRUCTURED": (
+        "기준값이 대상군·자녀 수·배우자 소득 등에 따라 달라진다는 것만으로는 글로 남길 이유가 아닙니다. 대상군마다 기준이 다르면 대상군마다 조건을 "
+        "따로 두고, 한 조건 안에서 달라지는 값은 기본 기준을 조건식으로, 달라지는 경우를 exceptions(REPLACE, effectExpression 필수, 발동 조건을 "
+        "다 표현할 수 없으면 when.status UNSTRUCTURED)로 넣습니다. 이번 모집에 적용하지 않는 기준이거나 속성 사전으로 나타낼 수 없는 기준이면 그대로 둡니다."
+    ),
+}
 END_GUIDE = (
     "원문에 없는 값은 report_missing으로 적습니다. set_coverage(PARTIAL)는 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). "
     "고치는 차례에 finish도 함께 부르고, 고칠 것이 없으면 finish만 부릅니다."
@@ -93,6 +103,9 @@ def report(draft: Any, issues: list[dict[str, Any]]) -> str:
         if group:
             shown = f" (앞 {ISSUES_SHOWN}개)" if len(group) > ISSUES_SHOWN else ""
             lines += [f"## {title} {len(group)}개{shown}", guide, *(json.dumps(issue, ensure_ascii=False) for issue in group[:ISSUES_SHOWN])]
+    hints = [f"- {code}: {HOW_TO[code]}" for code in dict.fromkeys(str(issue.get("code")) for issue in issues) if code in HOW_TO]
+    if hints:
+        lines += ["## 고치는 법", *hints]
     lines.append(END_GUIDE)
     return "\n".join(lines)
 
