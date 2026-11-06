@@ -197,7 +197,7 @@ def _problems(context: SectionContext, section: str, item: Any, adding: bool) ->
         return ["notice는 하나뿐입니다. 고치려면 update_item을 씁니다."]
     evidence = item.get("evidence")
     if not isinstance(evidence, list) or not evidence:
-        return ["/evidence: 근거 id를 1개 이상 붙입니다."]
+        return [_no_own_evidence(item)]
     found = []
     for entry in evidence_entries(item):  # 하위 항목(가격·예외 등)의 근거까지
         try:
@@ -210,6 +210,15 @@ def _problems(context: SectionContext, section: str, item: Any, adding: bool) ->
     body = complete(section, without_evidence(item), context.documents)
     found += errors(section, body, context.documents)
     return found[:5]
+
+
+def _no_own_evidence(item: dict[str, Any]) -> str:
+    """항목 자체 근거가 빈 거절 이유. 하위 칸(조건식·예외·가격 등)에만 근거를 붙였으면 그 id를 함께 보여 줍니다
+    (2026-11-06 5건 재측정 bmc-106: 「근거 id를 1개 이상 붙입니다」만 두 번 받은 자격 담당이 어느 칸인지 몰라
+    성년·무주택·소득·자산·자동차 기준이 거절된 채 끝남)."""
+    nested = [ref for ref in dict.fromkeys(e if isinstance(e, str) else str(e.get("id") or "") for e in evidence_entries(item)) if ref]
+    cited = f"(하위 칸에 붙인 근거: {', '.join(nested[:5])})" if nested else ""
+    return f"/evidence: 항목 자체의 evidence 칸이 비었습니다. 조건식·예외 같은 하위 칸의 evidence와 따로, 항목 전체의 근거 id를 1개 이상 넣습니다{cited}."
 
 
 def _merge(base: Any, patch: Any) -> Any:
