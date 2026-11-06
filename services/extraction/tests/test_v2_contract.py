@@ -97,6 +97,10 @@ def test_quotes_handed_to_the_assembler_are_widened_until_they_occur_once_in_the
     assert located_text(doc, "p1.1") == "배점은 아래 표와 같다"
     built = to_part("selectionRules", [{"id": "s", "kind": "SCORING", "evidence": ["t1-1.r0.c0", "t1-1.r0.c1"]}], doc, ("text",))
     assert [q["text"] for q in built["quotes"]] == ["소득 50% 이하", "| 소득 50% 이하 | 50점 |"]
+    # 칸 글자가 V1이 표 행 아래 붙인 읽기 도움 줄(↳)에도 있으면 결합기는 두 곳을 찾으므로 그 행으로 넓힘
+    # (2026-11-06 5건 재측정 sh-310672: 입주가능일 칸만 근거로 단 일정이 「위치를 정하지 못함」으로 빠짐)
+    aided = parse("\n".join(["--- 1쪽 ---", "[표 1-1]", "| 505 호 | 2026년 11월 27일 부터 |", "  ↳ 2026년 11월 27일 부터 — 공실호수 505 호"]))
+    assert located_text(aided, "t1-1.r0.c1") == "| 505 호 | 2026년 11월 27일 부터 |"
 
 
 def test_items_with_evidence_ids_become_the_same_v1_part():
