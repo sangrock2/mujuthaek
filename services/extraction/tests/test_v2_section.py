@@ -19,6 +19,7 @@ from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2 import graph
 from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
+from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.tools.typed import add_tool
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
@@ -122,7 +123,7 @@ def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_a_p
     assert checked == [2, 3] and len(reports) == 2  # 바뀐 차례 다음에만(실패한 고치기 뒤에는 다시 보지 않음)
     assert '"schedules": 2' in reports[0] and '"item": "apply"' in reports[0] and '"다시"' not in reports[0]
     assert '"schedules": 1' in reports[1] and '"다시": true' in reports[1]  # 순번이 바뀌어도 같은 항목의 같은 문제
-    assert "사람이 확인할 후보" in reports[0] and "경고를 없애려고" in reports[0]
+    assert "## 고칠 것 1개" in reports[0] and "다른 방법으로 한 번 더" in reports[0]  # 값이 인용에 없음 = 근거 오류(고칠 것)
     traced = section._trace(result["messages"])
     assert "VALUE_NOT_IN_QUOTE" in traced[0]["verify"] and "verify" in traced[1] and "verify" not in traced[2]
 
@@ -253,3 +254,17 @@ def test_finish_ends_without_another_model_call_unless_verification_finds_a_new_
     ]
     draft, said = agent_run(turns, {1: [issue], 2: [issue]})
     assert len(said) == 2 and draft.finished == "고쳤어요."
+
+
+def test_verification_separates_defects_to_fix_from_warnings_to_check():
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    report = verify_report(
+        draft,
+        [
+            {"code": "CONTRACT_DUPLICATE_ID", "target": "/eligibility/0/exceptions/0", "item": "a", "description": "DUPLICATE_ID", "다시": True},
+            {"code": "EXCEPTION_SUSPECTED", "target": "/eligibility/0", "item": "a", "description": "기준값 뒤 다른 기준값"},
+        ],
+    )
+    fix, check = report.index("## 고칠 것 1개"), report.index("## 확인할 것 1개")
+    assert fix < report.index("CONTRACT_DUPLICATE_ID") < check < report.index("EXCEPTION_SUSPECTED")
+    assert "다른 방법으로 한 번 더" in report and "원문상 맞으면 그대로" in report

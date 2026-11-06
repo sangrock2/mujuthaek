@@ -122,3 +122,17 @@ def test_items_with_evidence_ids_become_the_same_v1_part():
         rebuilt = [{**drop_refs(item), "quoteRefs": [quote[r] for r in item["quoteRefs"]]} for item in built[section]]
         expected = [{**drop_refs(item), "quoteRefs": [texts[r] for r in item["quoteRefs"]]} for item in part[section]]
         assert rebuilt == expected, section
+
+
+def test_inner_ids_that_collide_get_their_item_id_in_front():
+    # 청년·고령자 소득 조건의 자녀 가산 예외에 같은 id → 계약 DUPLICATE_ID로 한쪽 조건이 격리됨(2026-11-06).
+    # 겹치는 하위 id만 앞에 항목 id를 붙임
+    doc = parse(TEXT)
+    child = {"id": "child-uplift", "evidence": ["p1.3"]}
+    items = [
+        {"id": "youth", "exceptions": [dict(child)], "evidence": ["p1.3"]},
+        {"id": "elderly", "exceptions": [dict(child), {"id": "youth"}], "evidence": ["p1.3"]},
+    ]
+    built = to_part("eligibility", items, doc, ("text",))["eligibility"]
+    assert [e["id"] for e in built[0]["exceptions"]] == ["child-uplift"]
+    assert [e["id"] for e in built[1]["exceptions"]] == ["elderly.child-uplift", "elderly.youth"]
