@@ -1300,6 +1300,16 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # 대상 계층이 둘 다 적혀 있으면 맞아야 합니다(실측: 포항 전세보증금 표의 계층별 5행이 21A 묶음마다 모두 붙음)
             and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
         ]
+        if number is None and name:
+            # 주택형·면적 없이 단지 이름으로만 행을 나눈 가격표: 다른 표에 같은 이름의 모집 묶음이 딱 하나면 그 묶음의 가격입니다
+            # (2026-11-06 V2 5건 재측정 bmc-106: 단지별 모집표와 단지별 임대조건표가 나뉘어, 모집 묶음 4개는 가격 없이·가격 묶음 4개는 모집 수 없이
+            #  남아 가격 빈칸 8개로 보류 — V1·V2 같음). 같은 이름의 모집 묶음이 둘 이상이면 어느 주택형인지 몰라 붙이지 않습니다
+            same_name = [
+                g
+                for g in with_counts
+                if table_of(g) != table_of(group) and _norm(g.get("_complex")) == name and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
+            ]
+            targets = same_name if len(same_name) == 1 else []
         code = _norm(group.get("housingTypeCode")).upper()
         exact = [g for g in targets if code and _same_type(group, g)]
         if not exact and re.search(r"[A-Z]", code):
@@ -1315,7 +1325,8 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             kept.append(group)
             continue
         for target in targets:
-            by_range = _housing_number(target) != number  # 면적 범위 안의 행: 면적마다 다른 임대 조건이므로 요금안을 면적으로 나눕니다
+            # 면적 범위 안의 행: 면적마다 다른 임대 조건이므로 요금안을 면적으로 나눕니다. 단지 이름으로만 붙인 행(번호 없음)은 나누지 않습니다
+            by_range = number is not None and _housing_number(target) != number
             # 그 묶음의 원래 가격과 같은 값만 거릅니다. 다른 행(층)에서 붙인 가격과 비교하면 층마다 같은 융자금이 둘째 층부터 빠졌음
             # (2026-10-24 다섯 번째 채점: 층별 5행 가격표의 융자금 16개 누락)
             seen = {(p["kind"], p["sourceAmount"], p["priceStage"], tuple(p["scope"]["targetGroups"])) for p in target["prices"] if not p.get("_attached")}

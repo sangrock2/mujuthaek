@@ -320,6 +320,42 @@ def test_headerless_table_at_top_of_next_page_continues_the_mapped_table():
     assert sorted(p["sourceAmount"] for g in groups if g["housingTypeCode"] == "55B" for p in g["prices"]) == ["288,620", "291,690"]
 
 
+def test_price_rows_named_only_by_complex_attach_to_the_one_count_group_of_that_complex():
+    # 2026-11-06 V2 5건 재측정 bmc-106: 단지별 모집표와 단지별 임대조건표가 나뉘어(주택형·면적 칸 없음) 모집 묶음은 가격 없이,
+    # 가격 묶음은 모집 수 없이 남아 가격 빈칸 8개로 보류됨. 같은 이름의 모집 묶음이 둘 이상이면 어느 주택형 가격인지 몰라 붙이지 않습니다
+    def tables(count_rows):
+        counts = st.Table("1-1", 1, "모집 현황", count_rows[0], count_rows, tuple(tuple(range(3 * r, 3 * r + 3)) for r in range(len(count_rows))))
+        lease_rows = (("단지명", "임대보증금(원)", "월임대료(원)"), ("동삼2", "2,160,000", "42,800 ~49,600"), ("다대4", "2,150,000", "47,900"))
+        lease = st.Table("2-1", 2, "임대조건", lease_rows[0], lease_rows, tuple(tuple(range(3 * r, 3 * r + 3)) for r in range(len(lease_rows))))
+        return [counts, lease]
+
+    mapping = {
+        "tables": [
+            {"table": "1-1", "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": [column(1, "COMPLEX"), column(3, "COUNT", ck="OFFERED")]},
+            {
+                "table": "2-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "COMPLEX"), column(2, "PRICE", pk="DEPOSIT", unit="원"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원")],
+            },
+        ]
+    }
+    one_each = (("단지명", "주택형", "모집 세대수"), ("동삼2", "-", "300"), ("다대4", "-", "600"))
+    groups = st.build_part(tables(one_each), mapping, "pdf-text")["supplyGroups"]
+    assert [(g["_complex"], [c["value"] for c in g["counts"]], [p["sourceAmount"] for p in g["prices"]]) for g in groups] == [
+        ("동삼2", [300], ["2,160,000", "42,800 ~49,600"]),
+        ("다대4", [600], ["2,150,000", "47,900"]),
+    ]
+    assert all(p["scope"]["description"] and "전용" not in p["scope"]["description"] for g in groups for p in g["prices"])  # 면적으로 나누지 않음
+    two_types = (("단지명", "주택형", "모집 세대수"), ("동삼2", "A", "100"), ("동삼2", "B", "200"), ("다대4", "-", "600"))
+    mapping["tables"][0]["columns"].insert(1, column(2, "HOUSING_TYPE"))
+    groups = st.build_part(tables(two_types), mapping, "pdf-text")["supplyGroups"]
+    offered = [g for g in groups if g["counts"]]
+    assert [len(g["prices"]) for g in offered] == [0, 0, 2]  # 동삼2는 주택형이 둘이라 붙이지 않음(다대4만 붙음)
+    assert [g["_complex"] for g in groups if not g["counts"]] == ["동삼2"]
+
+
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금
     supply_rows = (("주택형", "전용", "모집"), ("39", "39.70 ~ 39.87", "100"))
