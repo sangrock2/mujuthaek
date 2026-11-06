@@ -59,6 +59,13 @@ HOW_TO = {
         "따로 두고, 한 조건 안에서 달라지는 값은 기본 기준을 조건식으로, 달라지는 경우를 exceptions(REPLACE, effectExpression 필수, 발동 조건을 "
         "다 표현할 수 없으면 when.status UNSTRUCTURED)로 넣습니다. 이번 모집에 적용하지 않는 기준이거나 속성 사전으로 나타낼 수 없는 기준이면 그대로 둡니다."
     ),
+    "CONTRACT_INCOMPLETE_INCOME_BENCHMARK": (
+        "소득 기준(INCOME_BENCHMARK_PERCENT)의 benchmark에는 householdScope와, referenceYear·referenceVersion 중 하나가 꼭 있어야 합니다. "
+        "원문에 기준 연도가 없으면 연도를 짐작해 넣지 말고 referenceVersion에 원문의 기준 표현(「전년도」「입주자모집공고일 당시」 등)을 그대로 적습니다."
+    ),
+    "CONTRACT_EXCEPTIONS_NOT_REVIEWED": (
+        "exceptionsStatus를 NOT_REVIEWED로 두지 않습니다. 원문에 그 조건의 예외가 없으면 NONE_IN_SOURCE, 있으면 PRESENT와 exceptions를 적습니다."
+    ),
     "DEFINITION_SCOPE_SUSPECTED": (
         "원문이 어떤 낱말(고령자 등)의 정의라면 그 기준은 그 낱말에 해당하는 사람에게만 적용됩니다. 대상(scope.targetGroups)을 그 낱말이 든 이름으로 "
         "좁힙니다(예: 「○○ 신청자 중 고령자」). 원문상 대상 전체의 기준이 맞으면 그대로 둡니다."

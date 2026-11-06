@@ -196,6 +196,15 @@ def _issues(spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtim
     for issue in [*quality["reviewIssues"], *notes]:
         if any(_belongs(issue["target"], section) for section in spec.sections):
             found.append({"code": issue["code"], "target": issue["target"], **_item_of(candidate, issue["target"]), "description": issue["description"][:220]})
+    # 계약 검사 오류: 마지막 계약 정리(quarantine)가 그 조건식을 내리거나 항목을 빼므로 담당이 고칠 수 있을 때 알립니다
+    # (2026-11-07 23건 재조립 sh-310976: 담당이 넣은 「도시근로자 월평균소득 70% 이하」 조건식이 기준 연도·버전이 비어
+    #  INCOMPLETE_INCOME_BENCHMARK로 원문만 남음 — 검토 이슈가 아니라 계약 오류라 담당은 받지 못했음)
+    for error in report.contract_errors:
+        code, _, rest = error.partition(" ")
+        target = rest.split(":")[0].strip() or "/"
+        if any(_belongs(target, section) for section in spec.sections):
+            description = f"계약 검사 오류 {code}: 그대로 두면 마지막 계약 정리가 이 조건식을 내리거나 항목을 빼고 사람 확인으로 보냅니다."
+            found.append({"code": f"CONTRACT_{code}", "target": target, **_item_of(candidate, target), "description": description})
     return found
 
 
