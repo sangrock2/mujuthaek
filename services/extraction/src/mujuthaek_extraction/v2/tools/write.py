@@ -26,6 +26,7 @@ from mujuthaek_extraction.v2.contract import (
     errors,
     evidence_entries,
     fill_original_text,
+    fill_scope,
     quote_text,
     without_evidence,
 )
@@ -34,6 +35,7 @@ from mujuthaek_extraction.v2.document import DocumentModel
 COVERAGE = ("EXTRACTED", "PARTIAL", "NOT_IN_SOURCE", "NOT_APPLICABLE")
 JUDGED = ("notice", "eligibility")  # 판정에 쓰여 비울 수 없는 섹션
 MISSING_REASONS = ("NOT_IN_SOURCE", "TO_BE_ANNOUNCED", "SOURCE_ATTACHMENT_REQUIRED", "CONFLICT", "UNREADABLE", "NOT_APPLICABLE")
+PATCH_HINT = "거절된 항목은 update_item(같은 id, 틀린 칸만)으로 고치면 넣어집니다. 항목 전체를 다시 보내지 않습니다."
 
 
 @dataclass
@@ -49,6 +51,9 @@ class SectionDraft:
     # 넣을 때 거절되어 초안에 없는 항목 (섹션, id) → 이유. 같은 id를 넣으면 지움. 검증 미들웨어가 「고칠 것」으로 계속 알림
     # (2026-11-06 23건 측정: 첫 차례에 근거 없이 거절된 자산·자동차 기준을 담당이 다시 넣지 않고 「등록했어요」로 끝내 16값이 빠짐)
     rejected: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    # 거절된 항목 그대로 (섹션, id) → 항목. update_item으로 틀린 칸만 고치면 넣습니다(2026-11-07 23건 측정: 거절된 항목을 통째로
+    # 다시 보내는 데 출력 토큰의 7%, 자격 담당은 12%를 씀)
+    pending: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def find(self, section: str, item_id: str | None) -> int | None:
@@ -83,10 +88,10 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
     draft = context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
-    added, failed = [], []
+    added, failed, kept = [], [], False
     for item in items if isinstance(items, list) else []:
         if isinstance(item, dict):
-            item = fill_original_text(section, item, context.document)
+            item = fill_scope(section, fill_original_text(section, item, context.document), context.documents)
         problems = _problems(context, section, item, adding=True)
         item_id = item.get("id") if isinstance(item, dict) else None
         if problems:
@@ -94,28 +99,33 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
             if isinstance(item_id, str) and item_id and draft.find(section, item_id) is None:  # 같은 id가 이미 있으면 빠진 것이 아님
                 with draft._lock:
                     draft.rejected[(section, item_id)] = problems[:2]
+                    draft.pending[(section, item_id)] = copy.deepcopy(item)
                     draft.version += 1  # 거절만 있는 차례에 finish를 함께 불러도 검증이 다시 보고 알리게
+                kept = True
             continue
         with draft._lock:
             draft.items.setdefault(section, []).append(copy.deepcopy(item))
             draft.rejected.pop((section, item_id), None)
+            draft.pending.pop((section, item_id), None)
             draft.version += 1
         added.append(item.get("id") or section)
-    return _dump({"added": added, "failed": failed})
+    return _dump({"added": added, "failed": failed, **({"hint": PATCH_HINT} if kept else {})})
 
 
 @tool
 def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: ToolRuntime[SectionContext, Any]) -> str:
-    """넣은 항목을 고칩니다. changes에는 바꿀 칸만 적습니다(객체는 칸마다 합치고 그 밖은 바꿈, evidence를 적으면 근거를 바꿈).
-    notice는 item_id를 비워 둡니다."""
+    """넣은 항목이나 넣을 때 거절된 항목을 고칩니다. changes에는 바꿀 칸만 적습니다(객체는 칸마다 합치고 그 밖은 바꿈, evidence를 적으면
+    근거를 바꿈). 거절된 항목은 고쳐서 맞으면 넣습니다. notice는 item_id를 비워 둡니다."""
     context = runtime.context
     draft = context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
     index = draft.find(section, item_id)
+    if index is None and (section, item_id) in draft.pending:
+        return _patch_pending(context, section, item_id, changes)
     if index is None:
         return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
-    merged = _merge(draft.items[section][index], changes if isinstance(changes, dict) else {})
+    merged = fill_scope(section, _merge(draft.items[section][index], changes if isinstance(changes, dict) else {}), context.documents)
     problems = _problems(context, section, merged, adding=False)
     if problems:
         return _dump({"error": "BAD_ITEM", "errors": problems})
@@ -183,6 +193,26 @@ def finish(summary: str, runtime: ToolRuntime[SectionContext, Any]) -> str:
 
 
 WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, finish)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
+
+
+def _patch_pending(context: SectionContext, section: str, item_id: str, changes: Any) -> str:
+    """넣을 때 거절된 항목을 바꿀 칸만 고쳐, 맞으면 넣습니다. 아직 틀리면 고친 채로 남겨 두고 이유를 돌려줍니다."""
+    draft = context.draft
+    merged = _merge(draft.pending[(section, item_id)], changes if isinstance(changes, dict) else {})
+    merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
+    problems = _problems(context, section, merged, adding=True)
+    with draft._lock:
+        if problems:
+            draft.pending[(section, item_id)] = merged
+            draft.rejected[(section, item_id)] = problems[:2]
+        else:
+            draft.items.setdefault(section, []).append(merged)
+            draft.pending.pop((section, item_id), None)
+            draft.rejected.pop((section, item_id), None)
+        draft.version += 1
+    if problems:
+        return _dump({"error": "BAD_ITEM", "errors": problems, "message": "아직 넣지 않았습니다. 남은 칸을 update_item으로 고칩니다."})
+    return _dump({"ok": f"{section}/{item_id} 고쳐 넣음"})
 
 
 def _problems(context: SectionContext, section: str, item: Any, adding: bool) -> list[str]:

@@ -206,7 +206,7 @@ def _not_added(draft: SectionDraft) -> list[dict[str, Any]]:
             "code": NOT_ADDED,
             "target": f"/{section}",
             "item": item_id,
-            "description": f"넣을 때 거절되어 초안에 없습니다({'; '.join(reasons)}). 고쳐서 add_{section}으로 다시 넣습니다.",
+            "description": f"넣을 때 거절되어 초안에 없습니다({'; '.join(reasons)}). update_item(같은 id, 틀린 칸만)으로 고치면 넣어집니다.",
         }
         for (section, item_id), reasons in list(draft.rejected.items())
     ]

@@ -36,7 +36,10 @@ def answer_when_asked(folder, answer):
         while True:
             pending = list(folder.glob("*.request.json"))
             if pending:
-                body = json.loads(pending[0].read_text(encoding="utf-8"))
+                try:
+                    body = json.loads(pending[0].read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    continue  # 쓰는 중인 요청 파일(부하가 크면 반쯤 쓴 파일을 읽어 대역이 죽고 시험이 멈췄음)
                 (folder / "seen.json").write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
                 Path(body["answerPath"]).write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
                 return

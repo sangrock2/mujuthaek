@@ -6,6 +6,7 @@
 - null을 허용하는 칸·목록 칸은 생략 가능(코드가 채움 → 출력이 짧음), 조건부 규칙(if/then)은 빼고 결합기가 원래 형식으로 다시 검사
 - 인용 ref(quoteRefs) 대신 근거(evidence): 항목에는 필수, 하위 객체에는 선택(없으면 위 근거를 이어받음)
 - 원문 문장(originalText)은 선택: 비우면 코드가 첫 근거의 원문으로 채움(옮겨 적다 글자가 달라지는 일 방지)
+- 적용 범위(scope)는 선택: 비우면 코드가 공고 전체로 채움. 적을 때도 supplyCategory·resolution은 생략하면 ALL·RESOLVED(contract.fill_scope)
 
 담당들은 맡은 섹션이 달라도 같은 도구 목록(모든 담당 섹션의 add 도구)을 받습니다. 지시·도구·원문이 같은 앞부분이라 한 번 캐시에 올린 것을
 모든 담당이 다시 읽습니다(2026-11-06 두 번째 실제 실행: 담당마다 도구가 달라 앞부분 2~3만 토큰을 담당마다 따로 캐시에 올림).
@@ -38,6 +39,8 @@ EVIDENCE = {
 }
 DROPPED = ("if", "then", "else", "not")
 ORIGINAL_TEXT = "원문 문장 그대로. 비우면 첫 근거의 원문으로 채웁니다"
+SCOPE = "적용 범위. 공고 전체(모든 신청자·모든 공급)에 적용되면 적지 않습니다(프로그램이 공고 전체로 채움)"
+SCOPE_OPTIONAL = {"supplyCategory": "생략하면 ALL", "resolution": "생략하면 RESOLVED"}
 
 
 @lru_cache(maxsize=64)
@@ -106,6 +109,9 @@ def _relax(node: Any, top: bool = False) -> Any:
         if top and "originalText" in properties:
             properties["originalText"] = {**properties["originalText"], "description": ORIGINAL_TEXT}
             required = [name for name in required if name != "originalText"]
+        if top and isinstance(properties.get("scope"), dict):
+            properties["scope"] = _optional_scope(properties["scope"])
+            required = [name for name in required if name != "scope"]
         node["properties"], node["required"] = properties, required
     for key in ("items", "additionalProperties"):
         if isinstance(node.get(key), dict):
@@ -114,6 +120,15 @@ def _relax(node: Any, top: bool = False) -> Any:
         if isinstance(node.get(key), list):
             node[key] = [_relax(child) for child in node[key]]
     return node
+
+
+def _optional_scope(node: dict[str, Any]) -> dict[str, Any]:
+    """항목의 적용 범위: 생략 가능, 안의 supplyCategory·resolution도 생략 가능(코드가 기본값을 채움)."""
+    properties = {
+        name: {**child, "description": SCOPE_OPTIONAL[name]} if name in SCOPE_OPTIONAL else child for name, child in (node.get("properties") or {}).items()
+    }
+    required = [name for name in node.get("required", []) if name not in SCOPE_OPTIONAL]
+    return {**node, "description": SCOPE, "properties": properties, "required": required}
 
 
 def _optional(node: dict[str, Any]) -> bool:
