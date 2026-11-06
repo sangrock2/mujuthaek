@@ -25,7 +25,7 @@ from typing import Any
 from rapidfuzz import fuzz
 from rapidfuzz.distance import LCSseq
 
-from mujuthaek_extraction.assemble.quotes import NormalizedText, find_scattered, normalize, strip_markers
+from mujuthaek_extraction.assemble.quotes import NormalizedText, candidates, find_scattered, normalize, strip_markers
 from mujuthaek_extraction.image_reading import image_targets
 from mujuthaek_extraction.intake.model import ExtractionMaterial
 
@@ -64,6 +64,7 @@ class DocumentModel:
     picture_pages: tuple[str, ...] = ()  # 글자 없는 그림 쪽(p8 · d2.p1)
     source_id: str = "text"  # 원문 글자의 문서 ID(V1 material.text_document_id). 인용의 documentId
     blocks: tuple[tuple[str, str], ...] = ()  # 묶음 id → 원래 이름(x1 → 「첨부 엑셀 목록.xlsx」, g1 → 「그림 판독 3쪽」)
+    source: str = field(default="", compare=False, repr=False)  # 읽은 원문 글자 그대로(V1 결합기가 인용 위치를 찾는 글자, 표 읽기 도움 줄 포함)
     _by_id: dict[str, Line | Table] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -112,9 +113,18 @@ class DocumentModel:
         return self.contains(strip_markers(text)) or bool(find_scattered(self._index, text))
 
     def occurrences(self, text: str) -> int:
-        """같은 정규화로 원문에 그 글이 몇 곳 있는지(V1 결합기가 인용 글로 위치를 찾을 때 한 곳이어야 위치가 정해짐)."""
+        """V1 결합기가 그 인용 글로 원문에서 찾는 곳 수(한 곳이어야 위치가 정해짐). 결합기와 같은 찾기(candidates)를 같은 원문 글자에 돌립니다.
+        원문 글자에는 V1이 표 행 아래 붙인 읽기 도움 줄(↳)·열 제목 줄도 들어 있어, 조각(도움 줄 없음)으로 세면 결합기보다 적게 셉니다
+        (2026-11-06 5건 재측정 sh-310672: 칸 「2026년 11월 27일 부터」가 표 행과 그 아래 도움 줄 두 곳에 있어 결합기가 위치를 못 정하고
+        입주 일정을 뺌 — 23건 측정에서도 같은 값이 빠졌음). 원문 글자가 없는 모델(시험)은 조각을 같은 정규화로 셉니다."""
+        if self.source:
+            return len(candidates(self.source, text, self._source_index)[0])
         needle = normalize(text)
         return self._normalized.count(needle) if needle else 0
+
+    @cached_property
+    def _source_index(self) -> NormalizedText:
+        return NormalizedText(self.source)
 
     @cached_property
     def _normalized(self) -> str:
@@ -269,7 +279,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
         counters[area] = counters.get(area, 0) + 1
         items.append(Line(f"{area}.{counters[area]}", line))
     close()
-    return DocumentModel(tuple(items), source_id=source_id, blocks=tuple(names))
+    return DocumentModel(tuple(items), source_id=source_id, blocks=tuple(names), source=text)
 
 
 def _is_row(line: str) -> bool:

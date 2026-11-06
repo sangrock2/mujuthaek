@@ -81,6 +81,12 @@ def test_the_whole_source_is_rendered_with_ids_and_empty_cells_are_left_out():
     assert near[0]["id"] == "p1.3" and near[0]["similarity"] >= 80
 
 
+def test_places_of_a_quote_are_counted_like_the_assembler_including_reading_aid_lines():
+    doc = parse(TEXT)
+    assert doc.occurrences("14,202,000") == 2  # 표 행 + V1 읽기 도움 줄(↳ 기준 — 보증금 14,202,000): 결합기는 두 곳을 찾음
+    assert doc.occurrences("| 기준 | 14,202,000 | 105,200 |") == 1 and doc.occurrences("없는 글") == 0
+
+
 def test_original_text_is_checked_like_the_v1_verifier_and_a_cut_text_points_to_its_line():
     doc = parse(TEXT)
     assert doc.verbatim("■ 소득 : 150%  이하") and doc.verbatim("[표 1-1] | 기준 | 14,202,000 |")  # 공백·표 번호 표시는 무시
