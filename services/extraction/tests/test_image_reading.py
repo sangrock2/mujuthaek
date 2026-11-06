@@ -171,6 +171,17 @@ def test_rows_are_compared_by_cells_so_spacing_or_a_missing_label_is_not_a_dispu
     assert image_reading._agrees(first, "|  | 201 | 31.69 | 19,240,000 | 250,600 |", None)  # 다시 읽기에서 합친 칸 이름이 빠짐
     assert not image_reading._agrees(first, "| 청년안테나 (상암로81길10) | 201 | 31.69 | 19,240,000 | 250,500 |", None)  # 숫자가 다름
     assert not image_reading._agrees(first, "| 청년예가 (천중로50길 43) | 201 | 31.69 | 19,240,000 | 250,600 |", None)  # 단지 이름이 다름
+    # 글 칸만 다르면 공고 본문 글자로 정함(2026-11-06 SH 「암사도전숙」·「암사도전축」): 처음 판독 쪽만 본문에 있으면 맞음
+    known = "".join("※ 신청 시, 청년안테나 1동/2동 구분에 유의할 것".split())
+    misread = "| 청년안테니 (상암로81길10) | 201 | 31.69 | 19,240,000 | 250,600 |"
+    assert image_reading._agrees(first, misread, None, known)
+    assert not image_reading._agrees(misread, first, None, known)  # 처음 판독(원문에 붙이는 쪽)이 본문에 없으면 불일치
+    assert not image_reading._agrees(first, misread, None, known + "청년안테니")  # 둘 다 본문에 있으면 정할 수 없음
+    assert not image_reading._agrees(first, misread.replace("250,600", "250,500"), None, known)  # 숫자가 다르면 그대로 불일치
+    # 낱말은 띄어쓰기가 남은 칸 글자에서 나눔: 본문 「성내도전숙 가동/나동」에 「성내도전숙나동」은 붙어 있지 않음
+    row = "| 성내도전숙 나동 (성안로 64) | 304 | 35.99 | 27,680,000 |"
+    assert image_reading._agrees(row, row.replace("도전숙", "도전축"), None, "".join("성내도전숙 가동/나동".split()))
+    assert not image_reading._agrees(row, row.replace("나동", "가동"), None, "".join("성내도전숙 가동/나동".split()))  # 둘 다 본문에 있음
     # 두 판독이 같게 틀려도(250,500) OCR 숫자에 없으면 불일치
     wrong = first.replace("250,600", "250,500")
     ocr = Counter(["201", "31.69", "19240000", "250600"])
