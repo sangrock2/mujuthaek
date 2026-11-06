@@ -776,6 +776,40 @@ def wrong_values(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
     return score
 
 
+def published_view(outcome: dict[str, Any], notice: str) -> dict[str, Any] | None:
+    """사람 확인 없이 쓰이는 부분을 채점 모양으로(자격 기준값은 조건식의 원자마다 rules에). 검수(IN_REVIEW) 결과는 None."""
+    auto = auto_published(outcome["candidate"], outcome.get("status"))
+    if auto is None:
+        return None
+    neutral = neutral_from_candidate(auto, notice)
+    neutral["rules"] = [
+        {
+            "criterion": CRITERION_OF.get(atom.get("attribute"), "OTHER"),
+            "operator": atom.get("operator"),
+            "value": atom.get("value"),
+            "targetGroup": ", ".join(item["scope"]["targetGroups"]) or None,
+            "text": item.get("originalText"),  # 계층 이름이 달라도 원문이 같으면 같은 조건으로 봅니다(compare와 같은 기준)
+        }
+        for item in auto["eligibility"]
+        for atom in _atoms(item["rule"]["expression"])
+    ]
+    return neutral
+
+
+def score_outcome(expected: dict[str, Any], outcome: dict[str, Any], notice: str) -> tuple[Score, Score, Score]:
+    """추출 결과 하나 채점: (재현율, 검수 없이 쓰이는 정답 값, 자동 게시 값 중 정답표에 없는 값). 후보가 있는 결과만.
+    main과 LangSmith 평가 실험(langsmith_eval.py)이 같은 기준으로 씁니다."""
+    view = published_view(outcome, notice)
+    # 검수 없이 쓰이는 정답 값(보류 밖). 재현율과의 차이가 사람 확인으로 가는 값
+    released, published = (compare(expected, view), wrong_values(expected, view)) if view is not None else (Score(), Score())
+    return compare(expected, neutral_from_candidate(outcome["candidate"], notice)), released, published
+
+
+def sums(score: Score) -> tuple[int, int]:
+    """(맞은 수, 전체 수). 「찾은 것 중 정답표에 없는 것」 항목은 재현율에 넣지 않습니다."""
+    return sum(v for k, v in score.found.items() if "찾은" not in k), sum(v for k, v in score.total.items() if "찾은" not in k)
+
+
 # ---------- 실행 ----------
 
 
@@ -818,32 +852,18 @@ def main() -> None:
             if not outcome.get("candidate"):
                 print(f"## {notice}: 후보 없음 ({outcome.get('status')})")
                 continue
-            actual = neutral_from_candidate(outcome["candidate"], notice)
             status = outcome.get("status")
-            auto = auto_published(outcome["candidate"], status)
-            if auto is not None:
-                neutral = neutral_from_candidate(auto, notice)
-                neutral["rules"] = [
-                    {
-                        "criterion": CRITERION_OF.get(atom.get("attribute"), "OTHER"),
-                        "operator": atom.get("operator"),
-                        "value": atom.get("value"),
-                        "targetGroup": ", ".join(item["scope"]["targetGroups"]) or None,
-                        "text": item.get("originalText"),  # 계층 이름이 달라도 원문이 같으면 같은 조건으로 봅니다(compare와 같은 기준)
-                    }
-                    for item in auto["eligibility"]
-                    for atom in _atoms(item["rule"]["expression"])
-                ]
-                published.merge(wrong_values(expected, neutral), f"{notice}: ")
-                released.merge(compare(expected, neutral))  # 검수 없이 쓰이는 정답 값(보류 밖). 재현율과의 차이가 사람 확인으로 가는 값
+            score, notice_released, notice_published = score_outcome(expected, outcome, notice)
+            published.merge(notice_published, f"{notice}: ")
+            released.merge(notice_released)
         else:
             actual = _load_key(args.other_keys, notice)
             if actual is None:
                 print(f"## {notice}: 비교할 정답표 없음")
                 continue
             status = "정답표 비교"
-        score = compare(expected, actual)
-        found, total = sum(v for k, v in score.found.items() if "찾은" not in k), sum(v for k, v in score.total.items() if "찾은" not in k)
+            score = compare(expected, actual)
+        found, total = sums(score)
         print(f"## {notice} [{status}] 합계 {found}/{total}")
         for section in score.total:
             mark = "" if score.found[section] == score.total[section] else "  ←"
@@ -857,10 +877,10 @@ def main() -> None:
         rate = overall.found[section] / overall.total[section] if overall.total[section] else 0
         print(f"  {section:<28} {overall.found[section]:>5}/{overall.total[section]:<5} {rate:6.1%}")
         _print_unchecked(overall, section, "    ")
-    found, total = sum(v for k, v in overall.found.items() if "찾은" not in k), sum(v for k, v in overall.total.items() if "찾은" not in k)
+    found, total = sums(overall)
     print(f"  {'합계(재현율)':<28} {found:>5}/{total:<5} {found / total if total else 0:6.1%}")
     if released.total:  # 2026-11-05: 에이전트의 값은 검수로 남는 값을 줄이는 데 있어 재현율과 함께 봅니다(검수 공고는 0으로 셈)
-        got = sum(v for k, v in released.found.items() if "찾은" not in k)
+        got = sums(released)[0]
         print(f"  {'자동 게시 재현율(검수 없이)':<26} {got:>5}/{total:<5} {got / total if total else 0:6.1%}")
     if published.total:
         print()
