@@ -105,6 +105,11 @@ class DocumentModel:
         """원문 어딘가에 그 글이 그대로 있는지(공백·표 칸 구분자는 무시, V1 검증기의 originalText 대조와 같은 정규화)."""
         return bool(normalize(text)) and normalize(text) in self._normalized
 
+    def occurrences(self, text: str) -> int:
+        """같은 정규화로 원문에 그 글이 몇 곳 있는지(V1 결합기가 인용 글로 위치를 찾을 때 한 곳이어야 위치가 정해짐)."""
+        needle = normalize(text)
+        return self._normalized.count(needle) if needle else 0
+
     @cached_property
     def _normalized(self) -> str:
         return normalize("\n".join(item.text if isinstance(item, Line) else "\n".join(item.lines) for item in self.items))

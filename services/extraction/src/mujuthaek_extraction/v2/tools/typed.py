@@ -61,7 +61,10 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
         return add(runtime.context, section, items)
 
     schema = {"type": "object", "properties": {"items": {"type": "array", "items": item}}, "required": ["items"]}
-    description = f"{section} 항목을 넣습니다(호출 하나에 20개 안팎, 많으면 같은 차례에 여러 번). 값이 있는 칸만 적고 근거 evidence를 붙입니다."
+    description = (
+        f"{section} 항목을 넣습니다(맡은 항목을 한 차례에 다: 호출 하나에 50개 안팎까지, 더 많으면 같은 차례에 여러 번). "
+        "값이 있는 칸만 적고 근거 evidence를 붙입니다."
+    )
     return StructuredTool.from_function(func=run, name=f"add_{section}", description=description, args_schema=schema)
 
 

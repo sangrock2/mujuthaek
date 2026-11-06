@@ -31,12 +31,15 @@ from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware
 from mujuthaek_extraction.v2.tools.typed import shared_tools
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
+from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
 
-MAX_MODEL_CALLS = 6  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유
+MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
 PRIME = "prime"
 PRIME_TASK = "# 준비 호출\n담당들이 같은 앞부분(지시·도구·원문)을 다시 읽도록 캐시에 올리는 호출입니다. 도구를 부르지 말고 「준비」라고만 답합니다."
 PRIME_OUTPUT_TOKENS = 512
+# 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거 위치를 못 정함(그림 판독 표시·전환 부호 고침처럼 담당이 고칠 수 없는 것은 뺌)
+LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {"IMAGE_TRANSCRIBED_VALUES", "CONVERSION_DIRECTION_CORRECTED"}
 
 
 def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -78,7 +81,7 @@ def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
     document: DocumentModel = state["document"]
     documents = tuple(document_ids(state["material"]))
     context = SectionContext(document=document, budget=rt.models.budget, documents=documents)
-    model = chat(PRIME, light=True, max_output_tokens=PRIME_OUTPUT_TOKENS)
+    model = chat(PRIME, max_output_tokens=PRIME_OUTPUT_TOKENS)  # 추론 강도도 담당과 같게(다르면 앞부분이 도구 정의 다음부터 달라짐)
     agent = _agent(model, PRIME, state, documents, [ModelCallLimitMiddleware(run_limit=1, exit_behavior="end")])
     try:
         agent.invoke({"messages": [shared_message(document), HumanMessage(PRIME_TASK)]}, context=context)
@@ -124,14 +127,18 @@ def _agent(model: Any, name: str, state: Any, documents: tuple[str, ...], middle
 
 def _issues(spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtime, documents: tuple[str, ...]) -> list[dict[str, Any]]:
     """구조 조각 + 지금 초안을 V1 결합·검증에 넣어 이 담당 섹션의 문제만. 결합기가 형식이 틀려 버리는 것(항목·응답 전체)은
-    결합기와 같은 형식 검사로 먼저 알립니다(검토 이슈에는 「범위 미완료」로만 남아 이유가 안 보임)."""
+    결합기와 같은 형식 검사로 먼저 알립니다(검토 이슈에는 「범위 미완료」로만 남아 이유가 안 보임).
+    판정 섹션 밖(일정·선정·서류 등)의 근거 문제는 검증기가 검토 이슈가 아닌 메모로 내리고 그 항목을 뺍니다(verifier.NOTE_CODES).
+    그 메모도 알립니다(2026-11-06 세 번째 실제 실행: 결합기가 가점 5행을 「근거를 확인하지 못한 항목」으로 뺐는데 담당은 「문제 없음」을 받음)."""
     mine = parts_of(spec, draft, state["document"], documents)
     found = _format_problems(mine, draft)
     report = pipeline.evaluate_parts([*(state.get("parts") or []), *mine], state["material"], state["context"], rt)
     if report is None:
         return [*found, {"code": "NOT_ASSEMBLED", "target": "/notice", "description": "공고 기본 정보(notice)가 없어 결합하지 못했어요."}]
     candidate = report.candidate
-    for issue in candidate["quality"]["reviewIssues"]:
+    quality = candidate["quality"]
+    notes = [n for n in quality.get("notes") or [] if isinstance(n, dict) and n.get("code") in LOST_VALUE_NOTES]
+    for issue in [*quality["reviewIssues"], *notes]:
         if any(_belongs(issue["target"], section) for section in spec.sections):
             found.append({"code": issue["code"], "target": issue["target"], **_item_of(candidate, issue["target"]), "description": issue["description"][:220]})
     return found
