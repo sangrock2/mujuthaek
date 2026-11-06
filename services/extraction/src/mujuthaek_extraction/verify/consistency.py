@@ -5,7 +5,7 @@ V6 표 위치 대조: 값이 원문에 "있는지"(V2·V3)가 아니라 "제자�
     예: 「| 로얄 | 302 | 1,000,000 | 192,300 | 2,000,000 |」의 2,000,000은 머리글이 "2, 3순위"인데 1순위 보증금으로 붙인 경우.
     양쪽에 표시가 모두 있을 때만 비교합니다(표시가 없으면 판단하지 않음). 같은 값이 한 행에 여러 칸이면 어느 칸인지 몰라 건너뜁니다.
 V7 앞뒤 일관성: 일정 순서(공고 ≤ 접수 시작 ≤ 당첨 발표 ≤ 계약 ≤ 입주, 시작 ≤ 끝), 값의 정상 범위(금액·면적·나이·소득 비율),
-    월임대료가 보증금보다 큰 가격안, 주택형별 모집 수 합과 공고 전체 모집 수.
+    월임대료가 보증금보다 큰 가격안, 주택형별 모집 수 합과 공고 전체 모집 수, 낱말 정의로 만든 자격 조건의 대상(2026-11-06).
 V8 누락 탐지: AI가 "다 뽑았다(EXTRACTED)"고 한 섹션이 비었는데 원문에 그 절 제목이 있는 경우, 배점표가 있는데 가점 행이 없는 경우,
     첨부 엑셀 주택 목록의 행 수보다 위치·공급 묶음이 크게 적은 경우, 원문 서류 표의 행을 어느 서류도 인용하지 않은 경우(2026-10-23).
 모두 사람 확인 후보(의심)이며, 판정에 쓰는 섹션(공고·자격)이 아니면 화면 표시 메모로 갑니다(verifier.NOTE_CODES).
@@ -971,6 +971,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_image_evidence(candidate, sources, find)
     _check_notice_document(candidate, find)
     _check_income_tiers(candidate, find)
+    _check_definition_scope(candidate, find)
     return findings
 
 
@@ -1012,3 +1013,43 @@ def _check_income_tiers(candidate: dict[str, Any], find: Any) -> None:
         shown = ", ".join(f"{v:g}%" for v in sorted(set(values)))
         description = f"소득 기준 {shown}이(가) 가격표의 소득 구간과 같습니다. 임대료 구간을 자격으로 나눈 것인지 확인하세요."
         find("V8", INCOME_TIER, f"/eligibility/{index}", description)
+
+
+# 낱말 정의로 만든 조건이 그 낱말이 아닌 대상에 붙음(2026-11-06 V2 5건 재측정 dcco-24812: 「주거약자」 정의의 한 갈래 「① 고령자(만 65세 이상인 자)」로
+# 만 65세 이상 조건을 만들어 대상 「주거약자용 주택 신청자」 전체에 붙여 게시됨 — 장애인 등 다른 주거약자에게는 나이 기준이 없음).
+# 근거 원문 한 줄이 「[번호] 낱말(정의)」뿐이고 정의 안에 조건식의 값이 있는데 대상(scope.targetGroups)에 그 낱말이 없으면, 그 낱말에 해당하는
+# 사람만의 기준을 대상 전체에 붙였을 수 있어 사람 확인으로 보냅니다. 대상이 비어 있으면(신청자 전체) 보지 않습니다: 「성년자(만 19세 이상)」처럼
+# 정의가 곧 모두의 요건인 경우입니다. 「소득 : 70% 이하」 같은 콜론 줄은 기준 이름 줄과 섞여 보지 않습니다
+# (저장된 V1·V2 후보 155개 중 이 공고의 V2 두 회차만 걸림)
+DEFINITION_SCOPE = "DEFINITION_SCOPE_SUSPECTED"
+DEFINITION_ENTRY = re.compile(
+    r"^\s*(?:[①-⑳]|\(\s*\d{1,2}\s*\)|\d{1,2}\s*[.)]|[가-하]\s*[.)]|[-•·▪○◦※*])?\s*([가-힣·ㆍ]{2,12})\s*\(([^()]{1,80})\)\s*[.,;]?\s*$"
+)
+DEFINED_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _check_definition_scope(candidate: dict[str, Any], find: Any) -> None:
+    quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
+    for index, item in enumerate(candidate["eligibility"]):
+        groups = [g for g in (item.get("scope") or {}).get("targetGroups") or [] if g]
+        values = {
+            float(v)
+            for _, atom in _atoms(item["rule"]["expression"], "")
+            for v in (atom.get("value") if isinstance(atom.get("value"), list) else [atom.get("value")])
+            if isinstance(v, int | float) and not isinstance(v, bool)
+        }
+        if not groups or not values:
+            continue
+        texts = [item.get("originalText") or "", *(quotes.get(i, "") for i in item.get("evidenceIds") or [])]
+        for line in (line for text in texts for line in text.split("\n")):
+            entry = DEFINITION_ENTRY.match(line)
+            if not entry or any(normalize(entry.group(1)) in normalize(group) for group in groups):
+                continue
+            if values & {float(n.replace(",", "")) for n in DEFINED_NUMBER.findall(entry.group(2))}:
+                term = entry.group(1)
+                description = (
+                    f"「{line.strip()}」는 「{term}」의 정의인데, 이 조건의 대상({', '.join(groups)})에는 「{term}」이(가) 없습니다. "
+                    f"대상 전체의 기준인지, 그중 「{term}」에게만 적용되는 기준인지 확인하세요."
+                )
+                find("V7", DEFINITION_SCOPE, f"/eligibility/{index}", description)
+                break

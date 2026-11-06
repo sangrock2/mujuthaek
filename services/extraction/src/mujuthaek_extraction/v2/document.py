@@ -23,8 +23,9 @@ from functools import cached_property
 from typing import Any
 
 from rapidfuzz import fuzz
+from rapidfuzz.distance import LCSseq
 
-from mujuthaek_extraction.assemble.quotes import normalize
+from mujuthaek_extraction.assemble.quotes import NormalizedText, find_scattered, normalize, strip_markers
 from mujuthaek_extraction.image_reading import image_targets
 from mujuthaek_extraction.intake.model import ExtractionMaterial
 
@@ -105,6 +106,11 @@ class DocumentModel:
         """원문 어딘가에 그 글이 그대로 있는지(공백·표 칸 구분자는 무시, V1 검증기의 originalText 대조와 같은 정규화)."""
         return bool(normalize(text)) and normalize(text) in self._normalized
 
+    def verbatim(self, text: str) -> bool:
+        """원문 문장 칸(originalText)으로 받을 글인지: V1 검증기의 대조(ORIGINAL_TEXT_NOT_FOUND)와 같은 기준입니다. 표시 글자(쪽·표 번호)를 빼고
+        이어진 글로 있거나, 순서도·칸 없는 표처럼 글자 순서가 뒤섞인 곳이면 낱말이 가까이 모여 있습니다."""
+        return self.contains(strip_markers(text)) or bool(find_scattered(self._index, text))
+
     def occurrences(self, text: str) -> int:
         """같은 정규화로 원문에 그 글이 몇 곳 있는지(V1 결합기가 인용 글로 위치를 찾을 때 한 곳이어야 위치가 정해짐)."""
         needle = normalize(text)
@@ -112,7 +118,15 @@ class DocumentModel:
 
     @cached_property
     def _normalized(self) -> str:
-        return normalize("\n".join(item.text if isinstance(item, Line) else "\n".join(item.lines) for item in self.items))
+        return normalize(self._joined)
+
+    @cached_property
+    def _index(self) -> NormalizedText:
+        return NormalizedText(self._joined)
+
+    @cached_property
+    def _joined(self) -> str:
+        return "\n".join(item.text if isinstance(item, Line) else "\n".join(item.lines) for item in self.items)
 
     def render(self) -> str:
         """담당 첫 메시지에 넣는 원문 전체. 줄은 「p3.12 글」, 표는 머리(「[표 t4-1] 열: c0=구분 | c1=보증금」) 아래 행마다
@@ -158,6 +172,20 @@ class DocumentModel:
             return hits
         scored = [(fuzz.partial_ratio(needle, _squash(text)), ref, text) for ref, text, _ in self._searchable()]
         return [{"id": ref, "text": text, "similarity": round(score)} for score, ref, text in sorted(scored, reverse=True)[:limit] if score >= FUZZY_MIN]
+
+    def closest(self, text: str) -> dict[str, str] | None:
+        """원문에 그대로 없는 글과 가장 비슷한 줄·표 행: 그 글의 글자가 순서대로 가장 많이 든 줄, 같으면 남는 글자가 적은 줄(같은 줄이 여럿이면 앞의 것).
+        원문 줄의 가운데를 빼고 적은 글은 글자 유사도·낱말 겹침으로는 못 찾기도 함(2026-11-06: 띄어쓰기가 붙은 PDF 줄
+        「※ 1인가구는20%p, 2인가구는10%p가산적용한금액」 → 「1인가구는 20%p 가산적용한 금액」). 글자의 80% 이상이 든 줄이 없으면 None."""
+        needle = normalize(text)
+        best, found = (0.0, 0.0), None
+        for ref, line, _ in self._searchable() if needle else ():
+            hay = normalize(line)
+            common = LCSseq.similarity(needle, hay)
+            score = (common / len(needle), common / max(len(hay), 1))
+            if score > best:
+                best, found = score, {"id": ref, "text": line}
+        return found if best[0] >= FUZZY_MIN / 100 else None
 
     def _searchable(self):
         for item in self.items:

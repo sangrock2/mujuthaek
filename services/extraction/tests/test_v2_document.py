@@ -81,6 +81,13 @@ def test_the_whole_source_is_rendered_with_ids_and_empty_cells_are_left_out():
     assert near[0]["id"] == "p1.3" and near[0]["similarity"] >= 80
 
 
+def test_original_text_is_checked_like_the_v1_verifier_and_a_cut_text_points_to_its_line():
+    doc = parse(TEXT)
+    assert doc.verbatim("■ 소득 : 150%  이하") and doc.verbatim("[표 1-1] | 기준 | 14,202,000 |")  # 공백·표 번호 표시는 무시
+    assert not doc.verbatim("■ 소득 : 이하")  # 가운데를 뺀 글은 원문 그대로가 아님
+    assert doc.closest("■ 소득 : 이하") == {"id": "p1.3", "text": "■ 소득 : 150% 이하"} and doc.closest("전혀 다른 글") is None
+
+
 def test_document_from_a_real_pdf_keeps_v1_table_numbers():
     data = make_pdf(CELLS)
     event = raw_event()

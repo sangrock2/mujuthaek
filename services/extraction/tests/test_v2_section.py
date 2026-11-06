@@ -96,6 +96,39 @@ def test_original_text_must_be_the_source_as_written_and_is_filled_when_left_out
     assert rejected["id"] == "rewritten" and rejected["errors"][0].startswith("/originalText: 원문에 그대로 있는 글이 아닙니다")
 
 
+def test_original_text_inside_parts_is_checked_when_added_and_the_refusal_names_the_part_and_the_closest_source_line():
+    # 2026-11-06 5건 재측정 bmc-72: 원문 한 줄을 예외 둘로 나누며 가운데를 뺀 글을 예외 originalText로 적음. 넣을 때는 하위 칸을 보지 않았고,
+    # 검증 결과는 「exceptions/3」 순번만 알려 담당이 다른 예외를 고친 뒤 그만둠 → 소득·자산 기준이 사람 확인으로
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+
+    def item(item_id, written):
+        exception = {**income["exceptions"][0], "id": f"{item_id}-two", "originalText": written, "evidence": ["p1.2"]}
+        return {**income, "id": item_id, "evidence": ["p1.1"], "exceptions": [exception]}
+
+    turn = AIMessage(content="", tool_calls=[call("add_eligibility", items=[item("joined", "- 자녀별 가산 : 2명 이상 20%p"), item("part", "2명 이상 20%p")])])
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    agent = create_agent(
+        ToolCallingFake(messages=iter([turn, AIMessage(content="끝")])), tools=[add_tool("eligibility", ("text",))], context_schema=SectionContext
+    )
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    answer = json.loads(next(m.content for m in result["messages"] if m.type == "tool"))
+    assert answer["added"] == ["part"]  # 한 줄의 이어진 일부는 원문 그대로
+    failed = answer["failed"][0]
+    assert failed["id"] == "joined" and failed["errors"][0].startswith("/exceptions/0/originalText(joined-two): 「- 자녀별 가산 : 2명 이상 20%p」")
+    assert "가장 비슷한 원문 p1.2 「- 자녀별 가산 : 1명 10%p, 2명 이상 20%p」" in failed["errors"][0]
+    assert draft.rejected == {("eligibility", "joined"): failed["errors"]}
+
+
+def test_a_problem_inside_a_part_of_an_item_names_the_part_too():
+    candidate = {"eligibility": [{"id": "income", "exceptions": [{"id": "one"}, {"id": "two", "when": {"status": "STRUCTURED"}}]}]}
+    assert section._item_of(candidate, "/eligibility/0/exceptions/1/originalText") == {"item": "income", "inner": "two"}
+    assert section._item_of(candidate, "/eligibility/0/exceptions/1/when/status") == {"item": "income", "inner": "two"}
+    assert section._item_of(candidate, "/eligibility/0/rule") == {"item": "income"}
+    assert section._item_of(candidate, "/eligibility/0/exceptions/9") == {"item": "income"}
+
+
 def test_verification_is_reported_after_each_turn_that_changed_the_draft_and_a_problem_left_after_a_fix_is_marked_again():
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
     turns = [
@@ -378,3 +411,5 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert shown.index("## 확인할 것 2개") < shown.index("## 고치는 법") and shown.count("- CRITERION_NOT_STRUCTURED:") == 1
     assert "exceptions(REPLACE" in shown and "그대로 둡니다" in shown
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
+    scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
+    assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
