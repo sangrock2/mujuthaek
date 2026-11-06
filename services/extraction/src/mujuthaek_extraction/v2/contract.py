@@ -192,6 +192,7 @@ def to_part(
         body = complete(section, without_evidence(item), documents)
         _attach(body, item, [], ref_of)
         built.append(body)
+    _unique_inner_ids(built)
     part: dict[str, Any] = {
         "quotes": [{"ref": ref, "documentId": document.source_id, "text": text} for text, ref in refs.items()],
         section: built[0] if section == "notice" and built else built if section != "notice" else None,
@@ -199,6 +200,34 @@ def to_part(
         "missingFields": list(missing or []),
     }
     return part
+
+
+def _unique_inner_ids(items: list[dict[str, Any]]) -> None:
+    """항목 안 하위 항목(예외 등)의 id가 다른 id와 겹치면 위 항목 id를 앞에 붙입니다. id는 공고 안에서 하나여야 하는데(계약 DUPLICATE_ID)
+    V1 결합기는 항목 id 겹침만 풂. 2026-11-06 다섯 번째 실제 실행: 청년·고령자 소득 조건의 자녀 가산 예외에 같은 id를 붙여, 고치지 못한 쪽
+    조건이 조건식을 잃고(격리) 사람 확인으로 감."""
+    seen = {item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for node in _inner_objects(item):
+            if not isinstance(node.get("id"), str) or node["id"] not in seen:
+                if isinstance(node.get("id"), str):
+                    seen.add(node["id"])
+                continue
+            new_id, count = f"{item.get('id')}.{node['id']}", 2
+            while new_id in seen:
+                new_id, count = f"{item.get('id')}.{node['id']}.{count}", count + 1
+            node["id"] = new_id
+            seen.add(new_id)
+
+
+def _inner_objects(value: Any):
+    for child in value.values() if isinstance(value, dict) else value if isinstance(value, list) else []:
+        if isinstance(child, dict):
+            yield child
+        if isinstance(child, dict | list):
+            yield from _inner_objects(child)
 
 
 def _placeholder_refs(value: Any) -> Any:

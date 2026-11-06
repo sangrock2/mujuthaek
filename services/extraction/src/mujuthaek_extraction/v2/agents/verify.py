@@ -9,6 +9,10 @@
 - 원문과 대조해 실제로 틀렸거나 빠진 것만 고치고, 경고를 없애려고 값을 넣거나 바꾸지 않게 알리고
 - 앞 차례에도 있던 문제는 「다시」로 표시해, 한 번 고쳐 보고도 남으면 그대로 두고 끝내게 합니다(그 항목만 사람이 확인).
 
+검증 결과는 두 갈래로 알립니다(2026-11-06 다섯 번째 실제 실행: 「다시」면 멈추라는 규칙에 id 중복 같은 계약 오류까지 멈춰, 고칠 수 있던
+조건이 격리됨). 「고칠 것」(형식·계약·근거 오류)은 그대로 두면 값이 빠지거나 사람 확인으로 가므로 「다시」여도 다른 방법으로 고치고,
+「확인할 것」(의심 경고)만 원문상 맞으면 그대로 두고 「다시」면 더 고치지 않습니다.
+
 끝내기(finish): 담당이 마지막 고치기와 같은 차례에 finish를 부르면, 그 차례 도구가 실행된 뒤 새 문제(앞서 알리지 않은 것)가 없으면 모델을 다시
 부르지 않고 끝냅니다. 새 문제가 있으면 끝내기를 거두고 알립니다. 「끝났어요」만 답하는 마지막 차례가 없어집니다(2026-11-06 네 번째 실행:
 그 차례가 담당마다 하나씩 들고, 캐시를 못 읽으면 앞부분 6만 토큰을 다시 씀).
@@ -24,12 +28,31 @@ from langchain.agents.middleware.types import hook_config
 from langchain_core.messages import HumanMessage
 
 ISSUES_SHOWN = 20
-GUIDE = (
-    "검증 결과는 사람이 확인할 후보입니다. 원문과 대조해 실제로 틀렸거나 빠진 것만 고칩니다(update_item·remove_item·add, 원문에 없는 값은 report_missing). "
-    "원문상 맞으면 그대로 둡니다(그 항목만 사람이 확인). 경고를 없애려고 원문에 없는 값·예외를 넣거나 맞는 값을 바꾸지 않습니다. "
-    "「다시」 표시는 앞 차례에도 있던 문제입니다: 한 번 고쳐 보고도 남았으면 더 고치지 않습니다. "
-    "set_coverage(PARTIAL)는 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). "
-    "고칠 것을 고치는 차례에 finish도 함께 부르고, 고칠 것이 없으면 finish만 부릅니다."
+# 형식·계약·근거 오류: 원문과 상관없이 객관적인 결함이라 고침(그대로 두면 값이 빠지거나 사람 확인으로 감). 근거를 바꾸는 고치기는 값을 바꾸지 않음.
+# 조건식 없음(CRITERION_NOT_STRUCTURED)·예외 의심 같은 판단 경고는 넣지 않음: 「자산기준: 배제」처럼 원문상 조건식이 없는 게 맞을 때 없는 값을 넣게 됨
+MUST_FIX = (
+    "FORMAT_",
+    "CONTRACT_",
+    "AI_OUTPUT_",
+    "NOT_ASSEMBLED",
+    "VALUE_NOT_IN_QUOTE",
+    "EVIDENCE_",
+    "ORIGINAL_TEXT_NOT_FOUND",
+    "QUOTE_REF_UNKNOWN",
+    "ITEM_DROPPED",
+    "CLAIM_UNSUPPORTED",
+)
+FIX_GUIDE = (
+    "고칠 것: 형식·계약·근거 오류입니다. 그대로 두면 값이 빠지거나 사람 확인으로 가므로 원문에 있는 대로 고칩니다. "
+    "「다시」면 앞서 고친 방법이 안 된 것이니 다른 방법으로 한 번 더 고치고, 그래도 남으면 그대로 둡니다."
+)
+CHECK_GUIDE = (
+    "확인할 것: 의심 경고입니다. 원문과 대조해 실제로 틀렸거나 빠졌을 때만 고치고, 원문상 맞으면 그대로 둡니다(그 항목만 사람이 확인). "
+    "경고를 없애려고 원문에 없는 값·예외를 넣거나 맞는 값을 바꾸지 않습니다. 「다시」 표시는 한 번 고쳐 보고도 남은 것이라 더 고치지 않습니다."
+)
+END_GUIDE = (
+    "원문에 없는 값은 report_missing으로 적습니다. set_coverage(PARTIAL)는 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). "
+    "고치는 차례에 finish도 함께 부르고, 고칠 것이 없으면 finish만 부릅니다."
 )
 
 
@@ -64,11 +87,18 @@ def report(draft: Any, issues: list[dict[str, Any]]) -> str:
     if not issues:
         lines.append("맡은 섹션에 남은 문제가 없습니다. 원문에서 빠뜨린 항목이 없으면 finish를 부릅니다.")
         return "\n".join(lines)
-    shown = f" (앞 {ISSUES_SHOWN}개)" if len(issues) > ISSUES_SHOWN else ""
-    lines.append(f"문제 {len(issues)}개{shown}:")
-    lines += [json.dumps(issue, ensure_ascii=False) for issue in issues[:ISSUES_SHOWN]]
-    lines.append(GUIDE)
+    fix = [issue for issue in issues if must_fix(issue)]
+    check = [issue for issue in issues if not must_fix(issue)]
+    for title, group, guide in (("고칠 것", fix, FIX_GUIDE), ("확인할 것", check, CHECK_GUIDE)):
+        if group:
+            shown = f" (앞 {ISSUES_SHOWN}개)" if len(group) > ISSUES_SHOWN else ""
+            lines += [f"## {title} {len(group)}개{shown}", guide, *(json.dumps(issue, ensure_ascii=False) for issue in group[:ISSUES_SHOWN])]
+    lines.append(END_GUIDE)
     return "\n".join(lines)
+
+
+def must_fix(issue: dict[str, Any]) -> bool:
+    return str(issue.get("code") or "").startswith(MUST_FIX)
 
 
 def _key(issue: dict[str, Any]) -> tuple[str, str, str]:
