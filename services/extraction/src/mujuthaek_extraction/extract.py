@@ -95,6 +95,7 @@ class ExtractionRun:
     notes: list[str] = field(default_factory=list)  # 잘림 뒤 나눠 부르기·항목 살리기처럼 결과를 만든 방법 (로그·작업 기록용)
     # 뒤 호출에 넘긴 구조 요약(코드가 주소마다 만든 위치는 뺀 것). 에이전트 방식이 같은 요약을 담당에게 줍니다
     structure: dict[str, Any] | None = None
+    table_mapping: tuple[list[Any], dict[str, Any]] | None = None  # 공급표 후보와 AI 열 해석(기관 기억 그림자 모드가 맞춰 봄, format_memory)
 
 
 GUARD_NOTE = (
@@ -398,7 +399,7 @@ def run_extraction(
     table_part = None
     if rules.supply_tables and structure is None and calls and (material.pdf_pages or getattr(material, "sheets", ())):
         with timed(usage, "supply_tables"):
-            table_part = _supply_from_tables(rules, material, calls[0], into(run), budget)
+            table_part = _supply_from_tables(rules, material, calls[0], into(run), budget, run)
         if table_part is not None:
             first = calls[0]
             # 코드 묶음에 수량이 없으면(가격표만 옮김) 구조 호출이 주택형별 수량 묶음을 만들고, 받은 뒤 코드 묶음 앞에 둡니다
@@ -568,8 +569,11 @@ def run_extraction(
     return run
 
 
-def _supply_from_tables(rules: FieldRules, material: ExtractionMaterial, first: CallSpec, call_model, budget) -> dict[str, Any] | None:
-    """공급표 열 의미를 AI에 묻고 코드가 행을 옮긴 공급 조각. 표가 없거나 답이 형식에 맞지 않으면 None(이전 방식으로)."""
+def _supply_from_tables(
+    rules: FieldRules, material: ExtractionMaterial, first: CallSpec, call_model, budget, sink: ExtractionRun | None = None
+) -> dict[str, Any] | None:
+    """공급표 열 의미를 AI에 묻고 코드가 행을 옮긴 공급 조각. 표가 없거나 답이 형식에 맞지 않으면 None(이전 방식으로).
+    형식에 맞는 열 해석은 sink.table_mapping에 남깁니다(기관 기억 그림자 모드)."""
     tables = supply_tables.candidates(material)
     if not tables:
         return None
@@ -602,6 +606,8 @@ def _supply_from_tables(rules: FieldRules, material: ExtractionMaterial, first: 
         return None
     if mapping is None or schema_errors(mapping, supply_tables.MAPPING_SCHEMA) is not None:
         return None
+    if sink is not None:
+        sink.table_mapping = (tables, mapping)
     part = supply_tables.build_part(tables, mapping, material.text_document_id)
     if part is None:
         return None

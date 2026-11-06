@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
+from mujuthaek_extraction import format_memory
 from mujuthaek_extraction.assemble.assembler import AssemblyInput, assemble
 from mujuthaek_extraction.assemble.quarantine import quarantine
 from mujuthaek_extraction.assemble.regions import SOURCE_SIDO, RegionCodeTable
@@ -230,7 +231,8 @@ def read_images(material: ExtractionMaterial, context: TrustedContext, rt: Runti
         return read_image_tables(material, context, reader_model)
 
 
-def extract_parts(rules: FieldRules, material: ExtractionMaterial, rt: Runtime) -> Extracted:
+def extract_parts(rules: FieldRules, material: ExtractionMaterial, rt: Runtime, source: str | None = None) -> Extracted:
+    """source: 공고 출처(기관) 코드. 기관 기억 그림자 모드가 이 기관의 앞선 열 해석과 이번 것을 맞춰 봅니다(format_memory, 설정이 있을 때만)."""
     models = rt.models
     if models.fallback is not None:
         result = extract_with_fallback(
@@ -244,6 +246,9 @@ def extract_parts(rules: FieldRules, material: ExtractionMaterial, rt: Runtime) 
         model_used, recheck_model = models.names.get("primary", "primary"), models.primary
     if run.notes:  # 잘림 뒤 나눠 부르기·항목 살리기(extract, 2026-10-24): 작업 기록에 남겨 평가에서 볼 수 있게
         rt.usage.record("extractionNotes", list(run.notes))
+    remembered = format_memory.observe(source, run.table_mapping)  # 기억한 해석을 쓰지는 않고 맞춰 보기만
+    if remembered is not None:
+        rt.usage.record("formatMemory", remembered)
     return Extracted(run, first_run, model_used, recheck_model)
 
 
