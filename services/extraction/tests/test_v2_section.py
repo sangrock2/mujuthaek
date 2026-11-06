@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from test_pipeline import answers, run
 from test_v2_contract import sparse
 from test_v2_document import TEXT, ToolCallingFake
+from test_v2_llm import FlakyFake
 
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.model import RecordedModel
@@ -21,6 +22,7 @@ from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.document import parse
+from mujuthaek_extraction.v2.llm import retry
 from mujuthaek_extraction.v2.tools.typed import add_tool
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 
@@ -268,3 +270,25 @@ def test_verification_separates_defects_to_fix_from_warnings_to_check():
     fix, check = report.index("## 고칠 것 1개"), report.index("## 확인할 것 1개")
     assert fix < report.index("CONTRACT_DUPLICATE_ID") < check < report.index("EXCEPTION_SUSPECTED")
     assert "다른 방법으로 한 번 더" in report and "원문상 맞으면 그대로" in report
+
+
+def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypatch):
+    # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤 → 재시도로도 안 되면 그 담당만 멈추고 섹션은 사람 확인으로
+    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
+    monkeypatch.setattr(retry, "FIRST_DELAY_SECONDS", 0.0)
+    recorded = answers()
+    monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
+
+    def chat(name, **kwargs):
+        if name == "eligibility":
+            model = FlakyFake(messages=iter([]))
+            model.__dict__["fail_times"] = 99
+            return model
+        return ToolCallingFake(messages=iter([AIMessage(content="끝")]))
+
+    outcome = run(raw_event(), NoticeModels(RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=chat))
+    assert outcome.status in ("PARTIAL", "IN_REVIEW") and outcome.candidate is not None
+    traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
+    assert traces["eligibility"]["stopped"].startswith("APITimeoutError") and traces["schedules"]["stopped"] is None
+    failed = [c for c in outcome.usage["v2"]["calls"] if c.get("agent") == "eligibility" and "error" in c]
+    assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈

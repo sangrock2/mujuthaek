@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any
 
+import openai
 from jsonschema import Draft202012Validator, FormatChecker
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
@@ -30,9 +32,12 @@ from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.contract import to_part
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware
+from mujuthaek_extraction.v2.llm.retry import retry_middleware
 from mujuthaek_extraction.v2.tools.typed import shared_tools
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
+
+log = logging.getLogger(__name__)
 
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
@@ -69,6 +74,12 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     except BudgetExceeded as error:
         stopped = str(error)
         context.usage.append({"agent": spec.name, "stopped": stopped})
+    except (openai.APIError, TimeoutError, ConnectionError) as error:
+        # 재시도로도 안 된 모델 호출 오류: 그때까지 넣은 항목만 남기고 이 담당 섹션만 사람 확인으로(공고·다른 담당은 계속)
+        # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤
+        stopped = f"{type(error).__name__}: {error}"[:300]
+        context.usage.append({"agent": spec.name, "stopped": stopped})
+        log.warning("섹션 담당이 모델 호출 오류로 멈췄습니다", extra={"agent": spec.name, "error": stopped})
     trace = {
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
@@ -134,7 +145,7 @@ def _agent(model: Any, name: str, state: Any, documents: tuple[str, ...], middle
         model,
         tools=[*shared_tools(tuple(state["plan"]["sections"]), documents), *WRITE_TOOLS],
         system_prompt=system_prompt(rules),
-        middleware=[BudgetMiddleware(name), *middleware],
+        middleware=[retry_middleware(), BudgetMiddleware(name), *middleware],  # 재시도가 바깥: 다시 보낼 때마다 예산을 다시 예약
         context_schema=SectionContext,
         name=name,
     )
