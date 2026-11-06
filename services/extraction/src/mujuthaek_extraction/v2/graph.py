@@ -1,10 +1,13 @@
 """V2 추출 그래프(EXTRACTION_ENGINE=v2). 흐름은 LangGraph, 에이전트는 노드 안에서 LangChain create_agent로 돕니다.
 
     intake ─(준비 안 됨·규칙 없음)─▶ END
-      └▶ document ▶ plan ▶ structure ─▶ section(일정·자격·선정·서류, 담당마다 Send 병렬) ▶ conclude ▶ END
+      └▶ document ─┬▶ plan ──────┬▶ dispatch ─▶ section(일정·자격·선정·서류, 담당마다 Send 병렬) ▶ conclude ▶ END
+                   └▶ structure ─┘
 
 - document: 원문(그림 쪽은 지금은 V1 그림 판독으로 글자를 붙임, 그림 판독 에이전트로 바꿀 자리) → 문서 모델(줄·표·칸 id)
-- plan: 계획 에이전트가 표 해석·섹션별 담당 범위를 정할 자리. 지금은 담당 목록만
+- plan: 담당 목록과 담당들이 함께 쓰는 도구 섹션을 정하고, 담당들의 같은 앞부분(지시·도구·원문 전체)을 한 번 캐시에 올림(prime).
+  구조와 동시에 돌아 시간이 들지 않음. 담당들이 동시에 처음 보내면 저마다 앞부분을 캐시에 올려 쓰기 값을 담당 수만큼 냄.
+  계획 에이전트가 표 해석·섹션별 담당 범위를 정할 자리이기도 함
 - structure: 공고 기본·위치·공급. 공급·가격 표는 코드가 옮기고(V1 공급표 장치, 열 의미만 AI) 공고·위치는 한 번 호출 — V1과 같은 방식.
   다른 담당이 그 id를 쓰므로 먼저(2026-11-06 첫 실제 실행: 에이전트가 공급 묶음을 손으로 넣다 가격이 거의 다 빠짐)
 - section: 판단이 많은 나머지 담당이 에이전트로 동시에. 담당이 낸 V1 AI 조각·호출 기록·대화 기록을 리듀서로 합침
@@ -77,7 +80,11 @@ def document(state: V2State, runtime: Context) -> dict[str, Any]:
 
 
 def plan(state: V2State, runtime: Context) -> dict[str, Any]:
-    return {"plan": {"workers": list(workers(state["rules"]))}}
+    named = workers(state["rules"])
+    planned = {"workers": list(named), "sections": [section for name, spec in named.items() if name != STRUCTURE for section in spec.sections]}
+    from mujuthaek_extraction.v2.agents.section import prime  # 담당 공통 앞부분 캐시 데우기(LangChain)
+
+    return {"plan": planned, "usage": prime({**state, "plan": planned}, runtime.context)}
 
 
 def structure(state: V2State, runtime: Context) -> dict[str, Any]:
@@ -89,6 +96,11 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
     run = pipeline.extract_parts(only, state["material"], runtime.context).run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
     return {"parts": list(run.parts), "structure": summary, "structure_run": run}
+
+
+def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:
+    """계획(캐시 데우기)과 구조가 모두 끝나기를 기다리는 자리. 담당은 구조 id와 데운 캐시를 함께 씁니다."""
+    return {}
 
 
 def fan_out(state: V2State) -> list[Send]:
@@ -155,13 +167,14 @@ def _done_or(next_node: str):
 
 def build() -> Any:
     graph = StateGraph(V2State)  # 실행 환경(pipeline.Runtime)은 문맥으로 넘기되 형식은 주지 않음(예산 장부의 잠금을 Pydantic 형식으로 만들지 않게)
-    for node in (intake, document, plan, structure, section, conclude):
+    for node in (intake, document, plan, structure, dispatch, section, conclude):
         graph.add_node(node.__name__, node)
     graph.add_edge(START, "intake")
     graph.add_conditional_edges("intake", _done_or("document"), ["document", END])
     graph.add_edge("document", "plan")
-    graph.add_edge("plan", "structure")
-    graph.add_conditional_edges("structure", fan_out, ["section"])
+    graph.add_edge("document", "structure")
+    graph.add_edge(["plan", "structure"], "dispatch")
+    graph.add_conditional_edges("dispatch", fan_out, ["section"])
     graph.add_edge("section", "conclude")
     graph.add_edge("conclude", END)
     return graph.compile()

@@ -7,7 +7,7 @@ from helpers import ai_part, example, source_for
 from test_v2_document import TEXT
 
 from mujuthaek_extraction.rules.base import document_ids
-from mujuthaek_extraction.v2.contract import LIST_SECTIONS, EvidenceError, complete, errors, quote_text, to_part
+from mujuthaek_extraction.v2.contract import LIST_SECTIONS, EvidenceError, complete, errors, fill_original_text, quote_text, to_part
 from mujuthaek_extraction.v2.document import parse
 
 SECTIONS = ("notice", *LIST_SECTIONS)
@@ -38,6 +38,21 @@ def test_quote_comes_from_the_id_or_a_part_of_it():
         quote_text(doc, "p9.9")
     with pytest.raises(EvidenceError):
         quote_text(doc, {"id": "p1.3", "part": "200%"})
+    # 합쳐진 빈 칸은 근거가 아님: 빈 인용이 되면 결합기가 그 담당 응답 전체를 버림(2026-11-06 선정 규칙 21개 → 0개)
+    with pytest.raises(EvidenceError, match="빈 칸"):
+        quote_text(doc, "t1-1.r1.c2")
+
+
+def test_original_text_is_filled_from_the_first_evidence_and_never_rewritten():
+    doc = parse(TEXT)
+    row = fill_original_text("selectionRules", {"id": "s", "evidence": ["t1-1.r0", "p1.3"]}, doc)
+    assert row["originalText"] == "기준 14,202,000 105,200" and doc.contains(row["originalText"])  # 표 행은 칸 글자를 이음
+    line = fill_original_text("eligibility", {"id": "e", "evidence": [{"id": "p1.3", "part": "150% 이하"}]}, doc)
+    assert line["originalText"] == "150% 이하"
+    written = {"id": "e", "originalText": "소득 150% 이하", "evidence": ["p1.3"]}
+    assert fill_original_text("eligibility", written, doc) is written  # 적은 것은 그대로(원문 그대로인지는 넣기 검사가 봄)
+    assert "originalText" not in fill_original_text("schedules", {"id": "a", "evidence": ["p1.3"]}, doc)  # 그 칸이 없는 섹션
+    assert "originalText" not in fill_original_text("eligibility", {"id": "e", "evidence": ["p9.9"]}, doc)  # 근거 오류는 넣기 검사가
 
 
 def test_missing_nullable_fields_and_lists_are_filled_back_exactly_for_every_section():

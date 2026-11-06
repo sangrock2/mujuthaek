@@ -1,6 +1,8 @@
-"""쓰기·검사 도구: 섹션 담당이 작업 초안에 항목을 넣고 고칩니다. 넣는 즉시 형식·근거 id를 검사해 그 항목만 「위치: 이유」로 돌려줍니다.
+"""쓰기 도구: 섹션 담당이 작업 초안에 항목을 넣고 고칩니다. 넣는 즉시 형식·근거 id를 검사해 그 항목만 「위치: 이유」로 돌려줍니다.
 
 초안은 실행 문맥(SectionContext.draft)에 있고, 담당이 끝나면 v2.contract.to_part로 V1 AI 조각이 됩니다.
+초안 전체의 검증(V1 결합·검증기)은 도구가 아니라 검증 미들웨어(v2/agents/verify.py)가 도구를 쓴 차례마다 자동으로 알려 줍니다
+(2026-11-06 실제 실행: check 도구를 부르는 데 차례를 쓰고, 진짜 이유(형식 오류로 응답 전체가 버려짐) 대신 「범위 미완료」만 보여 줌).
 """
 
 from __future__ import annotations
@@ -17,12 +19,20 @@ from langchain_core.tools import tool
 from pydantic import SkipValidation
 
 from mujuthaek_extraction.v2.context import V2Context
-from mujuthaek_extraction.v2.contract import EvidenceError, complete, errors, evidence_entries, quote_text, without_evidence
+from mujuthaek_extraction.v2.contract import (
+    ORIGINAL_TEXT_SECTIONS,
+    EvidenceError,
+    complete,
+    errors,
+    evidence_entries,
+    fill_original_text,
+    quote_text,
+    without_evidence,
+)
 
 COVERAGE = ("EXTRACTED", "PARTIAL", "NOT_IN_SOURCE", "NOT_APPLICABLE")
 JUDGED = ("notice", "eligibility")  # 판정에 쓰여 비울 수 없는 섹션
 MISSING_REASONS = ("NOT_IN_SOURCE", "TO_BE_ANNOUNCED", "SOURCE_ATTACHMENT_REQUIRED", "CONFLICT", "UNREADABLE", "NOT_APPLICABLE")
-ISSUES_SHOWN = 15
 
 
 @dataclass
@@ -33,6 +43,7 @@ class SectionDraft:
     items: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     coverage: dict[str, dict[str, Any]] = field(default_factory=dict)
     missing: list[dict[str, Any]] = field(default_factory=list)
+    version: int = 0  # 바뀔 때마다 1씩(검증 미들웨어가 바뀐 차례에만 다시 검증)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def find(self, section: str, item_id: str | None) -> int | None:
@@ -59,7 +70,7 @@ class SectionDraft:
 class SectionContext(V2Context):
     draft: SkipValidation[SectionDraft | None] = None
     documents: tuple[str, ...] = ()
-    check: SkipValidation[Callable[[], list[dict[str, Any]]] | None] = None  # 지금 초안을 V1 검증기로 본 이 담당 섹션의 문제
+    check: SkipValidation[Callable[[], list[dict[str, Any]]] | None] = None  # 지금 초안을 V1 결합·검증기로 본 이 담당 섹션의 문제(검증 미들웨어가 부름)
 
 
 def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> str:
@@ -69,12 +80,15 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
     added, failed = [], []
     for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict):
+            item = fill_original_text(section, item, context.document)
         problems = _problems(context, section, item, adding=True)
         if problems:
             failed.append({"id": item.get("id") if isinstance(item, dict) else None, "errors": problems})
             continue
         with draft._lock:
             draft.items.setdefault(section, []).append(copy.deepcopy(item))
+            draft.version += 1
         added.append(item.get("id") or section)
     return _dump({"added": added, "failed": failed})
 
@@ -89,13 +103,14 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
     index = draft.find(section, item_id)
     if index is None:
-        return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_items로 넣습니다.")
+        return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
     merged = _merge(draft.items[section][index], changes if isinstance(changes, dict) else {})
     problems = _problems(context, section, merged, adding=False)
     if problems:
         return _dump({"error": "BAD_ITEM", "errors": problems})
     with draft._lock:
         draft.items[section][index] = merged
+        draft.version += 1
     return _dump({"ok": f"{section}/{item_id or 'notice'} 고침"})
 
 
@@ -108,6 +123,7 @@ def remove_item(section: str, item_id: str, runtime: ToolRuntime[SectionContext,
         return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다.")
     with draft._lock:
         draft.items[section].pop(index)
+        draft.version += 1
     return _dump({"ok": f"{section}/{item_id} 뺌"})
 
 
@@ -126,6 +142,7 @@ def set_coverage(section: str, status: str, reason: str, runtime: ToolRuntime[Se
         return _error("REASON_REQUIRED", "EXTRACTED가 아니면 reason을 적습니다.")
     with draft._lock:
         draft.coverage[section] = {"status": status, "reason": None if status == "EXTRACTED" else reason.strip()}
+        draft.version += 1
     return _dump({"ok": f"{section} {status}"})
 
 
@@ -140,20 +157,11 @@ def report_missing(section: str, item_id: str, field: str, reason: str, descript
         return _error("BAD_REASON", f"reason은 {', '.join(MISSING_REASONS)} 중 하나입니다.")
     with draft._lock:
         draft.missing.append({"section": section, "id": item_id, "field": field, "reason": reason, "description": description})
+        draft.version += 1
     return _dump({"ok": "적음"})
 
 
-@tool
-def check(runtime: ToolRuntime[SectionContext, Any]) -> str:
-    """지금 초안을 검증기로 보고 맡은 섹션에 남은 문제(code·target·description)를 돌려줍니다. 끝내기 전에 부릅니다."""
-    context = runtime.context
-    if context.check is None:
-        return _dump({"issues": [], "note": "검증기를 쓸 수 없는 실행입니다."})
-    issues = context.check()
-    return _dump({"issues": issues[:ISSUES_SHOWN], "issueCount": len(issues)})
-
-
-WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, check)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
+WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing)  # 넣기는 섹션별 형식 도구(add_<섹션>, typed.py)
 
 
 def _problems(context: SectionContext, section: str, item: Any, adding: bool) -> list[str]:
@@ -176,6 +184,9 @@ def _problems(context: SectionContext, section: str, item: Any, adding: bool) ->
             quote_text(context.document, entry)
         except EvidenceError as error:
             found.append(f"/evidence: {error}")
+    original = item.get("originalText")
+    if section in ORIGINAL_TEXT_SECTIONS and isinstance(original, str) and original.strip() and not context.document.contains(original):
+        found.append("/originalText: 원문에 그대로 있는 글이 아닙니다. 원문 글자 그대로 적거나 비워 둡니다(비우면 첫 근거의 원문으로 채움)")
     body = complete(section, without_evidence(item), context.documents)
     found += errors(section, body, context.documents)
     return found[:5]

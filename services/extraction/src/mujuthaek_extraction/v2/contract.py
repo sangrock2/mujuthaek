@@ -22,6 +22,7 @@ from mujuthaek_extraction.rules.base import call_schema
 from mujuthaek_extraction.v2.document import DocumentModel
 
 LIST_SECTIONS = ("locations", "supplyGroups", "schedules", "eligibility", "selectionRules", "requiredDocuments", "guidance")
+ORIGINAL_TEXT_SECTIONS = ("eligibility", "selectionRules")  # 항목에 원문 문장 칸(originalText)이 꼭 있는 섹션
 
 
 class EvidenceError(ValueError):
@@ -29,7 +30,8 @@ class EvidenceError(ValueError):
 
 
 def quote_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
-    """근거 하나 → 인용 글(원문 그대로)."""
+    """근거 하나 → 인용 글(원문 그대로). 빈 칸은 근거가 아닙니다(2026-11-06 실제 실행: 합쳐진 빈 칸을 가리킨 근거가 빈 인용이 되어
+    결합기가 그 담당 응답 전체를 버림 — 선정 규칙 21개가 0개로)."""
     ref, part = (evidence, None) if isinstance(evidence, str) else (str(evidence.get("id", "")), evidence.get("part"))
     try:
         text = document.text(ref)
@@ -38,8 +40,33 @@ def quote_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
     if part:
         if part not in text:
             raise EvidenceError(f"{ref}에 「{str(part)[:40]}」 글자가 없습니다")
-        return part
+        text = part
+    if not text.strip():
+        raise EvidenceError(f"{ref}는 빈 칸입니다(합쳐진 칸). 글자가 있는 칸이나 행을 가리킵니다")
     return text
+
+
+def source_sentence(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
+    """근거 하나 → 사람이 읽을 원문 문장(표 행은 칸 구분자 없이 칸 글자를 이음). originalText를 비운 항목에 채웁니다.
+    V1 검증기는 공백·칸 구분자를 무시하고 원문과 대조하므로 이은 글도 원문 그대로로 확인됩니다."""
+    text = quote_text(document, evidence)
+    if text.strip().startswith("|") and text.strip().endswith("|"):
+        return " ".join(cell.strip() for cell in text.strip()[1:-1].split("|") if cell.strip())
+    return text.strip()
+
+
+def fill_original_text(section: str, item: dict[str, Any], document: DocumentModel) -> dict[str, Any]:
+    """원문 문장 칸(originalText)이 있는 섹션에서 비워 둔 항목은 첫 근거의 원문으로 채웁니다(모델이 옮겨 적다 글자가 달라지는 일 방지:
+    2026-11-06 실제 실행의 ORIGINAL_TEXT_NOT_FOUND). 근거가 틀렸으면 그대로 둡니다(넣기 검사가 근거 오류로 알림)."""
+    if section not in ORIGINAL_TEXT_SECTIONS or (isinstance(item.get("originalText"), str) and item["originalText"].strip()):
+        return item
+    evidence = item.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return item
+    try:
+        return {**item, "originalText": source_sentence(document, evidence[0])}
+    except EvidenceError:
+        return item
 
 
 def complete(section: str, item: dict[str, Any], documents: tuple[str, ...]) -> dict[str, Any]:
@@ -60,8 +87,68 @@ def errors(section: str, item: dict[str, Any], documents: tuple[str, ...], limit
         path = "/".join(str(x) for x in list(leaf.absolute_path)[skip:])
         if "quoteRefs" in path.split("/"):
             continue  # 근거는 to_part가 붙임(하위 항목은 위 근거를 이어받음)
-        found.append(f"/{path}: {leaf.message[:240]}")
+        found.append(f"/{path}: {_reason(validator.schema, leaf)}")
     return found[:limit]
+
+
+def _reason(root: dict[str, Any], leaf: Any) -> str:
+    """조건부 규칙(if/then) 오류는 조건을 풀어 씁니다. 2026-11-06 실제 실행: 「endsAt: None should not be valid under {'type': 'null'}」만
+    보고 담당이 「endStatus가 FIXED이면 마감일이 필요하다」를 몰라 같은 항목을 두 번 더 거절당함(형식 도구는 if/then을 보여 주지 않음)."""
+    path = list(leaf.absolute_schema_path)
+    if "then" in path:
+        at = len(path) - 1 - path[::-1].index("then")
+        node = _walk(root, path[:at])
+        condition = _condition(node.get("if")) if isinstance(node, dict) else None
+        if condition:
+            return f"{condition}이면 {_consequence(leaf)}"[:240]
+    return leaf.message[:240]
+
+
+def _walk(root: dict[str, Any], path: list[Any]) -> Any:
+    node: Any = root
+    for key in path:
+        while isinstance(node, dict) and "$ref" in node and key != "$ref":
+            node = _resolve(node, root.get("$defs", {}))
+        if key == "$ref":
+            continue
+        try:
+            node = node[key]
+        except (KeyError, IndexError, TypeError):
+            return None
+    return _resolve(node, root.get("$defs", {}))
+
+
+def _condition(schema: Any) -> str | None:
+    if not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict):
+        return None
+    parts = []
+    for name, prop in schema["properties"].items():
+        if not isinstance(prop, dict):
+            continue
+        if "const" in prop:
+            parts.append(f"{name}가 {prop['const']}")
+        elif "enum" in prop:
+            parts.append(f"{name}가 {'·'.join(str(v) for v in prop['enum'])} 중 하나")
+        elif isinstance(prop.get("not"), dict) and "const" in prop["not"]:
+            parts.append(f"{name}가 {prop['not']['const']}가 아니")
+    return " 그리고 ".join(parts) or None
+
+
+def _consequence(leaf: Any) -> str:
+    value = leaf.validator_value
+    if leaf.validator == "not" and isinstance(value, dict) and value.get("type") == "null":
+        return "이 칸을 비울 수 없습니다(값이 필요함)"
+    if leaf.validator == "required":
+        return leaf.message.replace(" is a required property", " 칸이 필요합니다")
+    if leaf.validator == "const":
+        return f"값은 {value}이어야 합니다"
+    if leaf.validator == "enum":
+        return f"값은 {', '.join(str(v) for v in value)} 중 하나여야 합니다"
+    if leaf.validator == "minItems":
+        return f"{value}개 이상 넣어야 합니다"
+    if leaf.validator == "type":
+        return f"{value} 형식이어야 합니다"
+    return leaf.message
 
 
 def to_part(
