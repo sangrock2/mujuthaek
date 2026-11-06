@@ -255,11 +255,24 @@ def test_lost_values_the_verifier_moved_to_notes_are_reported_to_the_agent(monke
         ],
     }
     candidate = {"selectionRules": [{"id": "score-1"}], "quality": quality}
-    monkeypatch.setattr(section.pipeline, "evaluate_parts", lambda *args: SimpleNamespace(candidate=candidate))
+    monkeypatch.setattr(section.pipeline, "evaluate_parts", lambda *args: SimpleNamespace(candidate=candidate, contract_errors=[]))
     spec = SimpleNamespace(name="selection", sections=("selectionRules",))
     state = {"document": parse(TEXT), "material": None, "context": None, "parts": []}
     found = section._issues(spec, SectionDraft(("selectionRules",)), state, None, ("text",))
     assert [(f["code"], f.get("item")) for f in found] == [("VALUE_NOT_IN_QUOTE", "score-1"), ("ITEM_DROPPED_NO_EVIDENCE", None)]
+
+
+def test_contract_errors_that_the_last_cleanup_would_act_on_are_reported_to_fix_with_how(monkeypatch):
+    # 2026-11-07 23건 재조립 sh-310976: 담당이 넣은 소득 70% 조건식이 기준 연도·버전이 비어 마지막 계약 정리에서 원문만 남음(담당은 받지 못했음)
+    candidate = {"eligibility": [{"id": "income", "rule": {}}], "quality": {"reviewIssues": [], "notes": []}}
+    errors = ["INCOMPLETE_INCOME_BENCHMARK /eligibility/0/rule/expression", "UNRESOLVED_SCOPE /schedules/0/scope"]
+    monkeypatch.setattr(section.pipeline, "evaluate_parts", lambda *args: SimpleNamespace(candidate=candidate, contract_errors=errors))
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",))
+    state = {"document": parse(TEXT), "material": None, "context": None, "parts": []}
+    found = section._issues(spec, SectionDraft(("eligibility",)), state, None, ("text",))
+    assert [(f["code"], f["target"], f.get("item")) for f in found] == [("CONTRACT_INCOMPLETE_INCOME_BENCHMARK", "/eligibility/0/rule/expression", "income")]
+    text = verify_report(SectionDraft(("eligibility",)), found)
+    assert "## 고칠 것 1개" in text and "referenceVersion에 원문의 기준 표현" in text
 
 
 def test_finish_ends_without_another_model_call_unless_verification_finds_a_new_problem():
