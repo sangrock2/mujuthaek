@@ -43,7 +43,7 @@ def image_reading(state: ExtractionState, runtime: Context) -> dict[str, Any]:
 
 
 def extract(state: ExtractionState, runtime: Context) -> dict[str, Any]:
-    return {"extracted": pipeline.extract_parts(state["rules"], state["material"], runtime.context)}
+    return {"extracted": pipeline.extract_parts(state["rules"], state["material"], runtime.context, source=state["intake"].raw.source_code)}
 
 
 def assemble_verify(state: ExtractionState, runtime: Context) -> dict[str, Any]:

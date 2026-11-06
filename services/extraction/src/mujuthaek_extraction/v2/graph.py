@@ -99,7 +99,7 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
         parts, usage, trace = _unpack(AGENTS[STRUCTURE](spec, state, runtime.context))
         return {"parts": parts, "usage": usage, "traces": trace, "structure": structure_summary(parts[0]) if parts else None}
     only = dataclasses.replace(state["rules"], calls=(spec,), split_calls=(), large_text_chars=None)
-    extracted = pipeline.extract_parts(only, state["material"], runtime.context)
+    extracted = pipeline.extract_parts(only, state["material"], runtime.context, source=state["intake"].raw.source_code)
     run = extracted.run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
     return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model}
