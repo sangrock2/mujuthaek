@@ -29,6 +29,7 @@ from mujuthaek_extraction.v2.contract import (
     quote_text,
     without_evidence,
 )
+from mujuthaek_extraction.v2.document import DocumentModel
 
 COVERAGE = ("EXTRACTED", "PARTIAL", "NOT_IN_SOURCE", "NOT_APPLICABLE")
 JUDGED = ("notice", "eligibility")  # 판정에 쓰여 비울 수 없는 섹션
@@ -195,21 +196,62 @@ def _problems(context: SectionContext, section: str, item: Any, adding: bool) ->
             return [f"/id: 이미 있는 id입니다({item['id']}). 고치려면 update_item을 씁니다."]
     elif adding and draft.find(section, None) is not None:
         return ["notice는 하나뿐입니다. 고치려면 update_item을 씁니다."]
+    texts = _original_text_problems(context.document, section, item)
     evidence = item.get("evidence")
     if not isinstance(evidence, list) or not evidence:
-        return [_no_own_evidence(item)]
+        return [_no_own_evidence(item), *texts][:5]
     found = []
     for entry in evidence_entries(item):  # 하위 항목(가격·예외 등)의 근거까지
         try:
             quote_text(context.document, entry)
         except EvidenceError as error:
             found.append(f"/evidence: {error}")
-    original = item.get("originalText")
-    if section in ORIGINAL_TEXT_SECTIONS and isinstance(original, str) and original.strip() and not context.document.contains(original):
-        found.append("/originalText: 원문에 그대로 있는 글이 아닙니다. 원문 글자 그대로 적거나 비워 둡니다(비우면 첫 근거의 원문으로 채움)")
+    found += texts
     body = complete(section, without_evidence(item), context.documents)
     found += errors(section, body, context.documents)
     return found[:5]
+
+
+def _original_text_problems(document: DocumentModel, section: str, item: dict[str, Any]) -> list[str]:
+    """원문 문장 칸(originalText)이 원문 그대로인지: 항목 칸과 하위 칸(예외 등) 모두, V1 검증기와 같은 기준으로.
+    하위 칸은 어느 하위 항목(id)의 어떤 글인지와 가장 비슷한 원문 줄을 함께 알립니다(2026-11-06 5건 재측정 bmc-72: 원문 한 줄
+    「- 출생자녀별 가산비율 : 1명 10%p, 2명 이상 20%p」를 예외 둘로 나누며 가운데를 뺀 「- 출생자녀별 가산비율 : 2명 이상 20%p」를 적음.
+    넣을 때는 하위 칸을 보지 않았고, 검증 결과는 「exceptions/3」 순번만 알려 담당이 다른 예외를 고친 뒤 그만둠 → 소득·자산 기준이 사람 확인으로)."""
+    found = []
+    for pointer, node in _original_texts(item):
+        text = node["originalText"]
+        if not text.strip() or document.verbatim(text) or (not pointer and section not in ORIGINAL_TEXT_SECTIONS):
+            continue
+        if not pointer:
+            found.append(
+                f"/originalText: 원문에 그대로 있는 글이 아닙니다{_closest(document, text)}. "
+                "원문 글자 그대로 적거나 비워 둡니다(비우면 첫 근거의 원문으로 채움)"
+            )
+            continue
+        named = f"({node['id']})" if isinstance(node.get("id"), str) and node["id"] else ""
+        found.append(
+            f"{pointer}/originalText{named}: 「{text[:80]}」는 원문에 이어진 글자 그대로 있지 않습니다{_closest(document, text)}. "
+            "원문 글자를 빼거나 바꾸지 말고, 원문에서 이어진 부분(한 줄의 일부만 써도 됨)이나 그 줄 전체를 적습니다"
+        )
+    return found
+
+
+def _original_texts(value: Any, pointer: str = ""):
+    """(항목 안 위치, originalText가 있는 객체). 항목 자체는 위치가 빈 글."""
+    if isinstance(value, dict):
+        if isinstance(value.get("originalText"), str):
+            yield pointer, value
+        for key, child in value.items():
+            if key != "evidence":
+                yield from _original_texts(child, f"{pointer}/{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _original_texts(child, f"{pointer}/{index}")
+
+
+def _closest(document: DocumentModel, text: str) -> str:
+    near = document.closest(text)
+    return f"(가장 비슷한 원문 {near['id']} 「{near['text'].strip()[:80]}」)" if near else ""
 
 
 def _no_own_evidence(item: dict[str, Any]) -> str:

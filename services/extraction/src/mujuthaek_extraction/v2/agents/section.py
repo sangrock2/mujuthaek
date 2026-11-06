@@ -231,12 +231,24 @@ def _validator() -> Draft202012Validator:
 
 
 def _item_of(candidate: dict[str, Any], target: str) -> dict[str, Any]:
-    """「/selectionRules/3/rule」 → 그 항목의 id(담당이 넣을 때 쓴 id로 고칠 항목을 찾게)."""
+    """「/selectionRules/3/rule」 → 그 항목의 id(담당이 넣을 때 쓴 id로 고칠 항목을 찾게). 위치가 항목 안 하위 항목(예외 등)이면 그 id도 inner로
+    (2026-11-06 5건 재측정 bmc-72: 「/eligibility/20/exceptions/3/originalText」 순번만 받은 담당이 다른 예외를 고침)."""
     tokens = target.strip("/").split("/")
     if len(tokens) >= 2 and tokens[1].isdigit():
         rows = candidate.get(tokens[0])
         if isinstance(rows, list) and int(tokens[1]) < len(rows) and isinstance(rows[int(tokens[1])], dict) and rows[int(tokens[1])].get("id"):
-            return {"item": rows[int(tokens[1])]["id"]}
+            found = {"item": rows[int(tokens[1])]["id"]}
+            node: Any = rows[int(tokens[1])]
+            for token in tokens[2:]:
+                if isinstance(node, list) and token.isdigit() and int(token) < len(node):
+                    node = node[int(token)]
+                elif isinstance(node, dict):
+                    node = node.get(token)
+                else:
+                    break
+                if isinstance(node, dict) and isinstance(node.get("id"), str) and node["id"]:
+                    found["inner"] = node["id"]
+            return found
     return {}
 
 

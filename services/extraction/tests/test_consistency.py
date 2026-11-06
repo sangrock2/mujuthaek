@@ -393,6 +393,32 @@ def test_family_member_age_is_not_an_applicant_age_criterion():
     assert age.search("신청자는 만 19세 이상이어야 합니다")
 
 
+def test_condition_made_from_one_definition_entry_and_put_on_a_wider_target_is_suspected():
+    # 2026-11-06 V2 5건 재측정 dcco-24812: 「주거약자란 … ① 고령자(만 65세 이상인 자) ② 장애인」의 한 갈래로 만 65세 이상 조건을 만들어
+    # 대상 「주거약자용 주택 신청자」 전체에 붙여 게시됨(장애인 등 다른 주거약자에게는 나이 기준이 없음)
+    line = "① 고령자(만 65세 이상인 자)"
+    text = TABLE + f"\n“주거약자” 란? 아래의 자를 말합니다.\n{line}\n② 장애인"
+    start = text.index(line)
+    quoted = {"id": "ev-def", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": start, "end": start + len(line)}, "quote": line}
+    age = {"kind": "ATOMIC", "subject": "APPLICANT", "attribute": "AGE_YEARS", "operator": "GTE", "value": 65}
+
+    def item(*groups, original="고령자(만 65세 이상인 자)", evidence=()):
+        rule = {"status": "STRUCTURED", "expression": age}
+        return {"category": "AGE", "scope": scope(*groups), "evidenceIds": list(evidence), "originalText": original, "rule": rule}
+
+    def flagged(*items):
+        found = check_consistency(candidate(text=text, eligibility=list(items), evidence=[quoted]), SourceBundle(texts={"pdf-text": text}))
+        return [f for f in found if f.code == "DEFINITION_SCOPE_SUSPECTED"]
+
+    found = flagged(item("주거약자용 주택 신청자"))
+    assert [f.target for f in found] == ["/eligibility/0"] and "「고령자」에게만" in found[0].description and not is_note(found[0].issue())
+    assert len(flagged(item("주거약자용 주택 신청자", original="주거약자만 신청할 수 있어요", evidence=["ev-def"]))) == 1  # 근거 줄이 정의
+    assert flagged(item("주거약자용 주택 신청자 중 고령자")) == []  # 대상이 그 낱말
+    assert flagged(item()) == []  # 대상이 비면 신청자 전체의 요건(「성년자(만 19세 이상)」처럼 정의가 곧 모두의 요건)
+    assert flagged(item("주거약자용 주택 신청자", original="고령자(만 65세 이상인 자) 및 장애인")) == []  # 정의만으로 된 줄이 아님
+    assert flagged(item("주거약자용 주택 신청자", original="고령자(주택 소유와 무관)")) == []  # 정의에 조건식 값이 없음
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [

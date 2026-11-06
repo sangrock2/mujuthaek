@@ -59,6 +59,10 @@ HOW_TO = {
         "따로 두고, 한 조건 안에서 달라지는 값은 기본 기준을 조건식으로, 달라지는 경우를 exceptions(REPLACE, effectExpression 필수, 발동 조건을 "
         "다 표현할 수 없으면 when.status UNSTRUCTURED)로 넣습니다. 이번 모집에 적용하지 않는 기준이거나 속성 사전으로 나타낼 수 없는 기준이면 그대로 둡니다."
     ),
+    "DEFINITION_SCOPE_SUSPECTED": (
+        "원문이 어떤 낱말(고령자 등)의 정의라면 그 기준은 그 낱말에 해당하는 사람에게만 적용됩니다. 대상(scope.targetGroups)을 그 낱말이 든 이름으로 "
+        "좁힙니다(예: 「○○ 신청자 중 고령자」). 원문상 대상 전체의 기준이 맞으면 그대로 둡니다."
+    ),
 }
 END_GUIDE = (
     "원문에 없는 값은 report_missing으로 적습니다. set_coverage(PARTIAL)는 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). "
