@@ -26,6 +26,8 @@ from mujuthaek_extraction.v2.document import DocumentModel
 LIST_SECTIONS = ("locations", "supplyGroups", "schedules", "eligibility", "selectionRules", "requiredDocuments", "guidance")
 CELL_REF = re.compile(r"(.+\.r\d+)\.c\d+")
 ORIGINAL_TEXT_SECTIONS = ("eligibility", "selectionRules")  # 항목에 원문 문장 칸(originalText)이 꼭 있는 섹션
+SCOPE_DEFAULTS = {"supplyCategory": "ALL", "resolution": "RESOLVED"}  # 적용 범위에서 생략하면 채우는 값
+NOTICE_SCOPE = {"level": "NOTICE", "locationIds": [], "supplyGroupIds": [], "targetGroups": [], **SCOPE_DEFAULTS, "description": "공고 전체에 적용돼요."}
 
 
 class EvidenceError(ValueError):
@@ -87,6 +89,20 @@ def fill_original_text(section: str, item: dict[str, Any], document: DocumentMod
         return {**item, "originalText": source_sentence(document, evidence[0])}
     except EvidenceError:
         return item
+
+
+def fill_scope(section: str, item: dict[str, Any], documents: tuple[str, ...]) -> dict[str, Any]:
+    """적용 범위(scope) 기본값: 생략하면 공고 전체, 적었으면 빠진 supplyCategory·resolution을 ALL·RESOLVED로.
+    2026-11-07 23건 측정: 넣기 인자 글자의 35~47%(서류·안내·일정·선정)가 공고 전체 범위를 그대로 적은 scope였음(출력 토큰은 시간과 비용)."""
+    schema, _ = _item_schema(section, documents)
+    if "scope" not in (schema.get("properties") or {}):
+        return item
+    scope = item.get("scope")
+    if scope is None or scope == {}:
+        return {**item, "scope": copy.deepcopy(NOTICE_SCOPE)}
+    if isinstance(scope, dict):
+        return {**item, "scope": {**SCOPE_DEFAULTS, **scope}}
+    return item
 
 
 def complete(section: str, item: dict[str, Any], documents: tuple[str, ...]) -> dict[str, Any]:

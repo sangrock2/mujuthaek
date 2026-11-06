@@ -22,9 +22,11 @@ from mujuthaek_extraction.v2 import graph
 from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
+from mujuthaek_extraction.v2.contract import NOTICE_SCOPE
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.llm import retry
 from mujuthaek_extraction.v2.tools.typed import add_tool
+from mujuthaek_extraction.v2.tools.typed import item_schema as typed_item_schema
 from mujuthaek_extraction.v2.tools.write import WRITE_TOOLS, SectionContext, SectionDraft
 
 
@@ -381,9 +383,48 @@ def test_items_refused_when_added_are_reported_to_fix_until_they_are_added_again
     result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
     reports = [m.content for m in result["messages"] if m.type == "human" and m.content.startswith("# 검증 결과")]
     assert len(reports) == 2 and "남은 문제가 없습니다" in reports[0]
-    assert "## 고칠 것 1개" in reports[1] and '"code": "ITEM_NOT_ADDED"' in reports[1] and '"item": "later"' in reports[1] and "add_schedules" in reports[1]
+    assert "## 고칠 것 1개" in reports[1] and '"code": "ITEM_NOT_ADDED"' in reports[1] and '"item": "later"' in reports[1] and "update_item" in reports[1]
     assert [row["id"] for row in draft.items["schedules"]] == ["kept", "later"] and draft.rejected == {} and draft.finished == "고쳐 넣었어요."
     assert len([m for m in result["messages"] if m.type == "ai"]) == 3
+
+
+def test_an_item_refused_when_added_is_fixed_by_changing_only_the_wrong_fields():
+    # 2026-11-07 23건 측정: 거절된 항목을 통째로 다시 보내는 데 출력 토큰의 7%(자격 담당 12%)를 씀. 거절된 항목은 남겨 두고 틀린 칸만 고침
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule])]),
+        AIMessage(content="", tool_calls=[call("update_item", section="schedules", item_id="apply", changes={"evidence": ["p9.9"]})]),
+        AIMessage(content="", tool_calls=[call("update_item", section="schedules", item_id="apply", changes={"evidence": ["p1.2"]})]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    added, still, fixed = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert added["added"] == [] and added["failed"][0]["id"] == "apply" and "update_item" in added["hint"]
+    assert still["error"] == "BAD_ITEM" and "p9.9" in still["errors"][0] and "아직 넣지 않았습니다" in still["message"]
+    assert fixed == {"ok": "schedules/apply 고쳐 넣음"}
+    assert [row["id"] for row in draft.items["schedules"]] == ["apply"] and draft.items["schedules"][0]["evidence"] == ["p1.2"]
+    assert draft.rejected == {} and draft.pending == {}
+
+
+def test_the_whole_notice_scope_can_be_left_out_and_defaults_are_filled():
+    # 2026-11-07 23건 측정: 넣기 인자 글자의 35~47%(서류·안내·일정·선정)가 공고 전체 범위를 그대로 적은 scope
+    item = typed_item_schema("requiredDocuments", ("text",))
+    assert "scope" not in item["required"] and {"supplyCategory", "resolution"}.isdisjoint(item["properties"]["scope"]["required"])
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k not in ("quoteRefs", "scope")}), "evidence": ["p1.2"]}
+    youth = {"level": "NOTICE", "targetGroups": ["청년"], "description": "청년에게 적용돼요."}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    turn = AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "id": "all"}, {**schedule, "id": "youth", "scope": youth}])])
+    agent = create_agent(
+        ToolCallingFake(messages=iter([turn, AIMessage(content="끝")])), tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS], context_schema=SectionContext
+    )
+    agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    whole, partial = draft.items["schedules"]
+    assert whole["scope"] == NOTICE_SCOPE
+    assert partial["scope"] == {**youth, "supplyCategory": "ALL", "resolution": "RESOLVED"}
 
 
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
