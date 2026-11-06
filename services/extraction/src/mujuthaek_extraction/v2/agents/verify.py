@@ -93,12 +93,12 @@ class VerifyMiddleware(AgentMiddleware):
             return {"jump_to": "end"} if draft.finished else None
         self.seen = draft.version
         issues = context.check()
-        fresh = [issue for issue in issues if _key(issue) not in self.reported]
+        fresh = [issue for issue in issues if issue_key(issue) not in self.reported]
         if draft.finished and not fresh:
             return {"jump_to": "end"}  # 끝내기를 불렀고 새 문제가 없음: 모델을 다시 부르지 않음
         draft.finished = None  # 새 문제가 있으면 끝내기를 거두고 알림
-        marked = [{**issue, "다시": True} if _key(issue) in self.reported else issue for issue in issues]
-        self.reported |= {_key(issue) for issue in issues}
+        marked = [{**issue, "다시": True} if issue_key(issue) in self.reported else issue for issue in issues]
+        self.reported |= {issue_key(issue) for issue in issues}
         return {"messages": [HumanMessage(report(draft, marked))]}
 
 
@@ -125,7 +125,7 @@ def must_fix(issue: dict[str, Any]) -> bool:
     return str(issue.get("code") or "").startswith(MUST_FIX)
 
 
-def _key(issue: dict[str, Any]) -> tuple[str, str, str]:
+def issue_key(issue: dict[str, Any]) -> tuple[str, str, str]:
     """같은 문제인지: 코드·항목 id·항목 안 위치(항목을 빼면 목록 순번이 바뀌므로 순번은 빼고 셈)."""
     tokens = str(issue.get("target") or "").strip("/").split("/")
     inside = "/".join(tokens[2:]) if issue.get("item") and len(tokens) >= 2 and tokens[1].isdigit() else "/".join(tokens)

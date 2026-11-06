@@ -12,8 +12,10 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -29,7 +31,7 @@ from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.assemble import ai_output
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, document_ids
 from mujuthaek_extraction.v2.agents.prompt import system_prompt
-from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
+from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware, issue_key
 from mujuthaek_extraction.v2.contract import to_part
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.llm.budget import BudgetExceeded, BudgetMiddleware
@@ -47,6 +49,11 @@ PRIME_OUTPUT_TOKENS = 512
 # 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
 # 담당이 고칠 수 없는 표시(그림 판독·전환 부호 고침)는 뺌(2026-11-06 네 번째 실행: 세로 글자 표 칸 「청」·「계」 짧은 인용 13개를 세 차례 내내 받음)
 NOT_ADDED = "ITEM_NOT_ADDED"  # 넣을 때 거절되어 아직 초안에 없는 항목(검증 미들웨어의 「고칠 것」)
+# 해결 에이전트(4단계): 담당이 끝낸 뒤 판단 경고가 남은 항목만 새 대화로 다시 봄. 유료 측정 전이라 기본은 꺼짐(true로 켬)
+RESOLVER = "resolver"
+RESOLVER_ENV = "EXTRACTION_V2_RESOLVER"
+RESOLVER_CODES = ("CRITERION_NOT_STRUCTURED", "EXCEPTION_SUSPECTED", "CONTRACT_")
+RESOLVER_CALLS = 4
 LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "IMAGE_TRANSCRIBED_VALUES",
     "CONVERSION_DIRECTION_CORRECTED",
@@ -86,10 +93,15 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         stopped = f"{type(error).__name__}: {error}"[:300]
         context.usage.append({"agent": spec.name, "stopped": stopped})
         log.exception("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name})
+    resolver: dict[str, Any] = {}
+    if stopped is None and os.getenv(RESOLVER_ENV, "").lower() == "true":
+        resolved, resolver = _resolve(spec, draft, state, rt, documents, chat, context.usage)
+        draft = resolved or draft
     trace = {
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
         "stopped": stopped,
+        **({"resolver": resolver} if resolver else {}),
         "draft": {
             "items": draft.items,
             "coverage": draft.coverage,
@@ -99,6 +111,70 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         },
     }
     return parts_of(spec, draft, document, documents), context.usage, trace
+
+
+def _resolve(
+    spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtime, documents: tuple[str, ...], chat: Any, usage: list[dict[str, Any]]
+) -> tuple[SectionDraft | None, dict[str, Any]]:
+    """해결 에이전트(4단계): 담당이 끝낸 초안에서 판단 경고가 남은 항목만, 앞선 대화 없이 같은 앞부분(지시·도구·원문)으로 다시 봅니다.
+    고친 초안은 경고가 있던 항목만 바뀌고(빼지 않음) 검증 결과에 새 문제 없이 문제가 줄었을 때만 씁니다(_settled). 모델 호출은 usage에 더합니다.
+    2026-11-07 23건 재조립: 남은 검토 이슈 106개 중 53개가 자격의 판단 경고(조건식 없음 31·예외 의심 22)였고, 정답표와 대조하면 대부분
+    조건식으로 나타낼 수 있는 기준(「도시근로자 월평균소득 100% 이하」 등, 정답표의 놓친 값)을 담당이 경고를 받고도 첫 판단대로 글로 남긴 것."""
+    before = _issues(spec, draft, state, rt, documents)
+    targets = [issue for issue in before if str(issue.get("code") or "").startswith(RESOLVER_CODES) and issue.get("item")]
+    if not targets:
+        return None, {}
+    trial = SectionDraft(spec.sections, items=copy.deepcopy(draft.items), coverage=copy.deepcopy(draft.coverage), missing=copy.deepcopy(draft.missing))
+    document: DocumentModel = state["document"]
+    context = SectionContext(document=document, budget=rt.models.budget, draft=trial, documents=documents)
+    context.check = lambda: _issues(spec, trial, state, rt, documents)
+    limit = ModelCallLimitMiddleware(run_limit=RESOLVER_CALLS, exit_behavior="end")
+    agent = _agent(chat(RESOLVER, max_output_tokens=spec.max_output_tokens), RESOLVER, state, documents, [limit, VerifyMiddleware()])
+    last: dict[str, Any] = {}
+    stopped = None
+    try:
+        messages = [shared_message(document), HumanMessage(resolver_task(spec, trial, targets))]
+        for snapshot in agent.stream({"messages": messages}, context=context, stream_mode="values"):
+            last = snapshot
+    except Exception as error:  # 해결 담당이 멈추면 담당 초안을 그대로 씀
+        stopped = f"{type(error).__name__}: {error}"[:300]
+        log.warning("해결 담당이 멈췄습니다", extra={"agent": spec.name, "error": stopped})
+    usage.extend(context.usage)
+    after = before if stopped else _issues(spec, trial, state, rt, documents)
+    adopted = stopped is None and _settled(draft, trial, {issue["item"] for issue in targets}, before, after)
+    record = {"targets": len(targets), "before": len(before), "after": len(after), "adopted": adopted, "stopped": stopped}
+    record["turns"] = _trace(last.get("messages") or [])
+    return (trial if adopted else None), record
+
+
+def resolver_task(spec: CallSpec, draft: SectionDraft, targets: list[dict[str, Any]]) -> str:
+    rows = {row.get("id"): row for section in draft.sections for row in draft.items.get(section, [])}
+    lines = [
+        f"# 해결 담당: {spec.name}",
+        "섹션 담당이 끝낸 초안에 아래 경고가 남았습니다. 경고마다 원문을 다시 보고, 공통 지시(조건식 쓰는 법)대로 나타낼 수 있으면 고칩니다.",
+        "- 기준값이 대상군·가구원 수·자녀 수에 따라 달라진다는 것만으로는 글로 남길 이유가 아닙니다.",
+        "  기본 기준은 조건식, 달라지는 경우는 exceptions(REPLACE)로 넣고, 순위·계층마다 기준이 다르면 계층마다 조건을 따로 둡니다",
+        "  (원래 항목은 update_item으로 고치고 나머지는 add_<섹션>으로). update_item은 칸마다 합치므로 조건식으로 바꿀 때 rule.reason을 null로 적습니다.",
+        "- 원문상 속성 사전으로 나타낼 수 없거나 이미 맞으면 그대로 둡니다. 경고를 없애려고 항목을 빼거나 원문에 없는 값을 넣지 않습니다.",
+        "- 경고가 없는 항목·섹션 상태는 바꾸지 않습니다(바뀌면 고친 것을 쓰지 않음). 끝나면 finish를 부릅니다.",
+        "## 경고가 남은 항목",
+    ]
+    for item_id in dict.fromkeys(issue["item"] for issue in targets):
+        warned = [f"{issue['code']}: {issue['description']}" for issue in targets if issue["item"] == item_id]
+        lines.append(json.dumps({"id": item_id, "경고": warned, "항목": rows.get(item_id)}, ensure_ascii=False))
+    return "\n".join(lines)
+
+
+def _settled(draft: SectionDraft, trial: SectionDraft, warned: set[str], before: list[dict[str, Any]], after: list[dict[str, Any]]) -> bool:
+    """해결 담당의 초안을 쓸지: 경고가 있던 항목만 바뀌고(뺀 항목 없음, 새 항목은 됨) 섹션 상태가 그대로이며, 검증 결과에 새 문제가 없고 줄었을 때."""
+    for section in draft.sections:
+        old = {row.get("id"): row for row in draft.items.get(section, [])}
+        new = {row.get("id"): row for row in trial.items.get(section, [])}
+        if set(old) - set(new) or any(new[item_id] != row for item_id, row in old.items() if item_id not in warned):
+            return False
+    if trial.coverage != draft.coverage:
+        return False
+    return {issue_key(issue) for issue in after} <= {issue_key(issue) for issue in before} and len(after) < len(before)
 
 
 def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:

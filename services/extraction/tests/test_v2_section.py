@@ -467,3 +467,51 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
     scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
+
+
+def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when_verification_improves(monkeypatch):
+    # 4단계 해결 에이전트(2026-11-07 23건 재조립: 남은 검토 이슈의 절반이 담당이 경고를 받고도 글로 남긴 자격 기준)
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
+    document = parse(TEXT)
+    structured = age["rule"]
+    text_only = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
+    text_only["originalText"] = document.text("p1.2")
+    other = {**text_only, "id": "other"}  # 경고 없는 항목
+
+    def issues(spec, draft, state, rt, documents):
+        rows = draft.items["eligibility"]
+        return [
+            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": "조건식 없이 글로만 남겼습니다."}
+            for i, row in enumerate(rows)
+            if row["id"] == "age" and row["rule"]["status"] == "UNSTRUCTURED"
+        ]
+
+    def resolve_with(*calls):
+        turns = iter([AIMessage(content="", tool_calls=[*calls, call("finish", summary="봤어요.")])])
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        monkeypatch.setattr(
+            section,
+            "_agent",
+            lambda model, name, state, documents, middleware: create_agent(
+                ToolCallingFake(messages=turns), tools=tools_, middleware=middleware, context_schema=SectionContext
+            ),
+        )
+        draft = SectionDraft(("eligibility",), items={"eligibility": [dict(text_only), dict(other)]})
+        spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=1000)
+        rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+        resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+        return draft, resolved, record
+
+    monkeypatch.setattr(section, "_issues", issues)
+    draft, resolved, record = resolve_with(call("update_item", section="eligibility", item_id="age", changes={"rule": {**structured, "reason": None}}))
+    assert record["adopted"] and (record["targets"], record["before"], record["after"]) == (1, 1, 0)
+    assert resolved.items["eligibility"][0]["rule"] == {**structured, "reason": None} and draft.items["eligibility"][0]["rule"]["status"] == "UNSTRUCTURED"
+    draft, resolved, record = resolve_with(call("remove_item", section="eligibility", item_id="age"))  # 경고를 없애려고 뺌
+    assert resolved is None and record["adopted"] is False
+    draft, resolved, record = resolve_with(  # 경고 없는 항목까지 바꿈
+        call("update_item", section="eligibility", item_id="age", changes={"rule": {**structured, "reason": None}}),
+        call("update_item", section="eligibility", item_id="other", changes={"description": "바꿨어요."}),
+    )
+    assert resolved is None and record["adopted"] is False
+    monkeypatch.setattr(section, "_issues", lambda *args: [])
+    assert resolve_with() == (resolve_with()[0], None, {})  # 경고가 없으면 부르지 않음
