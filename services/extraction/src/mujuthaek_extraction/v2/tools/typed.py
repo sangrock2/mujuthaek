@@ -39,7 +39,10 @@ EVIDENCE = {
 }
 DROPPED = ("if", "then", "else", "not")
 ORIGINAL_TEXT = "원문 문장 그대로. 비우면 첫 근거의 원문으로 채웁니다"
-SCOPE = "적용 범위. 공고 전체(모든 신청자·모든 공급)에 적용되면 적지 않습니다(프로그램이 공고 전체로 채움)"
+SCOPE = (
+    "적용 범위. 특정 위치·공급 묶음·대상에 한정되지 않으면 적지 않습니다(프로그램이 공고 전체로 채움). 대상만 다르면 level NOTICE에 "
+    "targetGroups만 적고, LOCATION·SUPPLY_GROUP은 그 id(locationIds·supplyGroupIds)를 함께 적을 때만 씁니다"
+)
 SCOPE_OPTIONAL = {"supplyCategory": "생략하면 ALL", "resolution": "생략하면 RESOLVED"}
 
 

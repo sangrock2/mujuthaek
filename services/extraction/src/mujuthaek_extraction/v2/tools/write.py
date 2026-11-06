@@ -36,6 +36,7 @@ COVERAGE = ("EXTRACTED", "PARTIAL", "NOT_IN_SOURCE", "NOT_APPLICABLE")
 JUDGED = ("notice", "eligibility")  # 판정에 쓰여 비울 수 없는 섹션
 MISSING_REASONS = ("NOT_IN_SOURCE", "TO_BE_ANNOUNCED", "SOURCE_ATTACHMENT_REQUIRED", "CONFLICT", "UNREADABLE", "NOT_APPLICABLE")
 PATCH_HINT = "거절된 항목은 update_item(같은 id, 틀린 칸만)으로 고치면 넣어집니다. 항목 전체를 다시 보내지 않습니다."
+RULE_STATUS_CLEARS = {"UNSTRUCTURED": "expression", "STRUCTURED": "reason"}  # 규칙 상태(status)를 바꾸면 계약상 비워야 하는 칸
 
 
 @dataclass
@@ -115,7 +116,8 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
 @tool
 def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: ToolRuntime[SectionContext, Any]) -> str:
     """넣은 항목이나 넣을 때 거절된 항목을 고칩니다. changes에는 바꿀 칸만 적습니다(객체는 칸마다 합치고 그 밖은 바꿈, evidence를 적으면
-    근거를 바꿈). 거절된 항목은 고쳐서 맞으면 넣습니다. notice는 item_id를 비워 둡니다."""
+    근거를 바꿈). 규칙 상태(status)를 바꾸면 맞지 않게 된 칸(UNSTRUCTURED면 expression, STRUCTURED면 reason)은 비웁니다.
+    거절된 항목은 고쳐서 맞으면 넣습니다. notice는 item_id를 비워 둡니다."""
     context = runtime.context
     draft = context.draft
     if section not in draft.sections:
@@ -298,6 +300,11 @@ def _merge(base: Any, patch: Any) -> Any:
         merged = dict(base)
         for key, value in patch.items():
             merged[key] = value if key == "evidence" else _merge(base.get(key), value)
+        # 상태를 바꾸며 맞지 않게 된 칸을 적지 않으면 앞 값이 남아 형식 오류로 거절됨: 계약대로 비웁니다
+        # (2026-11-07 3건 표본: 조건을 「글로 남김」으로 바꾸며 조건식을 지우지 않아 거절 5번, 고치는 차례가 늘어남)
+        stale = RULE_STATUS_CLEARS.get(patch["status"]) if isinstance(patch.get("status"), str) else None
+        if stale and stale in merged and stale not in patch:
+            merged[stale] = None
         return merged
     return copy.deepcopy(patch)
 
