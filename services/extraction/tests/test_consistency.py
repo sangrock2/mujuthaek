@@ -682,6 +682,61 @@ def test_rows_of_a_supply_type_matrix_left_out_are_noted_but_rows_left_as_text_c
     assert criteria_omission(text, [many, loose]) is None
 
 
+def test_rows_of_a_supply_type_are_missing_even_when_another_type_uses_the_same_percents():
+    # 2026-11-07 유료 확인 jbdc-16011: 일반공급·노부모부양 소득 행이 조건에 없는데 같은 100%·140%를 신혼부부 조건이 써서 값만으로는 다룬 것이 됨
+    text = TABLE + "\n" + MATRIX_TABLE
+    many = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT", 130, groups=("다자녀가구 특별공급 우선공급",))
+    newlywed = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("신혼부부 특별공급 우선공급",))
+    finding = criteria_omission(text, [many, newlywed])
+    assert "2행의 기준값 100%, 140%" in finding.description and "기준표 행이 하나도 조건에 없는 대상: 일반 공급." in finding.description
+    # 그 공급의 조건이면 다룬 것입니다
+    general = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("일반공급 1순위 우선공급",))
+    assert criteria_omission(text, [many, general]) is None
+    # 「신혼부부 특별공급 일반공급」처럼 다른 공급의 공급방식 이름은, 같은 표에 그 공급이 있으면 이름에서 먼저 나오는 공급(신혼부부)의 조건
+    newlywed_rows = "\n".join(
+        [
+            "| 신혼 부부 특별 공급 | 일반공급(20%) | 도시근로자 가구원수별 가구당 월평균소득액의 100% |  | 8,168,429 |",
+            "|  |  | 도시근로자 가구원수별 가구당 월평균소득액의 140% (본인 및 배우자가 모두 소득이 있는 경우) |  | 11,435,801 |",
+        ]
+    )
+    method = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("신혼부부 특별공급 일반공급(20%)",))
+    finding = criteria_omission(text + "\n" + newlywed_rows, [many, method])
+    assert "2행의 기준값 100%, 140%" in finding.description and "조건에 없는 대상: 일반 공급." in finding.description
+
+
+def test_list_marks_and_a_one_target_table_tie_rows_to_their_conditions():
+    # dcco-24812: 표 「차. 일반입주자」 ↔ 조건 「일반공급 2순위 차목」(이름이 달라 목록 기호로만 이어짐)
+    marked = "\n".join(
+        [
+            "[표 8-1]",
+            "  [열 제목] 1. 입주자격 | 2. 가구원수 | 3. 적용 소득기준",
+            "| 차. 일반입주자 | 1인 | 70% |",
+            "|  | 2인 | 60% |",
+            "| 타. 장애인 | 1인 | 120% |",
+            "|  | 2인 | 100% |",
+        ]
+    )
+    ta = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 120, groups=("일반공급 2순위 타목 장애인",))
+    cha = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 50, "PERCENT", 70, 60, groups=("일반공급 2순위 차목 소득 50% 이하",))
+    assert criteria_omission(TABLE + "\n" + marked, [ta, cha]) is None
+    unmarked = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 50, "PERCENT", 70, 60, groups=("일반공급 2순위 소득 50% 이하",))
+    assert "조건에 없는 대상: 차. 일반입주자." in criteria_omission(TABLE + "\n" + marked, [ta, unmarked]).description
+    # dudc-8934·bmc-75: 청년 표의 「세대원(본인)」 행. 표에서 맞춰진 대상 이름이 「청년」 하나면 그 표의 행은 모두 청년 조건으로 봅니다
+    youth = "\n".join(
+        [
+            "[표 10-1]",
+            "  [열 제목] 1. 구분 | 2. 가구원 수 | 3. 적용 소득기준",
+            "| 세대주인 청년 (세대기준) | 1인 | 120% |",
+            "|  | 2인 | 110% |",
+            "| 세대원(본인) | 1인 | 120% |",
+            "|  | 2인 | 110% |",
+        ]
+    )
+    young = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 120, 110, groups=("청년",))
+    student = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", groups=("대학생",))
+    assert criteria_omission(TABLE + "\n" + youth, [young, student]) is None
+
+
 def test_reference_rent_prose_and_schedule_tables_are_not_criteria_tables():
     tables = "\n".join(
         [

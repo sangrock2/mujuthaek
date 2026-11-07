@@ -1011,8 +1011,9 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
 # 기준표: 소득 % 칸(칸이나 열 제목에 「소득」)이나 자산 금액 칸(열 제목 마지막 단계에 자산·자동차)이 두 행 이상이고, 대상 칸(계층·공급유형·
 # 가구원 수·자녀 수)이 행마다 바뀌는 표. 단계별 참고 소득표(「80% | 3,050,690 | …」)는 대상 칸이 하나뿐이라 빠지고, 임대조건·할증·배점·
 # 신청서·일정 표는 낱말로 뺍니다. 글로만 남긴 조건의 원문에 있는 값은 다룬 것으로 칩니다(조건식 없음은 CRITERION_NOT_STRUCTURED가 봄).
-# 23건 저장 결과에서 걸린 공고는 V1 bmc-106·dcco-24804·dudc-8934·jbdc-16011, V2 dcco-24804·dudc-8934(+ 다시 산 초안의 bmc-72)이고
-# 모두 실제 누락(잘못 잡은 것 없음). 빠진 값이지 틀린 값이 아니라 서류 표 행 누락처럼 화면 메모로 두고(verifier.NOTE_CODES),
+# 행의 대상(계층·공급유형)을 조건 대상 이름과 맞춘 표는 그 대상 조건의 값으로만 셉니다(_row_owners). 23건 저장 결과에서 걸린 공고는
+# V1 bmc-106·dcco-24804·dudc-8934·jbdc-16011, V2 dcco-24804·dudc-8934·jbdc-16011(+ 다시 산 초안의 bmc-72·jbdc)이고 모두 실제 누락
+# (잘못 잡은 것 없음). 빠진 값이지 틀린 값이 아니라 서류 표 행 누락처럼 화면 메모로 두고(verifier.NOTE_CODES),
 # V2 자격 담당에게는 「확인할 것」으로 알립니다
 CRITERIA_OMISSION = "CRITERIA_TABLE_OMISSION_SUSPECTED"
 CRITERIA_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(서류 표 행 누락과 같음)
@@ -1033,6 +1034,14 @@ CRITERIA_CAPTION_LINES = 3
 CRITERIA_CELL_CHARS = 80
 # 금액 칸에 단위가 없으면 열 제목의 단위(「적용 자산기준금액(원) › 총자산가액 | 237,000,000」, bmc-72)로 읽습니다
 TITLE_UNIT = re.compile(r"\(\s*(천원|만원|원)\s*\)")
+# 행의 대상(계층·공급유형)과 조건 대상 이름 맞추기(2026-11-07 유료 확인 jbdc-16011: 소득표 32행 중 일반공급·노부모부양 등 16값이 조건에 없는데
+# 같은 비율을 다른 공급이 써서 값만으로는 다룬 것으로 셈). 가구원 수·자녀 수·맞벌이 표시 칸은 대상이 아님
+CONDITION_CELL = re.compile(r"^(?:\d+\s*(?:인|명)(?:\s*(?:이상|이하|초과|미만))?|[○●×xXoO\-–]|해당\s*없음)$")
+LIST_MARK = re.compile(r"(?:^|\s)(?:[가-하]\.|\d+\)|[①-⑳])\s*")
+LETTER_MARK = re.compile(r"(?:^|\s)([가-하])\.\s")  # 표 대상의 목록 기호(「차. 일반입주자」) ↔ 조건 대상의 목(「2순위 차목」)
+NAME_SPLIT = re.compile(r"[·ㆍ‧・･∙,/+]|\s및\s|\s또는\s")
+PARENTHESES = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+AMOUNT_NAME = re.compile(r"[\d,.%]+(?:만원|원)?(?:이하|이상|미만|초과)?")  # 대상 칸 자리에 든 금액(「4,576,036원 이하」)은 이름이 아님
 
 
 def _criteria_titles(block: list[str]) -> list[str]:
@@ -1084,8 +1093,9 @@ def _varies(labels: list[list[str]]) -> bool:
     return False
 
 
-def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
-    """원문 자격 기준표의 행 → (보여 줄 행 글, 기준값들). 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다."""
+def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, str]], str | None]]]:
+    """원문 자격 기준표마다 행 → (보여 줄 행 글, 기준값들, 행의 대상). 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다.
+    행의 대상은 기준값이 아닌 글자 칸 가운데 가구원 수·자녀 수·맞벌이 표시가 아닌 첫 칸(병합 칸은 위 행 것을 이어받음)."""
     lines = text.split(SHEET_START, 1)[0].split("\n")
     found = []
     i = 0
@@ -1109,18 +1119,76 @@ def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
                 above.append(line)
         if NOT_CRITERIA_TABLE.search(" ".join([*titles, *block[:3], *above])):
             continue
-        data, labels = [], []
+        data, labels, carry = [], [], []
         for n in rows:
             cells = _cells(block[n])
             values = _criteria_values(cells, titles)
             if not values:
                 continue
             aid = block[n + 1][len(AID_LINE) :] if n + 1 < len(block) and block[n + 1].startswith(AID_LINE) else None
-            data.append((aid or " ".join(cell for cell in cells if cell), values))
-            labels.append([cell if LETTER.search(cell) and not any(raw in cell for _, _, raw in values) else "" for cell in cells])
+            label = [cell if LETTER.search(cell) and not any(raw in cell for _, _, raw in values) else "" for cell in cells]
+            carry = carry + [""] * (len(cells) - len(carry))
+            for c, cell in enumerate(label):
+                if cell:  # 글자 칸이 바뀌면 그 오른쪽의 이어받은 칸은 끊음
+                    carry[c] = cell
+                    carry[c + 1 :] = [""] * (len(carry) - c - 1)
+            group = next((cell for cell in carry[: len(cells)] if cell and not CONDITION_CELL.match(cell)), None)
+            data.append((aid or " ".join(cell for cell in cells if cell), values, group))
+            labels.append(label)
         if len(data) >= 2 and _varies(labels):
-            found += data
+            found.append(data)
     return found
+
+
+def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
+    """원문 자격 기준표의 행 → (보여 줄 행 글, 기준값들)."""
+    return [(shown, values) for table in _criteria_tables(text) for shown, values, _ in table]
+
+
+def _name_parts(name: str) -> list[str]:
+    """대상 이름 → 맞춰 볼 부분: 괄호를 빼고 목록 기호(「나.」「1)」)·「·」「,」로 나눈 뒤 공백을 뺀 2글자 이상(숫자·금액 칸은 뺌)."""
+    parts = []
+    for piece in LIST_MARK.split(PARENTHESES.sub(" ", name)):
+        for part in NAME_SPLIT.split(piece):
+            plain = normalize(part)
+            if len(plain) >= 2 and not AMOUNT_NAME.fullmatch(plain):
+                parts.append(plain)
+    return parts
+
+
+def _row_owners(groups: list[str], named: list[tuple[dict[str, Any], list[str]]]) -> dict[str, list[dict[str, Any]]] | None:
+    """표의 대상 → 그 대상의 자격 조건. 조건 대상 이름의 부분마다, 서로 포함되거나 목록 기호가 같은(표 「차.」 ↔ 조건 「차목」) 표 대상에 붙이고,
+    여럿이면 이름에서 먼저 나오는 대상에 붙입니다(「신혼부부 특별공급 일반공급」은 일반공급이 아니라 신혼부부). 표에서 맞춰진 이름이 하나뿐이면
+    맞추지 못한 대상도 그 이름의 조건으로 봅니다(청년 표의 「세대원(본인)」 행). 어느 대상도 맞추지 못하면 None(값만 대조)."""
+    parts = {group: _name_parts(group) for group in groups}
+    marks = {group: set(LETTER_MARK.findall(f" {group}")) for group in groups}
+    by_part: dict[str, list[dict[str, Any]]] = {}
+    for item, names in named:
+        for part in dict.fromkeys(names):
+            by_part.setdefault(part, []).append(item)
+    owners: dict[str, list[dict[str, Any]]] = {group: [] for group in groups}
+    matched: set[str] = set()
+    for part, items in by_part.items():
+        best: list[str] = []
+        at = None
+        for group in groups:
+            hits = [part.find(q) for q in parts[group] if q in part] + [0 for q in parts[group] if part in q]
+            hits += [part.find(f"{mark}목") for mark in marks[group] if f"{mark}목" in part]
+            if not hits:
+                continue
+            if at is None or min(hits) < at:
+                best, at = [group], min(hits)
+            elif min(hits) == at:
+                best.append(group)
+        for group in best:
+            owners[group] += items
+            matched.add(part)
+    if not matched:
+        return None
+    if len(matched) == 1:
+        only = by_part[next(iter(matched))]
+        owners = {group: items or list(only) for group, items in owners.items()}
+    return owners
 
 
 def _used_criteria(candidate: dict[str, Any]) -> tuple[set[float], set[float]]:
@@ -1149,22 +1217,46 @@ def _used_criteria(candidate: dict[str, Any]) -> tuple[set[float], set[float]]:
 
 
 def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
+    """기준표 행의 기준값을 쓰는 조건이 없는 행. 행의 대상을 조건 대상 이름과 맞춘 표는 그 대상의 조건(과 대상을 정하지 않은 조건·선정
+    조건식)의 값으로만 셉니다(다른 공급이 같은 비율을 써도 그 공급의 조건이 없으면 빠진 행). 맞추지 못한 표는 모든 조건의 값으로 셉니다."""
     if not candidate["eligibility"]:
         return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
-    percents, amounts = _used_criteria(candidate)
+    used = _used_criteria(candidate)
+    named = [(item, [part for name in (item.get("scope") or {}).get("targetGroups") or [] for part in _name_parts(name)]) for item in candidate["eligibility"]]
+    everyone = {"eligibility": [item for item, names in named if not names], "selectionRules": candidate["selectionRules"]}
+    pools: dict[tuple[int, ...], tuple[set[float], set[float]]] = {}
+
+    def pool(items: list[dict[str, Any]]) -> tuple[set[float], set[float]]:
+        key = tuple(sorted(id(item) for item in items))
+        if key not in pools:
+            pools[key] = _used_criteria({**everyone, "eligibility": [*everyone["eligibility"], *items]})
+        return pools[key]
+
     missed = []
-    for shown, values in _criteria_rows("\n".join(sources.texts.values())):
-        gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
-        if gone:
-            missed.append((shown, gone))
+    lacking: dict[str, str] = {}  # 기준표 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 → 원문 이름)
+    for table in _criteria_tables("\n".join(sources.texts.values())):
+        owners = _row_owners(list(dict.fromkeys(group for _, _, group in table if group)), named)
+        covered: dict[str, bool] = {}
+        for shown, values, group in table:
+            percents, amounts = used if owners is None or group is None else pool(owners[group])
+            gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
+            if gone:
+                missed.append((shown, gone))
+            if owners is not None and group is not None:
+                covered[group] = covered.get(group, False) or not gone
+        for group, any_row in covered.items():
+            if not any_row:
+                lacking.setdefault(normalize(group), group)
     if len(missed) < CRITERIA_OMISSION_MIN_ROWS:
         return
     values = list(dict.fromkeys(raw for _, gone in missed for raw in gone))
     rows = ", ".join(f"「{shown[:70]}」" for shown, _ in missed[:2])
-    # V2 담당에게는 설명 앞 220자만 가므로 빠진 값과 첫 행을 앞에 둡니다
+    names = list(lacking.values())
+    groups = f" 기준표 행이 하나도 조건에 없는 대상: {', '.join(names[:3])}{' 등' if len(names) > 3 else ''}." if names else ""
+    # V2 담당에게는 설명 앞 220자만 가므로 빠진 값·조건이 없는 대상·첫 행을 앞에 둡니다
     description = (
         f"원문 자격 기준표 {len(missed)}행의 기준값 {', '.join(values[:4])}{' 등' if len(values) > 4 else ''}을 쓰는 자격 조건·예외가 없습니다"
-        f"(빠진 기준 의심): {rows}{' …' if len(missed) > 2 else ''}"
+        f"(빠진 기준 의심).{groups} {rows}{' …' if len(missed) > 2 else ''}"
     )
     find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
 

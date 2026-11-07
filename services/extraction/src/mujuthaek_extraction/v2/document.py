@@ -112,6 +112,32 @@ class DocumentModel:
         이어진 글로 있거나, 순서도·칸 없는 표처럼 글자 순서가 뒤섞인 곳이면 낱말이 가까이 모여 있습니다."""
         return self.contains(strip_markers(text)) or bool(find_scattered(self._index, text))
 
+    def aid_row(self, text: str, rows: tuple[str, ...] = ()) -> str | None:
+        """V1이 표 행 아래 붙인 읽기 도움 줄(↳, 원문 아님)에서 옮긴 글이면 그 도움 줄이 붙은 표 행(원문 그대로). 같은 글이 여러 행의 도움 줄에
+        있으면 rows(근거로 든 행) 가운데 하나일 때만. 2026-11-07 유료 확인 dudc-8934: 기준표 행 누락 메모가 보여 준 도움 줄 「2인 1인 — 적용
+        소득기준 120%」을 담당이 예외 originalText로 적어 거절됨."""
+        needle = normalize(strip_markers(text))
+        if not needle:
+            return None
+        found = list(dict.fromkeys(row for aid, row in self._aids if needle in aid))
+        if len(found) == 1:
+            return found[0]
+        cited = [row for row in found if row.strip() in {r.strip() for r in rows}]
+        return cited[0] if len(cited) == 1 else None
+
+    @cached_property
+    def _aids(self) -> tuple[tuple[str, str], ...]:
+        """(읽기 도움 줄의 정규화 글, 그 줄이 붙은 표 행): 원문 글자에서 표 행 바로 아래의 도움 줄들."""
+        pairs, row = [], None
+        for line in self.source.split("\n"):
+            if _is_row(line):
+                row = line
+            elif line.startswith(AID) and row is not None:
+                pairs.append((normalize(line[len(AID) :]), row))
+            elif not line.startswith(TITLES):
+                row = None
+        return tuple(pairs)
+
     def occurrences(self, text: str) -> int:
         """V1 결합기가 그 인용 글로 원문에서 찾는 곳 수(한 곳이어야 위치가 정해짐). 결합기와 같은 찾기(candidates)를 같은 원문 글자에 돌립니다.
         원문 글자에는 V1이 표 행 아래 붙인 읽기 도움 줄(↳)·열 제목 줄도 들어 있어, 조각(도움 줄 없음)으로 세면 결합기보다 적게 셉니다

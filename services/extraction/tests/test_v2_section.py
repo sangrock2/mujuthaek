@@ -152,6 +152,39 @@ def test_an_exception_left_without_original_text_is_filled_from_its_own_evidence
     assert exception["id"] == "later" and exception["originalText"] == "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"
 
 
+def test_original_text_copied_from_a_table_reading_aid_becomes_the_row_as_written():
+    # 2026-11-07 유료 확인 dudc-8934: 기준표 행 누락 메모가 보여 준 읽기 도움 줄(↳, 원문 아님) 「2인 1인 — 적용 소득기준 120%」을 담당이
+    # 예외 originalText로 적어 거절 → 고치는 데 차례를 씀
+    from mujuthaek_extraction.v2.contract import fill_original_text
+
+    text = "\n".join(
+        [
+            "--- 1쪽 ---",
+            "■ 소득 : 100% 이하",
+            "[표 1-1]",
+            "| 구분 | 가구원 수 | 적용 소득기준 |",
+            "| 대학생 | 2인 | 120% |",
+            "  ↳ 대학생 2인 — 적용 소득기준 120%",
+            "| 청년 | 2인 | 120% |",
+            "  ↳ 청년 2인 — 적용 소득기준 120%",
+        ]
+    )
+    document = parse(text)
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    bare = {k: v for k, v in income["exceptions"][0].items() if k != "originalText"}
+
+    def written(original, **exception):
+        item = {**income, "id": "a", "evidence": ["p1.1"], "exceptions": [{**bare, "id": "e", "originalText": original, **exception}]}
+        return fill_original_text("eligibility", item, document)["exceptions"][0]["originalText"]
+
+    assert written("대학생 2인 — 적용 소득기준 120%") == "대학생 2인 120%"  # 도움 줄 하나에만 있는 글은 그 행의 원문으로
+    assert written("2인 — 적용 소득기준 120%", evidence=["t1-1.r2"]) == "청년 2인 120%"  # 두 행에 있으면 근거로 든 행
+    assert written("2인 — 적용 소득기준 120%") == "2인 — 적용 소득기준 120%"  # 근거가 없으면 정할 수 없어 그대로(넣기 검사가 거절)
+    assert written("■ 소득 : 100% 이하") == "■ 소득 : 100% 이하"  # 원문 그대로면 바꾸지 않음
+    item = {**income, "id": "b", "originalText": "청년 2인 — 적용 소득기준 120%", "evidence": ["t1-1.r2"]}
+    assert fill_original_text("eligibility", item, document)["originalText"] == "청년 2인 120%"  # 항목 originalText도 같음
+
+
 def test_a_problem_inside_a_part_of_an_item_names_the_part_too():
     candidate = {"eligibility": [{"id": "income", "exceptions": [{"id": "one"}, {"id": "two", "when": {"status": "STRUCTURED"}}]}]}
     assert section._item_of(candidate, "/eligibility/0/exceptions/1/originalText") == {"item": "income", "inner": "two"}
