@@ -72,9 +72,12 @@ def source_sentence(document: DocumentModel, evidence: str | dict[str, Any]) -> 
     """근거 하나 → 사람이 읽을 원문 문장(표 행은 칸 구분자 없이 칸 글자를 이음). originalText를 비운 항목에 채웁니다.
     V1 검증기는 공백·칸 구분자를 무시하고 원문과 대조하므로 이은 글도 원문 그대로로 확인됩니다."""
     text = quote_text(document, evidence)
-    if text.strip().startswith("|") and text.strip().endswith("|"):
-        return " ".join(cell.strip() for cell in text.strip()[1:-1].split("|") if cell.strip())
-    return text.strip()
+    return _row_sentence(text) if text.strip().startswith("|") and text.strip().endswith("|") else text.strip()
+
+
+def _row_sentence(row: str) -> str:
+    """표 행 「| a |  | b |」 → 칸 글자를 이은 「a b」(빈 칸은 뺌)."""
+    return " ".join(cell.strip() for cell in row.strip()[1:-1].split("|") if cell.strip())
 
 
 def fill_original_text(section: str, item: dict[str, Any], document: DocumentModel) -> dict[str, Any]:
@@ -88,14 +91,33 @@ def fill_original_text(section: str, item: dict[str, Any], document: DocumentMod
     if not _has_text(item):
         sentence = _first_sentence(document, item.get("evidence"))
         item = {**item, "originalText": sentence} if sentence else item
+    else:
+        item = _from_aid(item, document, item.get("evidence"))
     exceptions = item.get("exceptions")
-    if isinstance(exceptions, list) and any(isinstance(e, dict) and not _has_text(e) for e in exceptions):
+    if isinstance(exceptions, list) and any(isinstance(e, dict) for e in exceptions):
         item = {**item, "exceptions": [_filled_exception(e, document) for e in exceptions]}
     return item
 
 
 def _has_text(node: dict[str, Any]) -> bool:
     return isinstance(node.get("originalText"), str) and bool(node["originalText"].strip())
+
+
+def _from_aid(node: dict[str, Any], document: DocumentModel, evidence: Any) -> dict[str, Any]:
+    """originalText가 원문에 없고 표 읽기 도움 줄(↳, 원문 아님)의 글이면 그 도움 줄이 붙은 표 행의 원문으로 바꿉니다(값은 그대로, 글만 원문으로)."""
+    text = node["originalText"]
+    if document.verbatim(text):
+        return node
+    rows = []
+    for entry in evidence if isinstance(evidence, list) else []:
+        ref = entry if isinstance(entry, str) else str(entry.get("id", "")) if isinstance(entry, dict) else ""
+        cell = CELL_REF.fullmatch(ref)
+        try:
+            rows.append(document.text(cell.group(1) if cell else ref))
+        except KeyError:
+            continue
+    row = document.aid_row(text, tuple(rows))
+    return {**node, "originalText": _row_sentence(row)} if row else node
 
 
 def _first_sentence(document: DocumentModel, evidence: Any) -> str | None:
@@ -108,10 +130,12 @@ def _first_sentence(document: DocumentModel, evidence: Any) -> str | None:
 
 
 def _filled_exception(exception: Any, document: DocumentModel) -> Any:
-    if not isinstance(exception, dict) or _has_text(exception):
+    if not isinstance(exception, dict):
         return exception
     own = exception.get("evidence")
     evidence = own if isinstance(own, list) and own else evidence_entries([exception.get("effectExpression"), exception.get("when")])
+    if _has_text(exception):
+        return _from_aid(exception, document, evidence)
     sentence = _first_sentence(document, evidence)
     return {**exception, "originalText": sentence} if sentence else exception
 
