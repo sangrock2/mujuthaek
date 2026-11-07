@@ -345,6 +345,36 @@ def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypa
     assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈
 
 
+def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
+    # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
+    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
+    monkeypatch.setattr(section, "MAX_MODEL_CALLS", 2)
+    recorded = answers()
+    monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
+    rows = [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": ["p1.1"]} for row in ai_part(example("housing"))["eligibility"]]
+
+    def outcome_with(*turns):
+        def chat(name, **kwargs):
+            if name == "eligibility":
+                return ToolCallingFake(messages=iter([AIMessage(content="", tool_calls=[call("add_eligibility", items=rows)]), *turns]))
+            return ToolCallingFake(messages=iter([AIMessage(content="끝")]))
+
+        outcome = run(raw_event(), NoticeModels(RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=chat))
+        return outcome, {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
+
+    def fix(n):
+        return call("update_item", section="eligibility", item_id=rows[0]["id"], changes={"description": f"고침 {n}"})
+
+    outcome, traces = outcome_with(*(AIMessage(content="", tool_calls=[fix(n)]) for n in range(3)))  # 넣고 고치다 상한에 닿음(끝내기 없음)
+    assert traces["eligibility"]["stopped"] == "모델 호출 상한(2번)" and traces["schedules"]["stopped"] is None
+    coverage = outcome.candidate["quality"]["coverage"]["eligibility"]
+    assert coverage["status"] == "PARTIAL" and "끝내기 전에 멈췄어요" in coverage["reason"] and outcome.candidate["eligibility"]  # 넣은 항목은 남김
+    # 마지막 호출에서 끝내기까지 불렀으면 상한 답이 붙어도 끝낸 것입니다
+    outcome, traces = outcome_with(AIMessage(content="", tool_calls=[fix(0), call("finish", summary="다 넣었어요.")]))
+    assert traces["eligibility"]["stopped"] is None and outcome.candidate["quality"]["coverage"]["eligibility"]["status"] == "EXTRACTED"
+    assert traces["eligibility"]["turns"][-1]["text"].startswith(section.CALL_LIMIT_MESSAGE)  # 상한 답은 붙었음
+
+
 def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agent_goes_on():
     # 2026-11-06 23건 측정: 넣기 도구에 evidence를 항목 밖에 적어 TypeError → 도구 실행기가 오류를 올려 측정 전체가 멈춤
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
@@ -502,6 +532,15 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
     scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
+
+
+def test_criteria_table_rows_left_out_reach_the_eligibility_agent_as_a_check_with_how_to():
+    # 2026-11-07 23건 원인 분석: 기준표 행 누락은 화면 메모(자격 섹션을 막지 않음)지만 자격 담당은 고치는 법과 함께 받아야 합니다
+    code, target = "CRITERIA_TABLE_OMISSION_SUSPECTED", "/quality/coverage/eligibility"
+    assert code in section.LOST_VALUE_NOTES and section._belongs(target, "eligibility") and not section._belongs(target, "requiredDocuments")
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    shown = verify_report(draft, [{"code": code, "target": target, "description": "원문 자격 기준표 2행의 기준값 119,000,000원"}])
+    assert "## 확인할 것 1개" in shown and f"- {code}:" in shown and "행마다 exceptions(REPLACE" in shown
 
 
 def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when_verification_improves(monkeypatch):
