@@ -36,11 +36,13 @@ MAX_OUTPUT_TOKENS = 4_000
 # 코드가 표를 옮기는 경로가 꺼지고 공급 묶음 72개 중 16개만 나옴). 표 하나에 약 700토큰, 상한 16,000
 TOKENS_PER_TABLE = 700
 MAX_OUTPUT_TOKENS_CAP = 16_000
+# v8(2026-11-07 23건 대조): 요약표에만 있는 금액 열(단지별 「월평균임대료」, bmc-72·106)은 SUPPLY로 이름 칸과 금액 열만,
+#   행마다 소득 구간이 다른 임대조건표(bmc-75 「[39A] 구간별 임대조건」, 첫 행 구간을 열 전체 대상으로 답해 표 4개 96값이 빠짐)는 그 칸을 TARGET_GROUP.
 # v7(2026-10-24): 표 전체가 특정 대상의 요금(「상한 임대조건」「수급자 등」「적용 대상자」)이면 모든 가격 열 targetGroup에 그 대상,
 #   주택형이 표 제목에만 있으면 프로그램이 그 표 행에 붙인다는 안내.
 # v6(2026-10-23): 보증금을 내린 전환안·무보증금 월세 열은 CONVERSION_DEPOSIT_DOWN, 적용 대상이 적혀 있으면 targetGroup.
 # v5(2026-10-20): 표마다 절 제목. v4: 주소 칸 ADDRESS. v3: 행마다 다른 요금안 칸 PLAN_NAME. v2: 첨부 엑셀 공급주택목록 표, 공고문 요약표와 중복 방지 안내
-PROMPT_VERSION = "supply_tables/v7"
+PROMPT_VERSION = "supply_tables/v8"
 # 옵션 가격표의 절 제목(가장 안쪽 제목). 본 가격표 제목에도 「발코니 확장비 별도」가 붙으므로 주택가격·공급금액·별도가 있으면 아님
 # (실측 2026-10-20 LH 대전대동2 「5. 발코니 확장 및 추가선택품목 › ■ 발코니 확장 안내」 표를 AI가 공급표로 답해 확장비 계약금·잔금 32개가
 #  59A 등의 계약금·잔금으로 자동 게시됨. 수집 공고 72건의 후보 표 182개 중 이 규칙에 맞는 것은 옵션 표 3개뿐)
@@ -145,6 +147,8 @@ INSTRUCTIONS = """# 이번 호출에서 할 일 (supply_tables)
 아래 표들은 공급·가격 표 후보입니다. 표마다 **각 열이 무엇인지만** 답합니다. 행의 값은 프로그램이 원문 칸에서 그대로 옮기므로 값을 적지 않습니다.
 - role: 이번 공고로 공급하는 주택형·호실·주택과 그 수량·가격·면적을 담은 표면 SUPPLY.
   소득·자산 기준표, 일정표, 배점표, 면적·용어 설명표, 이미 다른 표가 담은 요약표는 OTHER.
+  단, 요약표에 다른 표에 없는 금액 열(단지별 「월평균임대료」 등)이 있으면 SUPPLY로 두고 이름 칸(단지·주택형)과 금액 열만 답합니다
+  (수량 열은 넣지 않음 — 같은 수량이 두 번 들어가지 않게. 금액은 프로그램이 같은 단지·주택형 묶음에 붙입니다).
 - rowUnit: 한 행이 주택형이면 HOUSING_TYPE, 호실이면 HOUSING_UNIT, 주택(건물) 한 채면 BUILDING.
 - complex: 표 전체가 한 단지의 것이면(표 위 제목 등) 그 단지 이름, 행마다 단지가 다르거나 모르면 null.
 - columns: 의미 있는 열만 넣습니다(넣지 않은 열은 무시). 열 번호는 [열 제목] 줄의 번호입니다. meaning:
@@ -172,6 +176,8 @@ INSTRUCTIONS = """# 이번 호출에서 할 일 (supply_tables)
   그 표의 **모든 가격 열** targetGroup에 그 대상 이름을 적습니다(행마다 「1인」「2인」 같은 대상 칸이 있어도 적음).
   대상을 정할 수 없으면 targetGroup을 비워 둡니다. 프로그램이 그 가격을 기본 요금으로 게시하지 않고 사람 확인으로 보냅니다.
 - 주택형이 열에 없고 표 제목(앞 글의 「【31A】 구간별 임대조건」)에만 있으면 주택형 열을 만들지 않습니다. 프로그램이 제목의 주택형을 그 표 행에 붙입니다.
+- 행마다 소득 구간·계층이 다른 임대조건표(「1구간 (~30%)」「2구간 (~50%)」 행)는 그 칸을 TARGET_GROUP으로 답하고 금액 열의 targetGroup은 비웁니다
+  (첫 행의 구간을 열 전체의 대상으로 적지 않음).
 - 첨부 엑셀 공급주택목록(표 번호 「엑셀1」 등)이 있으면 호실·주택별 공급은 그 엑셀 표로 답합니다. 같은 주택을 주택형·지역별로 다시 센
   공고문 요약표는 role OTHER로 둡니다(같은 공급이 두 번 들어가지 않게)."""
 
@@ -863,6 +869,12 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         if group["itemKind"] == "HOUSING_UNIT" and not group.get("floor") and unit and int(unit[1]) > 0:
             group["floor"] = f"{int(unit[1])}층"
     groups = _attach_price_tables(groups)
+    # 수량도 읽은 가격도 없이 금액 여럿이 붙은 칸만 남은 행은 빈 공급 묶음으로 두지 않고 읽지 못한 가격표로 알립니다(2026-11-07 지시 v8 유료 확인
+    # bmc-75: 「상호전환 시 임대조건」 표의 (-)·(+)·(+) 세 줄이 칸마다 「11,360,000 21,110,000 27,600,000」로 읽혀, 주택형 없는 빈 묶음 12개마다
+    # 가격 빈칸 이슈가 붙음)
+    blank = [g for g in groups if not g["counts"] and not g["prices"] and g.get("_unsplit")]
+    crammed = list(dict.fromkeys(g["id"].rsplit("-r", 1)[0].removeprefix("sg-t") for g in blank))
+    groups = [g for g in groups if g not in blank]
     if not groups:
         return None
     merged_counts: dict[str, list[str]] = {}  # 공급 묶음 → 여러 행이 나눠 가진 병합 칸 수량
@@ -895,6 +907,15 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
                 "code": PRICE_TABLE_UNREAD,
                 "description": f"가격표 {', '.join(unread[:4])}에 행마다 어느 주택형·대상의 금액인지 정할 칸이 없어(예: 소득 구간별 임대조건) "
                 "가격을 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
+            }
+        )
+    if crammed:
+        issues.append(
+            {
+                "supplyGroupId": None,
+                "code": PRICE_TABLE_UNREAD,
+                "description": f"가격표 {', '.join(crammed[:4])}의 금액 칸에 금액이 여럿 붙어 있어(위아래 행이 한 칸으로 읽힘) 어느 행의 가격인지 "
+                "정하지 못해 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
             }
         )
     for group in groups:

@@ -447,6 +447,31 @@ def test_price_table_without_row_names_is_reported_instead_of_skipped_silently()
     assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-2" in issue["description"]
     assert is_note({"code": issue["code"], "target": "/supplyGroups"}) and issue["code"] in DROPPED_VALUE_CODES  # 게시 유지, 검수 대기열
 
+    # 지시 v8대로 구간 칸을 TARGET_GROUP으로 답하면 구간마다 요금안이 나뉘어 표 제목의 주택형(39A) 모집 묶음에 붙습니다
+    tables[1] = st.Table("9-2", 9, "[ 39A ] 구간별 임대조건", tier_rows[0], tier_rows, None, above=("◾[ 39A ] 구간별 임대조건",))
+    mapping["tables"][1]["columns"].insert(0, column(1, "TARGET_GROUP"))
+    part = st.build_part(tables, mapping, "pdf-text")
+    [group] = part["supplyGroups"]
+    assert (group["housingTypeCode"], [c["value"] for c in group["counts"]]) == ("39A", [19]) and st.ISSUES_KEY not in part
+    plans = {}
+    for p in group["prices"]:
+        plans.setdefault(p["pricePlanId"], []).append((p["scope"]["targetGroups"], p["kind"], p["sourceAmount"]))
+    assert sorted(plans.values()) == [
+        [(["1구간 (~30%)"], "DEPOSIT", "16,240,000"), (["1구간 (~30%)"], "MONTHLY_RENT", "130,700")],
+        [(["2구간 (~50%)"], "DEPOSIT", "18,560,000"), (["2구간 (~50%)"], "MONTHLY_RENT", "149,300")],
+    ]
+
+    # 2026-11-07 v8 유료 확인 bmc-75: 이어진 「상호전환 시 임대조건」 표는 (-)·(+)·(+) 세 줄이 칸마다 금액 셋으로 읽히고 제목에 주택형이 없어,
+    # 주택형·수량·가격 없는 빈 묶음마다 가격 빈칸 이슈가 붙었음 → 빈 묶음은 두지 않고 읽지 못한 가격표 메모 하나로
+    switch_rows = (("구간", "임대보증금(원)", "월임대료(원)"), ("1 구 간", "11,360,000 21,110,000 27,600,000", "144,900 106,300 73,900"))
+    tables.append(st.Table("9-3", 9, "상호전환 시 임대조건", switch_rows[0], switch_rows, None))
+    prices = [column(2, "PRICE", pk="DEPOSIT", unit="원", stage="CONVERSION_DEPOSIT_UP"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원")]
+    mapping["tables"].append({"table": "9-3", "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": [column(1, "TARGET_GROUP"), *prices]})
+    part = st.build_part(tables, mapping, "pdf-text")
+    assert [g["housingTypeCode"] for g in part["supplyGroups"]] == ["39A"] and len(part["supplyGroups"][0]["prices"]) == 4
+    [issue] = part[st.ISSUES_KEY]
+    assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-3" in issue["description"]
+
 
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금
