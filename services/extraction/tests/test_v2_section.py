@@ -8,6 +8,7 @@ from events import raw_event
 from helpers import ai_part, example
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from test_pipeline import answers, run
 from test_v2_contract import sparse
@@ -549,3 +550,52 @@ def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when
     assert resolved is None and record["adopted"] is False
     monkeypatch.setattr(section, "_issues", lambda *args: [])
     assert resolve_with() == (resolve_with()[0], None, {})  # 경고가 없으면 부르지 않음
+
+
+def test_the_resolver_looks_at_each_warned_item_in_its_own_conversation_at_the_same_time(monkeypatch):
+    # 2026-11-07 3건 표본 dcco-24812: 경고 항목 3개를 한 대화에서 고쳐 첫 차례 출력 8천 토큰·55초, 모두 112초가 자격 담당 뒤에 더해짐.
+    # 항목마다 따로 동시에 보고, 항목마다 고른 결과만 합침(한 항목의 해결 담당이 경고를 없애려고 항목을 빼도 다른 항목의 고침은 씀)
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
+    document = parse(TEXT)
+    text_only = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
+    text_only["originalText"] = document.text("p1.2")
+
+    def issues(spec, draft, state, rt, documents):
+        return [
+            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": "조건식 없이 글로만 남겼습니다."}
+            for i, row in enumerate(draft.items["eligibility"])
+            if row["rule"]["status"] == "UNSTRUCTURED"
+        ]
+
+    replies = {
+        "age": [call("update_item", section="eligibility", item_id="age", changes={"rule": {**age["rule"], "reason": None}})],
+        "age2": [call("remove_item", section="eligibility", item_id="age2")],
+    }
+
+    class ByItem(ToolCallingFake):
+        """해결 담당 과제 글에 든 항목 id로 답을 고르는 가짜 모델(동시에 도는 대화마다 다른 답)."""
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            task = next(str(m.content) for m in messages if isinstance(m, HumanMessage) and "해결 담당" in str(m.content))
+            item = next(item for item in replies if f'"id": "{item}"' in task)
+            reply = AIMessage(content="", tool_calls=[*replies[item], call("finish", summary="봤어요.")])
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    conversations = []
+
+    def agent(model, name, state, documents, middleware):
+        conversations.append(name)
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        return create_agent(ByItem(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
+
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_issues", issues)
+    draft = SectionDraft(("eligibility",), items={"eligibility": [dict(text_only), {**text_only, "id": "age2"}]})
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=1000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+    resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+    assert conversations == ["resolver", "resolver"]  # 항목마다 새 대화
+    assert record["adopted"] and (record["targets"], record["before"], record["after"]) == (2, 2, 1)
+    assert {item: run["adopted"] for item, run in record["items"].items()} == {"age": True, "age2": False}
+    assert [(row["id"], row["rule"]["status"]) for row in resolved.items["eligibility"]] == [("age", "STRUCTURED"), ("age2", "UNSTRUCTURED")]
+    assert [row["rule"]["status"] for row in draft.items["eligibility"]] == ["UNSTRUCTURED", "UNSTRUCTURED"]  # 담당 초안은 그대로

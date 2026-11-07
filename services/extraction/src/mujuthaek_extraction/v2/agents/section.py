@@ -16,6 +16,7 @@ import copy
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any
 
@@ -119,12 +120,50 @@ def _resolve(
     """해결 에이전트(4단계): 담당이 끝낸 초안에서 판단 경고가 남은 항목만, 앞선 대화 없이 같은 앞부분(지시·도구·원문)으로 다시 봅니다.
     고친 초안은 경고가 있던 항목만 바뀌고(빼지 않음) 검증 결과에 새 문제 없이 문제가 줄었을 때만 씁니다(_settled). 모델 호출은 usage에 더합니다.
     2026-11-07 23건 재조립: 남은 검토 이슈 106개 중 53개가 자격의 판단 경고(조건식 없음 31·예외 의심 22)였고, 정답표와 대조하면 대부분
-    조건식으로 나타낼 수 있는 기준(「도시근로자 월평균소득 100% 이하」 등, 정답표의 놓친 값)을 담당이 경고를 받고도 첫 판단대로 글로 남긴 것."""
+    조건식으로 나타낼 수 있는 기준(「도시근로자 월평균소득 100% 이하」 등, 정답표의 놓친 값)을 담당이 경고를 받고도 첫 판단대로 글로 남긴 것.
+    경고 항목마다 따로 새 대화를 동시에 돌립니다(2026-11-07 3건 표본 dcco-24812: 항목 3개를 한 대화에서 고쳐 첫 차례 출력 8천 토큰·55초,
+    고치기 차례까지 112초가 담당 뒤에 더해짐). 항목마다 고른 결과(_settled)를 합친 초안도 같은 조건을 넘을 때만 씁니다."""
     before = _issues(spec, draft, state, rt, documents)
     targets = [issue for issue in before if str(issue.get("code") or "").startswith(RESOLVER_CODES) and issue.get("item")]
     if not targets:
         return None, {}
-    trial = SectionDraft(spec.sections, items=copy.deepcopy(draft.items), coverage=copy.deepcopy(draft.coverage), missing=copy.deepcopy(draft.missing))
+    warned = list(dict.fromkeys(issue["item"] for issue in targets))
+
+    def one(item_id: str) -> tuple[SectionDraft | None, dict[str, Any], list[dict[str, Any]]]:
+        mine = [issue for issue in targets if issue["item"] == item_id]
+        return _resolve_item(spec, draft, state, rt, documents, chat, mine, before)
+
+    with ThreadPoolExecutor(max_workers=len(warned)) as pool:
+        runs = dict(zip(warned, pool.map(one, warned), strict=True))
+    merged = _copy(spec, draft)
+    taken = []
+    for item_id, (trial, _, calls) in runs.items():
+        usage.extend(calls)
+        if trial is not None and _take(merged, trial, item_id, draft):
+            taken.append(item_id)
+    after = _issues(spec, merged, state, rt, documents) if taken else before
+    adopted = bool(taken) and _settled(draft, merged, set(taken), before, after)
+    record = {"targets": len(targets), "before": len(before), "after": len(after), "adopted": adopted}
+    record["items"] = {item_id: run for item_id, (_, run, _) in runs.items()}
+    return (merged if adopted else None), record
+
+
+def _copy(spec: CallSpec, draft: SectionDraft) -> SectionDraft:
+    return SectionDraft(spec.sections, items=copy.deepcopy(draft.items), coverage=copy.deepcopy(draft.coverage), missing=copy.deepcopy(draft.missing))
+
+
+def _resolve_item(
+    spec: CallSpec,
+    draft: SectionDraft,
+    state: Any,
+    rt: pipeline.Runtime,
+    documents: tuple[str, ...],
+    chat: Any,
+    targets: list[dict[str, Any]],
+    before: list[dict[str, Any]],
+) -> tuple[SectionDraft | None, dict[str, Any], list[dict[str, Any]]]:
+    """경고 항목 하나를 새 대화로 봅니다. 그 항목만 바뀌고 검증 결과에 새 문제 없이 문제가 줄었을 때만 고친 초안을 돌려줍니다."""
+    trial = _copy(spec, draft)
     document: DocumentModel = state["document"]
     context = SectionContext(document=document, budget=rt.models.budget, draft=trial, documents=documents)
     context.check = lambda: _issues(spec, trial, state, rt, documents)
@@ -136,15 +175,36 @@ def _resolve(
         messages = [shared_message(document), HumanMessage(resolver_task(spec, trial, targets))]
         for snapshot in agent.stream({"messages": messages}, context=context, stream_mode="values"):
             last = snapshot
-    except Exception as error:  # 해결 담당이 멈추면 담당 초안을 그대로 씀
+    except Exception as error:  # 해결 담당이 멈추면 그 항목은 담당 초안 그대로
         stopped = f"{type(error).__name__}: {error}"[:300]
         log.warning("해결 담당이 멈췄습니다", extra={"agent": spec.name, "error": stopped})
-    usage.extend(context.usage)
     after = before if stopped else _issues(spec, trial, state, rt, documents)
-    adopted = stopped is None and _settled(draft, trial, {issue["item"] for issue in targets}, before, after)
-    record = {"targets": len(targets), "before": len(before), "after": len(after), "adopted": adopted, "stopped": stopped}
-    record["turns"] = _trace(last.get("messages") or [])
-    return (trial if adopted else None), record
+    adopted = stopped is None and _settled(draft, trial, {targets[0]["item"]}, before, after)
+    record = {"targets": len(targets), "after": len(after), "adopted": adopted, "stopped": stopped, "turns": _trace(last.get("messages") or [])}
+    return (trial if adopted else None), record, context.usage
+
+
+def _take(merged: SectionDraft, trial: SectionDraft, item_id: str, draft: SectionDraft) -> bool:
+    """고른 해결 담당 하나의 결과(고친 항목과 새로 넣은 항목)를 합친 초안에 옮깁니다.
+    새 항목 id가 이미 있으면(다른 항목의 해결 담당이 같은 id로 넣음) 이 결과는 옮기지 않습니다."""
+    moves = []
+    for section in merged.sections:
+        known = {row.get("id") for row in draft.items.get(section, [])}
+        present = {row.get("id") for row in merged.items.get(section, [])}
+        for row in trial.items.get(section, []):
+            if row.get("id") != item_id and row.get("id") in known:
+                continue
+            if row.get("id") != item_id and row.get("id") in present:
+                return False
+            moves.append((section, row))
+    for section, row in moves:
+        rows = merged.items.setdefault(section, [])
+        at = next((i for i, old in enumerate(rows) if old.get("id") == row.get("id")), None)
+        if at is None:
+            rows.append(copy.deepcopy(row))
+        else:
+            rows[at] = copy.deepcopy(row)
+    return True
 
 
 def resolver_task(spec: CallSpec, draft: SectionDraft, targets: list[dict[str, Any]]) -> str:
