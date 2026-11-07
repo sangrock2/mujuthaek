@@ -45,11 +45,13 @@ def _values(text: str, unit: str) -> list[tuple[int, float, str]]:
 
 
 def _atoms(expression: dict[str, Any] | None):
+    """조건식의 원자 조건들. NOT은 계약대로 child 하나를 봅니다(전엔 children만 봐, 구간 조건 누락을 「그 가구원 수가 아니거나 기준값 이하」로
+    고친 조건도 구간 조건이 없다고 다시 걸었음)."""
     if not expression:
         return
     if expression["kind"] == "ATOMIC":
         yield expression
-    for child in expression.get("children") or []:
+    for child in [*(expression.get("children") or []), *([expression["child"]] if expression.get("child") else [])]:
         yield from _atoms(child)
 
 
@@ -131,6 +133,51 @@ def check_unconditioned_tiers(candidate: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+SPLITTER_NAMES = {"HOUSEHOLD_MEMBER_COUNT": "가구원 수", "CHILD_COUNT": "자녀 수", "TARGET_GROUP_CODE": "대상 계층", "MARITAL_STATUS": "혼인 상태"}
+
+
+def _conjoined(expression: Any) -> list[str]:
+    """조건식이 구간(가구원 수·자녀 수 등)과 소득·자산 기준을 「그리고」(ALL)로 묶었으면 그 구간 속성들."""
+    if not isinstance(expression, dict) or expression.get("kind") != "ALL":
+        return []
+    atoms = [child for child in expression.get("children") or [] if isinstance(child, dict) and child.get("kind") == "ATOMIC"]
+    splitters = [atom["attribute"] for atom in atoms if atom.get("attribute") in TIER_SPLITTERS]
+    return splitters if any(atom.get("attribute") in TIER_ATTRIBUTES for atom in atoms) else []
+
+
+def check_conjoined_tiers(candidate: dict[str, Any]) -> list[Finding]:
+    """같은 대상의 같은 기준(소득·자산)을 조건 여러 개로 두면서 그중 하나라도 구간 조건과 「그리고」로 묶은 경우.
+
+    자격 조건은 모두 함께 적용되므로 「ALL[2인, 80% 이하]」를 따로 두면 2인이 아닌 가구는 자격이 없게 되고, 구간마다 이렇게 두면 그 대상은
+    아무도 자격이 되지 않습니다(2026-11-08 유료 확인 dcco-24812: 구간 조건 누락 경고를 받은 담당이 구간을 그리고로 붙인 소득·총자산·자동차
+    조건 9개를 새로 넣어 자동 게시). 구간별 기준은 한 조건의 예외(REPLACE)나 「그 구간이 아니거나 기준값 이하」(ANY)로 씁니다.
+    한 대상에 그 기준 조건이 하나뿐이면(「미성년 자녀 3명 이상이고 소득 120% 이하」 같은 다자녀 자격) 걸지 않습니다."""
+    groups: dict[tuple[Any, ...], list[tuple[int, list[str]]]] = {}
+    for index, item in enumerate(candidate["eligibility"]):
+        rule = item["rule"]
+        if rule["status"] != "STRUCTURED":
+            continue
+        for attribute in sorted({atom.get("attribute") for atom in _atoms(rule["expression"])} & TIER_ATTRIBUTES):
+            groups.setdefault((*_scope_key(item), attribute), []).append((index, _conjoined(rule["expression"])))
+    findings: dict[str, Finding] = {}
+    for (*_, attribute), entries in groups.items():
+        splitters = list(dict.fromkeys(SPLITTER_NAMES[name] for _, found in entries for name in found))
+        if len(entries) < 2 or not splitters:
+            continue
+        for index, _ in entries:
+            findings.setdefault(
+                f"/eligibility/{index}",
+                Finding(
+                    "V5",
+                    "TIER_CONDITION_CONJOINED",
+                    f"/eligibility/{index}",
+                    f"같은 대상의 {attribute} 기준이 조건 {len(entries)}개로 나뉘어 있고, 그중 {'·'.join(splitters)} 구간을 기준과 「그리고」로 묶은 "
+                    "조건이 있습니다. 자격 조건은 모두 함께 적용되어 그 구간이 아닌 가구는 자격이 없게 됩니다. 구간별 기준은 한 조건의 예외로 넣어야 합니다",
+                ),
+            )
+    return list(findings.values())
+
+
 # 재계약·계약 갱신 때의 기준(실측 2026-10-17 경북 매입임대: 「재계약 시 소득 105% 이하」가 신청 자격으로 자동 게시됨)
 RENEWAL = re.compile(r"재계약|계약\s*갱신|갱신\s*계약")
 
@@ -176,7 +223,7 @@ def _lower_bounds(expression: dict[str, Any] | None, negated: bool = False):
         elif operator == "BETWEEN" and not negated and isinstance(value, list) and value and isinstance(value[0], int | float) and value[0] > 0:
             yield expression, value[0], "이상"
         return
-    for child in expression.get("children") or []:
+    for child in [*(expression.get("children") or []), *([expression["child"]] if expression.get("child") else [])]:  # NOT은 계약대로 child
         yield from _lower_bounds(child, negated != (expression.get("kind") == "NOT"))
 
 
@@ -203,8 +250,12 @@ def check_lower_bounds(candidate: dict[str, Any]) -> list[Finding]:
 
 
 def check_missing_exceptions(candidate: dict[str, Any], sources: SourceBundle) -> list[Finding]:
-    """V5 검사를 모두 돌립니다: 구간 조건 누락, 재계약 기준, 자격 하한, 그리고 구조화된 금액·비율 조건마다 빠진 가산·완화 기준 의심."""
-    findings = check_unconditioned_tiers(candidate) + check_renewal_criteria(candidate) + check_lower_bounds(candidate)
+    """V5 검사를 모두 돌립니다: 구간 조건 누락·구간을 그리고로 묶음, 재계약 기준, 자격 하한, 그리고 구조화된 금액·비율 조건마다 빠진
+    가산·완화 기준 의심. 구간 조건 누락으로 이미 걸린 조건은 「그리고로 묶음」을 또 걸지 않습니다."""
+    unconditioned = check_unconditioned_tiers(candidate)
+    held = {finding.target for finding in unconditioned}
+    conjoined = [finding for finding in check_conjoined_tiers(candidate) if finding.target not in held]
+    findings = unconditioned + conjoined + check_renewal_criteria(candidate) + check_lower_bounds(candidate)
     # 다른 자격 조건(예: 3순위 총자산 25,100만원)이 이미 쓰는 기준값은 빠진 예외가 아닙니다
     known = {float(a["value"]) for item in candidate["eligibility"] for a in _atoms(item["rule"]["expression"]) if isinstance(a["value"], int | float)}
     for item in candidate["eligibility"]:

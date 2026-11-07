@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 from events import raw_event
-from helpers import ai_part, example
+from helpers import ai_part, example, source_for
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -653,6 +653,31 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
     scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
+
+
+def test_tiers_split_into_separate_conditions_must_be_fixed_into_one_condition_with_exceptions():
+    # 2026-11-08 유료 확인 dcco-24812: 「확인할 것」으로 받은 구간 조건 누락을 담당이 구간을 그리고로 붙인 조건 9개로 「고쳐」 자동 게시
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    for code in ("TIER_CONDITION_MISSING", "TIER_CONDITION_CONJOINED"):
+        issue = {"code": code, "target": "/eligibility/0", "item": "a", "description": "구간"}
+        shown = verify_report(draft, [issue])
+        assert "## 고칠 것 1개" in shown and f"- {code}:" in shown
+        assert "exceptions(REPLACE" in shown and "ALL로 묶은 조건을 따로 두지 않습니다" in shown
+
+
+def test_the_cache_warming_call_is_always_sent_even_when_a_saved_answer_exists(monkeypatch):
+    # 2026-11-08 다시 재기: 캐시 데우기 답을 평가용 파일 저장소에서 꺼내자 OpenAI에 원문에서 끝나는 요청이 없어 해결 담당 첫 호출 7번이
+    # 지시·도구(1.9만)만 캐시에서 읽고 원문 4~9만 토큰을 다시 씀
+    asked = []
+
+    def chat(name, **kwargs):
+        asked.append((name, kwargs))
+
+    monkeypatch.setattr(section, "_agent", lambda *args: SimpleNamespace(invoke=lambda *a, **k: None))
+    data = example("housing")
+    state = {"document": parse(TEXT), "material": source_for("housing", data).material}
+    section.prime(state, SimpleNamespace(models=SimpleNamespace(chat=chat, budget=None)))
+    assert asked == [(section.PRIME, {"max_output_tokens": section.PRIME_OUTPUT_TOKENS, "cached": False})]
 
 
 def test_criteria_table_rows_left_out_reach_the_eligibility_agent_as_a_check_with_how_to():

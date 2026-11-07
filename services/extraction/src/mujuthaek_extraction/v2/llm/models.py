@@ -17,7 +17,7 @@ def chat_model(
     effort: str | None = None,
     max_output_tokens: int = 4_000,
     cache_key: str | None = None,
-    cache: BaseCache | None = None,
+    cache: BaseCache | bool | None = None,
     timeout: float = TIMEOUT_SECONDS,
 ) -> ChatOpenAI:
     """effort: 추론 강도(기본은 설정값). 기계적인 차례는 낮게, 판단이 큰 에이전트만 높게 둡니다.

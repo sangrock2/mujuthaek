@@ -144,7 +144,8 @@ class ModelFactory:
         folder = getattr(cache, "folder", None)
         saved: list[Any] = []
 
-        def chat(agent: str, *, max_output_tokens: int | None = None) -> Any:
+        def chat(agent: str, *, max_output_tokens: int | None = None, cached: bool = True) -> Any:
+            """cached=False: 파일 저장소의 답을 쓰지 않고 늘 보냄(캐시 데우기처럼 보내는 것 자체가 목적인 호출)."""
             # V2 담당을 실제로 부를 때만 LangChain을 가져옵니다
             from mujuthaek_extraction.v2.llm.cache import FileLLMCache
             from mujuthaek_extraction.v2.llm.models import chat_model
@@ -156,7 +157,7 @@ class ModelFactory:
                 cache_key=key,
                 timeout=CALL_TIMEOUT_SECONDS.get(agent, 180),
                 max_output_tokens=max_output_tokens or V2_OUTPUT_TOKENS,
-                cache=saved[0] if saved else None,
+                cache=(saved[0] if saved else None) if cached else False,
             )
 
         return chat
