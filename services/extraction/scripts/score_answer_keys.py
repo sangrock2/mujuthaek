@@ -44,8 +44,17 @@ CRITERION_OF = {v: k for k, v in ATTRIBUTES.items()} | {
 PRICE_KINDS = {"DEPOSIT", "MONTHLY_RENT", "SALE_PRICE", "CONTRACT_PAYMENT", "BALANCE"}
 # 정답표 지시문의 일정 종류. 계약에는 더 자세한 종류(DOCUMENT_REVIEW_RESULT 등)가 있어 그 밖의 것은 OTHER로 봅니다
 SCHEDULE_KINDS = {"ANNOUNCEMENT", "APPLICATION", "DOCUMENT_SUBMISSION", "WINNER_ANNOUNCEMENT", "CONTRACT", "MOVE_IN", "OTHER"}
-POSSESSIVE = re.compile(r"(?<=[가-힣])의\s")  # 「배우자의 신분증」의 「의」(낱말 끝의 소유격만)
+# 「배우자의 신분증」의 「의」(낱말 끝의 소유격만). 괄호 뒤도 봅니다: 「직계존속(피부양자)의 주민등록표초본」(괄호를 지우면 「직계존속의…」가 남았음)
+POSSESSIVE = re.compile(r"(?<=[가-힣)\]])의\s")
 DOC_NOISE = re.compile(r"\s|\(.*?\)|\[.*?\]|사본|원본|각?\s*\d+\s*부|1부|등\b|및|[·․‧∙･・ㆍ]|,|\.|'|\"")
+# 같은 서류의 연도·한자 표기 차이(2026-11-07 23건 서류 「V1·V2 둘 다 놓침」 38개 중 다수가 이름 표기 차이): 「’22년」 = 「2022년」,
+# 「2024년도」 = 「2024년」, 「통지서 內」 = 「통지서 내」
+SHORT_YEAR = re.compile(r"[’'‘`]\s*(\d{2})\s*년")
+YEAR_DO = re.compile(r"(\d{4})\s*년도")
+# 정답표가 이름 없는 첨부 증빙을 상황 이름으로 적은 서류(「비상장주식 증빙」): 추출은 원문의 서류 이름(「증권사 조회내역」「주식보관증」)에
+# 그 상황을 적용 대상(appliesTo, 「비상장주식을 자산으로 신고하는 경우」)으로 둡니다
+SITUATION_EVIDENCE = re.compile(r"^(.+?)\s*증빙(?:\s*서류|\s*자료)?$")
+DOC_SUFFIX = re.compile(r"(?:서|증|본|부|내역|자료|원|표|카드|명단)$")  # 서류 이름의 끝(증명서·등록증·등본·등기부·조회내역·신청원·통지표 등)
 
 
 # ---------- 추출 결과 → 중립 형식 ----------
@@ -678,15 +687,24 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
             score.check("선정 순위", i < actual_ranks.get(rank, 0), f"{rank}순위")
 
     def doc(name: Any) -> str:
-        return DOC_NOISE.sub("", POSSESSIVE.sub(" ", str(name or "")))
+        text = YEAR_DO.sub(r"\1년", SHORT_YEAR.sub(r"20\1년", str(name or ""))).replace("內", "내")
+        return DOC_NOISE.sub("", POSSESSIVE.sub(" ", text))
 
     def variants(raw: Any) -> set[str]:
-        """한 서류 이름을 비교할 글자들: 이름 전체, 괄호 안을 살린 이름, 괄호 안에 나열한 서류마다, 첫 쉼표 앞."""
+        """한 서류 이름을 비교할 글자들: 이름 전체, 괄호 안을 살린 이름, 괄호 안에 나열한 서류마다, 첫 쉼표 앞,
+        「A 또는 B」로 적은 서류마다(정답표 「인감증명서 또는 본인서명사실확인서」 ↔ 둘을 따로 넣은 추출)."""
         text = str(raw or "")
         found = {doc(text), doc(text.replace("(", " ").replace(")", " ")), doc(text.split(",")[0])}
         for inner in re.findall(r"\(([^)]*)\)", text):
             found |= {doc(part) for part in re.split(r"[,·/]|\s또는\s", inner)}
+        # 나눈 조각은 서류 이름 꼴만(「예금인장 또는 본인 서명」의 「본인 서명」이 「본인서명사실확인서」에 글자로 들어 있어 맞은 것으로 세지 않게)
+        found |= {p for p in (doc(part) for part in re.split(r"\s또는\s", re.sub(r"\([^)]*\)", " ", text))) if DOC_SUFFIX.search(p)}
         return {v for v in found if len(v) >= 3}
+
+    def situation(raw: Any) -> str | None:
+        """「비상장주식 증빙」 → 「비상장주식」(짧은 상황 이름 「소득 증빙」은 보지 않음)."""
+        match = SITUATION_EVIDENCE.match(str(raw or "").strip())
+        return doc(match[1]) if match and len(doc(match[1])) >= 3 else None
 
     def joined_parts(raw: Any) -> list[str]:
         """「본인(신청자) 및 배우자의 신분증」 → 「본인 신분증」「배우자 신분증」: 대상마다 나눠 적은 추출과 맞춥니다."""
@@ -699,8 +717,14 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
 
     actual_raw = [d.get("name") for d in actual.get("documents") or []]
     actual_sets = [variants(r) for r in actual_raw]
+    actual_applies = [doc(d.get("appliesTo")) for d in actual.get("documents") or []]
     expected_raw = [d.get("name") for d in expected.get("documents") or []]
     expected_sets = [variants(r) for r in expected_raw]
+    situations = [s for s in (situation(r) for r in expected_raw) if s]
+
+    def for_situation(key: str, got: set[str], applies: str) -> bool:
+        return any(key in a for a in got) or key in applies
+
     for raw, wanted in zip(expected_raw, expected_sets, strict=True):
         if wanted:
             # 정답표와 추출이 같은 서류를 다르게 적은 경우(「배우자의 신분증」↔「배우자 신분증」, 묶어 적은 이름 ↔ 나눠 적은 이름,
@@ -708,11 +732,15 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
             found = any(same(w, a) for w in wanted for got in actual_sets for a in got)
             parts = joined_parts(raw)
             found = found or bool(parts) and all(any(same(part, a) for got in actual_sets for a in got) for part in parts)
+            key = situation(raw)
+            found = found or bool(key) and any(for_situation(key, got, applies) for got, applies in zip(actual_sets, actual_applies, strict=True))
             score.check("서류", found, raw)
-    for got in actual_sets:
+    for got, applies in zip(actual_sets, actual_applies, strict=True):
         if got:
-            ok = any(same(a, e) for a in got for wanted in expected_sets for e in wanted) or any(
-                same(a, part) for a in got for raw in expected_raw for part in joined_parts(raw)
+            ok = (
+                any(same(a, e) for a in got for wanted in expected_sets for e in wanted)
+                or any(same(a, part) for a in got for raw in expected_raw for part in joined_parts(raw))
+                or any(for_situation(key, got, applies) for key in situations)
             )
             score.total["서류(찾은 것 중 정답표에 없는 것)"] += 1
             score.found["서류(찾은 것 중 정답표에 없는 것)"] += ok
