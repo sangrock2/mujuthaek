@@ -481,6 +481,11 @@ def test_prices_left_in_a_group_without_counts_next_to_the_same_type_are_flagged
     other_type = {**loose, "housingTypeCode": "46"}  # 다른 주택형의 가격만 있는 행(입주 완료 등)은 걸지 않습니다
     c["supplyGroups"] = [counted, loose, other_type]
     assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == [("SUPPLY_PRICE_UNATTACHED", "/supplyGroups/1")]
+    # 호실 묶음은 보지 않습니다(2026-11-07 gndc-ddb1: 입주완료 「202-1호」는 모집 수 없이 가격만 있고, 202는 호실 번호)
+    rooms = [{**group, "itemKind": "HOUSING_UNIT", "housingTypeCode": None} for group in (counted, loose)]
+    rooms[0]["unitLabel"], rooms[1]["unitLabel"] = "202-2호", "202-1호"
+    c["supplyGroups"] = rooms
+    assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == []
 
 
 DOCUMENT_TABLE = "\n".join(
