@@ -10,21 +10,30 @@
 
 담당들은 맡은 섹션이 달라도 같은 도구 목록(모든 담당 섹션의 add 도구)을 받습니다. 지시·도구·원문이 같은 앞부분이라 한 번 캐시에 올린 것을
 모든 담당이 다시 읽습니다(2026-11-06 두 번째 실제 실행: 담당마다 도구가 달라 앞부분 2~3만 토큰을 담당마다 따로 캐시에 올림).
+
+도구 정의는 담당의 모든 차례가 다시 읽는 앞부분이라 짧게 둡니다(2026-11-08 저장 결과 23건: 앞부분 평균 5.9만 토큰 중 지시·도구가
+3.2만이고 원문은 절반이 안 됨, 자격 도구만 1.65만 — 조건식이 규칙·예외 발동 조건·바뀐 기준에 3단계로 펼쳐져 세 번 들어감).
+- 조건식은 2단계(조건 하나, 또는 조건들의 ALL·ANY·NOT)까지 펼침. 담당 출력의 조건식 1,800여 개 중 3단계 이상은 10개였고,
+  더 깊은 조건식도 계약상 받으며 넣기 검사는 원래 형식으로 함
+- 넣기 검사가 하는 제약(빈 글·중복·빈 목록 허용)은 빼고, 같은 설명 글은 도구 안에서 가장 얕은 한 곳에만 둠
 """
 
 from __future__ import annotations
 
 import copy
 import json
+from collections import deque
 from functools import lru_cache
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.tools import StructuredTool
 
-from mujuthaek_extraction.model.strict_schema import _inline_all, _unroll
+from mujuthaek_extraction.model.strict_schema import _collapse, _inline, _inline_all, _reachable, _refs, _retarget
 from mujuthaek_extraction.rules.base import call_schema
 from mujuthaek_extraction.v2.tools.write import SectionContext, add
+
+TOOL_DEPTH = 2  # 도구 정의에 펼치는 조건식 단계(V1 엄격 모드는 strict_schema.MAX_DEPTH 3단계)
 
 EVIDENCE = {
     "type": "array",
@@ -48,9 +57,24 @@ SCOPE_OPTIONAL = {"supplyCategory": "생략하면 ALL", "resolution": "생략하
 
 @lru_cache(maxsize=64)
 def item_schema(section: str, documents: tuple[str, ...]) -> dict[str, Any]:
-    schema = _inline_all(_unroll(copy.deepcopy(call_schema((section,), list(documents)))))
+    schema = _inline_all(_unroll(copy.deepcopy(call_schema((section,), list(documents))), TOOL_DEPTH))
     node = schema["properties"][section]
-    return _relax(node if section == "notice" else node["items"], top=True)
+    return _first_descriptions(_relax(node if section == "notice" else node["items"], top=True))
+
+
+def _unroll(schema: dict[str, Any], depth: int) -> dict[str, Any]:
+    """strict_schema._unroll과 같되 depth 단계로 펼칩니다. strict_schema.py는 V1 호출 캐시 열쇠(call_cache.response_code_hash)에
+    들어가 고치면 저장된 V1 답을 모두 다시 삼(2026-11-08 유료 확인: 단계 인자를 그 파일에 더했다가 공급표·구조·다시 보기·그림 판독
+    호출이 모두 캐시를 못 써 $0.095를 더 씀)."""
+    defs = schema.get("$defs", {})
+    used = _reachable(_refs({k: v for k, v in schema.items() if k != "$defs"}), defs)
+    cyclic = {name for name in used if name in _reachable(_refs(defs[name]), defs)}
+    copies = {name: _collapse(_retarget(defs[name], cyclic, None)) for name in cyclic}
+    for _ in range(depth - 1):
+        copies = {name: _collapse(_inline(defs[name], copies)) for name in cyclic}
+    rest = _collapse(_inline({k: v for k, v in schema.items() if k != "$defs"}, copies))
+    new_defs = {name: _collapse(_inline(defs[name], copies)) for name in used if name not in cyclic}
+    return {**rest, "$defs": new_defs} if new_defs else rest
 
 
 def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
@@ -90,12 +114,40 @@ def shared_tools(sections: tuple[str, ...], documents: tuple[str, ...]) -> list[
     return [add_tool(section, documents) for section in sections]
 
 
+def _quiet(keyword: str, value: Any) -> bool:
+    """모델에게 알려 줄 것이 없는 검사용 제약: 빈 글 금지·중복 금지·빈 목록 허용(넣기 검사가 원래 형식으로 봄)."""
+    return (keyword, value) in (("minLength", 1), ("pattern", "\\S"), ("minItems", 0)) or keyword == "uniqueItems"
+
+
+def _first_descriptions(schema: dict[str, Any]) -> dict[str, Any]:
+    """같은 설명 글은 가장 얕은 한 곳에만 남깁니다(넓이 우선으로 처음 만난 곳). 근거(evidence) 설명은 항목 바로 아래 칸에 남고
+    조건식 안의 근거 칸에서는 빠집니다. 같은 사전 객체를 여러 칸이 함께 쓰므로 JSON으로 떠서 새 객체로 고칩니다."""
+    schema = json.loads(json.dumps(schema, ensure_ascii=False))
+    seen: set[str] = set()
+    queue: deque[Any] = deque([schema])
+    while queue:
+        node = queue.popleft()
+        if isinstance(node, list):
+            queue.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        text = node.get("description")
+        if isinstance(text, str):
+            if text in seen:
+                del node["description"]
+            seen.add(text)
+        for key, value in node.items():
+            queue.extend(value.values() if key == "properties" and isinstance(value, dict) else [value])
+    return schema
+
+
 def _relax(node: Any, top: bool = False) -> Any:
     if isinstance(node, list):
         return [_relax(child) for child in node]
     if not isinstance(node, dict):
         return node
-    node = {k: v for k, v in node.items() if k not in DROPPED}
+    node = {k: v for k, v in node.items() if k not in DROPPED and not _quiet(k, v)}
     if "allOf" in node:
         node["allOf"] = [entry for entry in (_relax(e) for e in node["allOf"]) if entry]
         if not node["allOf"]:

@@ -2,6 +2,8 @@
 
 V1의 「출력은 JSON 하나」 문장과 「3. 근거 인용」 절(quotes·quoteRefs로 인용을 직접 씀)만 V2 규칙으로 바꿉니다.
 같은 공고의 담당들은 이 지시·도구·첫 메시지(원문 전체)가 같아 앞부분이 프롬프트 캐시를 함께 씁니다(담당마다 다른 할 일은 둘째 메시지).
+위치·공급 묶음 절은 뺍니다: 그 섹션은 V1 구조 호출이 자기 지시로 넣고 담당(일정·자격·선정·서류)은 넣지 않습니다. 앞부분은 담당의 모든
+차례가 다시 읽으므로(2026-11-08 저장 결과: 평균 5.9만 토큰 중 지시·도구가 3.2만) 쓰지 않는 지시를 두지 않습니다.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from mujuthaek_extraction.rules.base import FieldRules
 
 V1_OUTPUT_LINE = re.compile(r"^출력은 지정된 JSON 스키마.*$", re.M)
 V1_QUOTES_PART = re.compile(r"^# 3\. 근거 인용\n.*?(?=^# 4\.)", re.M | re.S)
+# 「## 2-2. 위치(`locations`)」·「## 2-3. 공급(`supplyGroups`)」 절(아래 「### 묶음」 같은 작은 절까지, 다음 #·## 머리 전까지)
+V1_STRUCTURE_PARTS = re.compile(r"^## 2-\d+\. [^\n]*\(`(?:locations|supplyGroups)`\)\n.*?(?=^#{1,2} )", re.M | re.S)
 
 AGENT_OUTPUT = (
     "당신은 섹션 담당 에이전트입니다. 첫 메시지의 원문(조각마다 id)을 보고, 맡은 섹션 항목을 도구로 넣고, 근거는 원문 조각의 id로 남깁니다.\n"
@@ -52,7 +56,9 @@ TOOL_RULES = """
    (그 항목만 사람이 확인). 경고를 없애려고 원문에 없는 값·예외를 넣거나 맞는 값을 바꾸지 않습니다. 판정·화면에 필요한데 원문에 없는 값은
    `report_missing`으로 적습니다.
    한 차례의 도구들은 동시에 실행되므로 방금 넣은 항목을 고치거나 그 항목의 누락을 적는 일은 다음 차례에 합니다.
-4. `set_coverage`의 PARTIAL은 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). 고치지 않고 남긴 검증 문제는 그 이유가 아닙니다.
+4. 항목을 넣은 섹션은 다 넣은 것(EXTRACTED)으로 보므로 `set_coverage`를 부르지 않습니다. `set_coverage`는 원문에 있는데 넣지 못한
+   항목이 있을 때(PARTIAL, 섹션 전체가 사람 확인으로 감)와 원문에 그 섹션 내용이 없을 때(NOT_IN_SOURCE)만 씁니다.
+   고치지 않고 남긴 검증 문제는 PARTIAL의 이유가 아닙니다.
 5. 끝낼 때는 `finish`(넣은 것·남은 문제 한두 문장)를 부릅니다. 마지막 넣기·고치기와 같은 차례에 함께 부르면 차례가 줄어듭니다:
    그 차례의 도구가 실행된 뒤 검증에 새 문제가 없으면 그대로 끝나고, 새 문제가 있으면 검증 결과로 알려 줍니다.
    고칠 것이 없고 확인할 것은 한 번 고쳐 보고도 같은 것(「다시」 표시)만 남았으면 `finish`만 부릅니다. 차례와 비용에 상한이 있습니다.
@@ -65,4 +71,5 @@ def system_prompt(rules: FieldRules) -> str:
     if not V1_QUOTES_PART.search(base):
         raise ValueError("V1 지시에서 「3. 근거 인용」 절을 찾지 못했습니다(지시 버전이 바뀌었으면 V2 지시를 맞춥니다)")
     base = V1_QUOTES_PART.sub(EVIDENCE_RULES, base, count=1)
+    base = V1_STRUCTURE_PARTS.sub("", base)
     return base.rstrip() + "\n" + TOOL_RULES

@@ -154,8 +154,8 @@ def remove_item(section: str, item_id: str, runtime: ToolRuntime[SectionContext,
 
 @tool
 def set_coverage(section: str, status: str, reason: str, runtime: ToolRuntime[SectionContext, Any]) -> str:
-    """섹션 상태: EXTRACTED(원문 항목을 다 넣음, reason은 빈 글) · PARTIAL(원문에 있는데 못 넣은 것이 있음, reason에 무엇) ·
-    NOT_IN_SOURCE(섹션 내용이 원문에 없음) · NOT_APPLICABLE(해당 없음)."""
+    """섹션 상태: PARTIAL(원문에 있는데 못 넣은 것이 있음, reason에 무엇) · NOT_IN_SOURCE(섹션 내용이 원문에 없음) ·
+    NOT_APPLICABLE(해당 없음) · EXTRACTED(reason은 빈 글). 항목을 넣은 섹션은 부르지 않아도 EXTRACTED입니다."""
     draft = runtime.context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")

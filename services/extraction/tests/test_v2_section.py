@@ -567,6 +567,65 @@ def test_the_whole_notice_scope_can_be_left_out_and_defaults_are_filled():
     assert partial["scope"] == {**youth, "supplyCategory": "ALL", "resolution": "RESOLVED"}
 
 
+def _schema_nodes(node):
+    if isinstance(node, dict):
+        yield node
+        for key, value in node.items():
+            yield from _schema_nodes(list(value.values()) if key == "properties" and isinstance(value, dict) else value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _schema_nodes(value)
+
+
+def test_tool_definitions_read_every_turn_stay_short_and_deeper_conditions_are_still_accepted():
+    # 2026-11-08 저장 결과 23건: 담당 공통 앞부분 평균 5.9만 토큰 중 지시·도구가 3.2만, 자격 도구만 1.65만(조건식이 규칙·예외 발동 조건·
+    # 바뀐 기준에 3단계로 펼쳐져 세 번). 담당 출력 조건식 1,800여 개 중 3단계 이상은 10개
+    from mujuthaek_extraction.model import strict_schema
+    from mujuthaek_extraction.rules.base import call_schema
+    from mujuthaek_extraction.v2.tools.typed import _unroll
+
+    # 펼치기는 V1 것과 같은 방법(단계만 다름). strict_schema.py는 V1 호출 캐시 열쇠에 들어가 그 파일을 고치지 않고 따로 둠
+    assert _unroll(call_schema(("eligibility",), ["text"]), strict_schema.MAX_DEPTH) == strict_schema._unroll(call_schema(("eligibility",), ["text"]))
+    item = typed_item_schema("eligibility", ("text",))
+    nodes = list(_schema_nodes(item))
+    descriptions = [node["description"] for node in nodes if isinstance(node.get("description"), str)]
+    assert len(descriptions) == len(set(descriptions)) and "근거:" in item["properties"]["evidence"]["description"]  # 같은 설명은 가장 얕은 한 곳
+    assert not [node for node in nodes if node.get("pattern") == "\\S" or node.get("minLength") == 1 or "uniqueItems" in node]
+    composite = [node for node in nodes if ((node.get("properties") or {}).get("kind") or {}).get("enum") == ["ALL", "ANY"]]
+    assert composite and all(  # 묶음(ALL·ANY) 안에는 하나짜리 조건만 보여 줌(2단계)
+        ((inner.get("properties") or {}).get("kind") or {}).get("const", "ATOMIC") == "ATOMIC"
+        for node in composite
+        for inner in _schema_nodes(node["properties"]["children"]["items"])
+        if "kind" in (inner.get("properties") or {})
+    )
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k not in ("quoteRefs", "originalText")})
+    atom = age["rule"]["expression"]["children"][0]  # 예시는 ALL[나이 ≥ 19, 나이 ≤ 39]
+    # 계약(AI 출력 형식, 결정 E5)이 받는 3단계: ALL[ANY[조건, 조건], 조건]
+    age["rule"]["expression"] = {"kind": "ALL", "children": [{"kind": "ANY", "children": [atom, {**atom, "value": 20}]}, atom]}
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    turn = AIMessage(content="", tool_calls=[call("add_eligibility", items=[{**age, "evidence": ["p1.3"]}])])
+    agent = create_agent(
+        ToolCallingFake(messages=iter([turn, AIMessage(content="끝")])), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext
+    )
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    answer = json.loads(next(m.content for m in result["messages"] if m.type == "tool"))
+    assert answer["added"] == [age["id"]] and answer["failed"] == []  # 도구 정의보다 깊은 조건식도 계약대로 받음
+    assert draft.items["eligibility"][0]["rule"]["expression"]["children"][0]["kind"] == "ANY"
+
+
+def test_agent_instructions_leave_out_the_location_and_supply_sections_the_agents_do_not_fill():
+    # 위치·공급 묶음은 V1 구조 호출이 자기 지시로 넣음. 담당 지시에서 빼도 V1 지시는 그대로(2026-11-08: 약 3천 토큰을 차례마다 다시 읽음)
+    from mujuthaek_extraction.rules.housing_notice import RULES
+    from mujuthaek_extraction.v2.agents.prompt import system_prompt
+
+    full, agent = RULES.system_prompt(), system_prompt(RULES)
+    assert "(`locations`)" in full and "(`supplyGroups`)" in full and "### 묶음" in full
+    assert "(`locations`)" not in agent and "(`supplyGroups`)" not in agent and "### 묶음" not in agent and "### 가격" not in agent
+    assert all(head in agent for head in ("## 2-1. 공고", "## 2-4. 일정", "## 2-5. 자격", "## 2-8. 안내", "# 3. 근거(evidence)", "# 6. 도구로 일하는 법"))
+    assert "`set_coverage`를 부르지 않습니다" in agent  # 다 넣은 섹션의 EXTRACTED는 기본값: 부르는 데 차례를 쓰지 않음
+
+
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
     # 2026-11-06 5건 재측정 bmc-106: 조건식·예외에만 근거를 붙이고 항목 자체 evidence를 비운 성년·무주택·소득·자산·자동차 기준이
     # 「근거 id를 1개 이상 붙입니다」만 두 번 받고 거절된 채 끝남
