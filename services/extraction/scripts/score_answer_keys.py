@@ -209,6 +209,14 @@ def _close(a: Any, b: Any, tolerance: float = 0.01) -> bool:
         return False
 
 
+def _same_area(area: Any, row: dict[str, Any]) -> bool:
+    """정답표 면적이 추출 행의 면적(범위로 적었으면 그 범위)과 같은지."""
+    span = row.get("areaRange")
+    if span and isinstance(area, int | float):
+        return span["min"] - 0.01 <= area <= span["max"] + 0.01  # 범위로 적은 면적(실측 부산당감 39.70 ~ 39.87)
+    return _close(area, row.get("exclusiveAreaSqm"))
+
+
 PHONE = re.compile(r"(?:\d{2,4}\s*[)\-.]\s*)?\d{3,4}\s*-\s*\d{4}")
 
 
@@ -583,12 +591,7 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
         score.check("전체 대상 주택 수", actual.get("totalTargetHousing") == expected["totalTargetHousing"], str(expected["totalTargetHousing"]))
 
     actual_supply = actual.get("supplyTypes") or []
-
-    def same_area(area: Any, a: dict[str, Any]) -> bool:
-        span = a.get("areaRange")
-        if span and isinstance(area, int | float):
-            return span["min"] - 0.01 <= area <= span["max"] + 0.01  # 범위로 적은 면적(실측 부산당감 39.70 ~ 39.87)
-        return _close(area, a.get("exclusiveAreaSqm"))
+    same_area = _same_area
 
     for row in expected.get("supplyTypes") or []:
         label = f"{row.get('complex') or ''} {row.get('type') or ''} {row.get('targetGroup') or ''}".strip()
@@ -756,26 +759,59 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
 # ---------- 자동 게시 값의 오류 (2026-10-17 설계 검토: 검수를 줄이면 '틀린 채 자동 게시된 값'을 따로 재야 함) ----------
 
 HELD_SECTIONS = ("supplyGroups", "schedules", "eligibility", "selectionRules", "requiredDocuments", "locations", "guidance")
+_HELD = object()  # 칸 보류로 뺄 목록 원소 표시
+
+
+def _drop_held_field(root: dict[str, Any], target: str) -> None:
+    """항목 안 칸의 보류(「/supplyGroups/1/counts」「/supplyGroups/0/prices/2」): 목록 칸은 비우고, 목록 원소는 표시해 두었다가 뺍니다."""
+    tokens = target.strip("/").split("/")
+    node: Any = root
+    for token in tokens[:-1]:
+        if isinstance(node, list) and token.isdigit() and int(token) < len(node):
+            node = node[int(token)]
+        elif isinstance(node, dict) and token in node:
+            node = node[token]
+        else:
+            return
+    last = tokens[-1]
+    if isinstance(node, dict) and last in node:
+        node[last] = [] if isinstance(node[last], list) else None
+    elif isinstance(node, list) and last.isdigit() and int(last) < len(node):
+        node[int(last)] = _HELD
+
+
+def _without_held(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _without_held(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_without_held(v) for v in value if v is not _HELD]
+    return value
 
 
 def auto_published(candidate: dict[str, Any], status: str | None) -> dict[str, Any] | None:
-    """사람 확인 없이 쓰이는 부분. 완료(COMPLETED)는 전부, 부분 완료(PARTIAL)는 보류 항목·섹션을 뺀 나머지, 검수(IN_REVIEW)는 없음."""
+    """사람 확인 없이 쓰이는 부분. 완료(COMPLETED)는 전부, 부분 완료(PARTIAL)는 보류 항목·섹션·칸을 뺀 나머지, 검수(IN_REVIEW)는 없음.
+    항목 안 칸의 보류(「/supplyGroups/1/counts」)도 뺍니다: 판정·화면은 보류 위치 아래 값을 「확인 필요」로 보여 줍니다(judgment.common.unsure).
+    2026-11-07 전에는 항목·섹션 보류만 빼서, 보류한 수량·가격이 「검수 없이 게시」와 틀린 값 후보에 섞여 세어졌음."""
     if status == "COMPLETED":
         return candidate
     if status != "PARTIAL":
         return None
     kept = json.loads(json.dumps(candidate))
     held = [h["target"] for h in (candidate.get("quality") or {}).get("heldItems") or []]
+    for target in held:
+        if len(target.strip("/").split("/")) >= 3 and target.strip("/").split("/")[0] in HELD_SECTIONS:
+            _drop_held_field(kept, target)
+    kept = _without_held(kept)
     for section in HELD_SECTIONS:
         if f"/{section}" in held:
             kept[section] = []
         else:
-            kept[section] = [item for i, item in enumerate(candidate.get(section) or []) if f"/{section}/{i}" not in held]
+            kept[section] = [item for i, item in enumerate(kept.get(section) or []) if f"/{section}/{i}" not in held]
     return kept
 
 
 def wrong_values(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
-    """자동 게시 값 중 정답표에 없는 값(가격·자격 기준값·접수 일정·서류). found=정답표에 있음, total=게시한 값."""
+    """자동 게시 값 중 정답표에 없는 값(가격·모집 수·자격 기준값·접수 일정). found=정답표에 있음, total=게시한 값."""
     score = Score()
     expected_rows = expected.get("supplyTypes") or []
     relation = _complex_relation(expected_rows, actual.get("supplyTypes") or [])
@@ -787,6 +823,17 @@ def wrong_values(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
                         for e in expected_rows if (p["kind"], p["amountKrw"]) in {(q.get("kind"), q.get("amountKrw")) for q in e.get("prices") or []}]  # fmt: skip
                 label = f"{r.get('complex') or ''} {p['kind']} {p['amountKrw']:,}".strip()
                 score.check("자동 게시: 가격", any(s is not False for s in same), label, () if True in same else ("단지",))
+    # 모집 수(2026-11-07 추가: gndc-ddb1 입주완료 호실 세 곳의 모집 1이 게시됐는데 수량을 보지 않아 틀린 값 후보에 없었음).
+    # 게시된 묶음의 모집 수(없으면 예비·대기 수, 0은 빼고)마다 같은 면적의 정답표 행(없으면 같은 주택형, 그것도 없으면 모든 행, 다른 단지는 빼고)에
+    # 그 수가 모집 수나 예비 수로 있는지 봅니다. 정답표에 행별 모집 수가 하나도 없는 공고는 판단하지 않습니다(정답표가 다루지 않은 것)
+    if any(isinstance(e.get("offeredCount"), int) for e in expected_rows):
+        for r in actual.get("supplyTypes") or []:
+            code = _norm(r.get("type")).upper()
+            rows = [e for e in expected_rows if relation(e.get("complex"), r.get("complex")) is not False]
+            pool = [e for e in rows if _same_area(e.get("exclusiveAreaSqm"), r)] or [e for e in rows if code and _norm(e.get("type")).upper() == code] or rows
+            for value in sorted({v for v in r.get("offeredCounts") or [] if isinstance(v, int) and v > 0}):
+                ok = any(value in (e.get("offeredCount"), e.get("reserveCount")) for e in pool)
+                score.check("자동 게시: 모집 수", ok, f"{r.get('complex') or ''} {r.get('type') or ''} {value}".strip())
     # 조건의 본 기준값만 봅니다(예외의 가구원수별·출산 가산 값은 정답표가 대표 기준 하나만 적어 비교할 수 없음).
     # 정답표에 그 종류의 기준이 하나도 없는 공고는 판단하지 않습니다(정답표가 다루지 않은 것). 방향·대상 계층은 compare와 같이 봅니다
     expected_rules = [e for e in expected.get("eligibility") or [] if _values(e.get("value"))]
