@@ -79,16 +79,41 @@ def source_sentence(document: DocumentModel, evidence: str | dict[str, Any]) -> 
 
 def fill_original_text(section: str, item: dict[str, Any], document: DocumentModel) -> dict[str, Any]:
     """원문 문장 칸(originalText)이 있는 섹션에서 비워 둔 항목은 첫 근거의 원문으로 채웁니다(모델이 옮겨 적다 글자가 달라지는 일 방지:
-    2026-11-06 실제 실행의 ORIGINAL_TEXT_NOT_FOUND). 근거가 틀렸으면 그대로 둡니다(넣기 검사가 근거 오류로 알림)."""
-    if section not in ORIGINAL_TEXT_SECTIONS or (isinstance(item.get("originalText"), str) and item["originalText"].strip()):
+    2026-11-06 실제 실행의 ORIGINAL_TEXT_NOT_FOUND). 근거가 틀렸으면 그대로 둡니다(넣기 검사가 근거 오류로 알림).
+    예외도 비우면 그 예외의 근거(없으면 바뀐 기준·발동 조건의 근거)로 채웁니다. 항목 근거로는 채우지 않습니다(기본 조건 문장이 예외 원문이 됨).
+    2026-11-07 유료 확인 dudc-8934: 가산표 행을 예외로 넣으며 originalText를 「2인 1인 120%」처럼 줄여 적어 거절 → 고치는 데 차례 2번을 써
+    호출 상한에 끊김."""
+    if section not in ORIGINAL_TEXT_SECTIONS:
         return item
-    evidence = item.get("evidence")
+    if not _has_text(item):
+        sentence = _first_sentence(document, item.get("evidence"))
+        item = {**item, "originalText": sentence} if sentence else item
+    exceptions = item.get("exceptions")
+    if isinstance(exceptions, list) and any(isinstance(e, dict) and not _has_text(e) for e in exceptions):
+        item = {**item, "exceptions": [_filled_exception(e, document) for e in exceptions]}
+    return item
+
+
+def _has_text(node: dict[str, Any]) -> bool:
+    return isinstance(node.get("originalText"), str) and bool(node["originalText"].strip())
+
+
+def _first_sentence(document: DocumentModel, evidence: Any) -> str | None:
     if not isinstance(evidence, list) or not evidence:
-        return item
+        return None
     try:
-        return {**item, "originalText": source_sentence(document, evidence[0])}
+        return source_sentence(document, evidence[0])
     except EvidenceError:
-        return item
+        return None
+
+
+def _filled_exception(exception: Any, document: DocumentModel) -> Any:
+    if not isinstance(exception, dict) or _has_text(exception):
+        return exception
+    own = exception.get("evidence")
+    evidence = own if isinstance(own, list) and own else evidence_entries([exception.get("effectExpression"), exception.get("when")])
+    sentence = _first_sentence(document, evidence)
+    return {**exception, "originalText": sentence} if sentence else exception
 
 
 def fill_scope(section: str, item: dict[str, Any], documents: tuple[str, ...]) -> dict[str, Any]:

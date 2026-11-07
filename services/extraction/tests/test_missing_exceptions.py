@@ -91,3 +91,24 @@ def test_renewal_income_criterion_in_eligibility_is_flagged():
     # 신청 자격 문장 안에서 재계약을 언급하는 것은 걸지 않음
     applying = dict(condition(atom("INCOME_BENCHMARK_PERCENT", 100, "PERCENT")), appliesTo="신청자", originalText="신청자는 소득 100% 이하(재계약 시에도 유지)")
     assert not [f for f in check([applying], "") if f.code == "RENEWAL_CRITERION_IN_ELIGIBILITY"]
+
+
+def test_lower_bound_of_a_stage_band_in_eligibility_is_held():
+    # 2026-11-07 유료 확인(jbdc-16011): 「(2단계) 추첨공급 : … 130% 초과 200% 이하 * 1단계 낙첨자를 포함」을 자격 하한으로 옮겨 게시됨
+    from mujuthaek_extraction.verify.verifier import is_note
+
+    percent = lambda v, op="LTE": atom("INCOME_BENCHMARK_PERCENT", v, unit="PERCENT") | {"operator": op}  # noqa: E731
+    band = condition({"kind": "ALL", "children": [percent(130, "GT"), percent(200)]})
+    [finding] = [f for f in check([condition(percent(120)), band], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
+    assert finding.target == "/eligibility/1" and "130% 초과" in finding.description and not is_note(finding.issue())
+    # 범위(BETWEEN)의 아래 끝, NOT 안의 이하, 예외의 바뀐 기준에 있는 하한도 하한입니다
+    between = condition(atom("TOTAL_ASSETS_KRW", [100_000_000, 200_000_000]) | {"operator": "BETWEEN"})
+    negated = condition({"kind": "NOT", "children": [percent(100)]})
+    replaced = condition(percent(100), [{"when": {"status": "UNSTRUCTURED", "expression": None}, "effectExpression": percent(120, "GTE")}])
+    flagged = [f for f in check([between, negated, replaced], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
+    assert [f.target for f in flagged] == ["/eligibility/0", "/eligibility/1", "/eligibility/2"]
+    assert "100,000,000원 이상" in flagged[0].description and "100% 초과" in flagged[1].description and "120% 이상" in flagged[2].description
+    # 상한만 있거나, 하한이 예외의 발동 조건(when)·다른 기준(나이)이면 걸지 않습니다
+    trigger = condition(percent(100), [{"when": {"status": "STRUCTURED", "expression": percent(100, "GT")}, "effectExpression": percent(90)}])
+    age = condition(atom("AGE_YEARS", 19, unit="YEAR") | {"operator": "GTE"})
+    assert not [f for f in check([condition(percent(100)), trigger, age], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
