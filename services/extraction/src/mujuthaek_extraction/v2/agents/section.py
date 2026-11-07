@@ -277,14 +277,17 @@ def _settled(draft: SectionDraft, trial: SectionDraft, warned: set[str], before:
 def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
     """담당들의 같은 앞부분(지시·도구·원문)을 한 번 캐시에 올립니다. 요청은 원문 메시지에서 끝냅니다: OpenAI 캐시는 앞 요청이 끝난 곳까지를
     다시 쓰므로, 원문 뒤에 「준비」 같은 메시지를 더 붙이면 담당은 지시·도구까지만 캐시에서 읽음(2026-11-06 네 번째 실제 실행: 4.24만 중 3.21만).
-    답은 버리고 도구도 실행하지 않습니다(출력 상한이 작아 몇백 토큰). 실패해도 담당은 그대로 돕니다(캐시만 못 씀)."""
+    답은 버리고 도구도 실행하지 않습니다(출력 상한이 작아 몇백 토큰). 실패해도 담당은 그대로 돕니다(캐시만 못 씀).
+    평가용 파일 저장소에 같은 요청의 답이 있어도 늘 보냅니다(cached=False): 저장된 답을 꺼내면 OpenAI에 원문에서 끝나는 요청이 없어, 맡은 일이
+    서로 다른 담당·해결 담당은 지시·도구까지만 캐시에서 읽음(2026-11-08 다시 재기: 해결 담당 첫 호출 7번이 1.9만만 읽고 원문 4~9만 토큰을 다시 씀)."""
     chat = getattr(rt.models, "chat", None)
     if chat is None:
         return []
     document: DocumentModel = state["document"]
     documents = tuple(document_ids(state["material"]))
     context = SectionContext(document=document, budget=rt.models.budget, documents=documents)
-    model = chat(PRIME, max_output_tokens=PRIME_OUTPUT_TOKENS)  # 추론 강도도 담당과 같게(다르면 앞부분이 도구 정의 다음부터 달라짐)
+    # 추론 강도도 담당과 같게(다르면 앞부분이 도구 정의 다음부터 달라짐)
+    model = chat(PRIME, max_output_tokens=PRIME_OUTPUT_TOKENS, cached=False)
     agent = _agent(model, PRIME, state, documents, [StopAfterModel()])
     try:
         agent.invoke({"messages": [shared_message(document)]}, context=context)

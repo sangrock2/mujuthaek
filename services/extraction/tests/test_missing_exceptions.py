@@ -75,9 +75,35 @@ def test_household_tiers_written_as_separate_conditions_are_flagged():
     other = [dict(condition(percent(v)), scope={"level": "NOTICE", "supplyGroupIds": [], "targetGroups": [g]}) for v, g in ((120, "대학생"), (100, "청년"))]
     assert not [f for f in check(other, "") if f.code == "TIER_CONDITION_MISSING"]
     # 가구원 수 조건이 조건식에 있으면 의도한 구간
-    two = {"kind": "ANY", "children": [{"kind": "NOT", "children": [atom("HOUSEHOLD_MEMBER_COUNT", 2, unit="COUNT") | {"operator": "EQ"}]}, percent(110)]}
+    two = {"kind": "ANY", "children": [{"kind": "NOT", "child": atom("HOUSEHOLD_MEMBER_COUNT", 2, unit="COUNT") | {"operator": "EQ"}}, percent(110)]}
     fixed = [dict(condition(two), scope=tiers[0]["scope"]), tiers[2]]
     assert not [f for f in check(fixed, "") if f.code == "TIER_CONDITION_MISSING"]
+
+
+def test_tiers_joined_to_the_criterion_with_and_are_held_with_the_other_conditions_on_it():
+    # 2026-11-08 유료 확인 dcco-24812: 구간 조건 누락 경고를 받은 담당이 「ALL[2인, 80% 이하]」처럼 구간을 그리고로 붙인 조건을 새로 넣어
+    # 자동 게시(모두 함께 적용되어 2인이 아닌 가구는 자격 없음, 구간마다 두면 아무도 자격 없음)
+    percent = lambda v: atom("INCOME_BENCHMARK_PERCENT", v, unit="PERCENT")  # noqa: E731
+    size = lambda n: atom("HOUSEHOLD_MEMBER_COUNT", n, unit="COUNT") | {"operator": "EQ"}  # noqa: E731
+    scope = {"level": "NOTICE", "supplyGroupIds": [], "targetGroups": ["차목 일반입주자"]}
+    joined = [dict(condition({"kind": "ALL", "children": [size(n), percent(v)]}), scope=scope) for n, v in ((1, 70), (2, 60))]
+    base = dict(condition(percent(50)), scope=scope)
+    findings = [f for f in check([*joined, base], "") if f.code.startswith("TIER_CONDITION")]
+    assert [(f.code, f.target) for f in findings] == [("TIER_CONDITION_CONJOINED", f"/eligibility/{i}") for i in range(3)]
+    assert "가구원 수 구간을 기준과 「그리고」로 묶은" in findings[0].description and "조건 3개" in findings[0].description
+    # 구간 조건 누락으로 이미 걸린 조건(값만 다른 조건 둘)은 또 걸지 않음
+    plain = [dict(condition(percent(v)), scope=scope) for v in (70, 60)]
+    codes = {f.target: f.code for f in check([joined[0], *plain], "") if f.code.startswith("TIER_CONDITION")}
+    assert codes == {"/eligibility/0": "TIER_CONDITION_CONJOINED", "/eligibility/1": "TIER_CONDITION_MISSING", "/eligibility/2": "TIER_CONDITION_MISSING"}
+    # 그 대상에 그 기준 조건이 하나뿐인 그리고 묶음(다자녀 「미성년 자녀 3명 이상이고 소득 120% 이하」)·「그 구간이 아니거나 기준값 이하」(ANY)·
+    # 기본 조건 + 구간 예외는 걸지 않음
+    many = atom("CHILD_COUNT", 3, unit="COUNT") | {"operator": "GTE"}
+    alone = dict(condition({"kind": "ALL", "children": [many, percent(120)]}), scope=scope)
+    implied = [dict(condition({"kind": "ANY", "children": [{"kind": "NOT", "child": size(n)}, percent(v)]}), scope=scope) for n, v in ((1, 70), (2, 60))]
+    replace = {"when": {"status": "STRUCTURED", "expression": size(1), "reason": None}, "effect": "REPLACE", "effectExpression": percent(70)}
+    excepted = dict(condition(percent(50), [replace]), scope=scope)
+    for eligibility in ([alone], [*implied, base], [excepted]):
+        assert not [f for f in check(eligibility, "") if f.code.startswith("TIER_CONDITION")]
 
 
 def test_renewal_income_criterion_in_eligibility_is_flagged():
@@ -103,7 +129,7 @@ def test_lower_bound_of_a_stage_band_in_eligibility_is_held():
     assert finding.target == "/eligibility/1" and "130% 초과" in finding.description and not is_note(finding.issue())
     # 범위(BETWEEN)의 아래 끝, NOT 안의 이하, 예외의 바뀐 기준에 있는 하한도 하한입니다
     between = condition(atom("TOTAL_ASSETS_KRW", [100_000_000, 200_000_000]) | {"operator": "BETWEEN"})
-    negated = condition({"kind": "NOT", "children": [percent(100)]})
+    negated = condition({"kind": "NOT", "child": percent(100)})  # 계약의 NOT은 child 하나
     replaced = condition(percent(100), [{"when": {"status": "UNSTRUCTURED", "expression": None}, "effectExpression": percent(120, "GTE")}])
     flagged = [f for f in check([between, negated, replaced], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
     assert [f.target for f in flagged] == ["/eligibility/0", "/eligibility/1", "/eligibility/2"]
