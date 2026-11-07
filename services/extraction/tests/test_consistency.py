@@ -473,19 +473,24 @@ def test_prices_left_in_a_group_without_counts_next_to_the_same_type_are_flagged
     c = candidate()
     counted = {
         **c["supplyGroups"][0],
+        "itemKind": "HOUSING_TYPE",
         "housingTypeCode": "39",
         "unitLabel": None,
         "counts": [{"kind": "OFFERED", "value": 100, "scope": scope(), "evidenceIds": []}],
     }
-    loose = {**c["supplyGroups"][0], "housingTypeCode": "39.70", "unitLabel": None, "prices": [price("DEPOSIT", 1_000_000, plan="p")]}
+    loose = {**counted, "housingTypeCode": "39.70", "counts": [], "prices": [price("DEPOSIT", 1_000_000, plan="p")]}
     other_type = {**loose, "housingTypeCode": "46"}  # 다른 주택형의 가격만 있는 행(입주 완료 등)은 걸지 않습니다
     c["supplyGroups"] = [counted, loose, other_type]
     assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == [("SUPPLY_PRICE_UNATTACHED", "/supplyGroups/1")]
-    # 호실 묶음은 보지 않습니다(2026-11-07 gndc-ddb1: 입주완료 「202-1호」는 모집 수 없이 가격만 있고, 202는 호실 번호)
-    rooms = [{**group, "itemKind": "HOUSING_UNIT", "housingTypeCode": None} for group in (counted, loose)]
-    rooms[0]["unitLabel"], rooms[1]["unitLabel"] = "202-2호", "202-1호"
-    c["supplyGroups"] = rooms
-    assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == []
+    # 호실 묶음은 같은 호실의 모집 묶음이 따로 있을 때만 봅니다(2026-11-07 gndc-ddb1 「202-1호」·gndc-12394176 방 종류 「1인실」:
+    # 이번에 공급하지 않는 호실은 모집 수 없이 자기 가격만 있음)
+    for kind in (None, "1인실"):
+        rooms = [{**group, "itemKind": "HOUSING_UNIT", "housingTypeCode": kind} for group in (counted, loose)]
+        rooms[0]["unitLabel"], rooms[1]["unitLabel"] = "202-2호", "202-1호"
+        c["supplyGroups"] = rooms
+        assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == []
+    rooms[1]["unitLabel"] = "202-2호"  # 같은 호실의 모집 묶음이 다른 표에 따로 있으면 붙지 못한 가격
+    assert [f for f in codes(c) if f[0] == "SUPPLY_PRICE_UNATTACHED"] == [("SUPPLY_PRICE_UNATTACHED", "/supplyGroups/1")]
 
 
 DOCUMENT_TABLE = "\n".join(

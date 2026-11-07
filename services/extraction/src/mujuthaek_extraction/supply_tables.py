@@ -71,6 +71,29 @@ def _occupied(row: list[str]) -> bool:
     return bool(OCCUPIED_UNIT.search(text)) and not AVAILABLE_UNIT.search(text)
 
 
+# 공급 규모 줄이 이번에 공급하는 호실을 괄호 안에 이름으로 적은 경우(2026-11-07 gndc-12394176: 「□ 공급규모 : 1인실 2호(남성 : 101호, 여성 : 202-1호)」
+# 인데 아래 호실 표는 일곱 호실의 임대료 표라, 행마다 모집 1로 세면 다섯 호실이 틀린 모집 1. gndc-ddb1 「□ 공급세대 : 1호(202-2호, 셰어하우스)」도 같은 꼴)
+OFFER_LINE = re.compile(r"(?:공급|모집)\s*(?:규모|호수|세대|호실|가구)\s*[:：][^\n(]*?(\d+)\s*(?:호|세대|실|가구)\s*\(([^)\n]*)\)")
+OFFER_UNIT = re.compile(r"(?<![\d-])(\d{1,4}(?:-\d{1,3})?)\s*호(?!선)")
+
+
+def offered_units(text: str) -> set[str]:
+    """공급 규모 줄의 괄호에 적은 공급 호실 번호(「2호(남성 : 101호, 여성 : 202-1호)」 → {101, 202-1}). 괄호 앞 수와 호실 수가 같고
+    「등」「외」로 줄여 적지 않았을 때만 셉니다. 없으면 빈 집합."""
+    found: set[str] = set()
+    for match in OFFER_LINE.finditer(text or ""):
+        units = set(OFFER_UNIT.findall(match[2]))
+        if units and len(units) == int(match[1]) and not re.search(r"등|외", match[2]):
+            found |= units
+    return found
+
+
+def _unit_key(text: str | None) -> str | None:
+    """호실 이름의 번호(「201-1호」 → 201-1). 공급 규모 줄의 호실과 맞춥니다."""
+    match = re.search(r"\d{1,4}(?:-\d{1,3})?", text or "")
+    return match[0] if match else None
+
+
 NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 UNIT_IN_TITLE = re.compile(r"\((천원|만원|원)\)|(천원|만원)")
 KEY_MEANINGS = ("COMPLEX", "ADDRESS", "BUILDING", "HOUSING_TYPE", "UNIT", "FLOOR", "TARGET_GROUP")
@@ -643,8 +666,9 @@ def _scope(group_id: str, groups: list[str], description: str) -> dict[str, Any]
     }
 
 
-def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -> dict[str, Any] | None:
-    """열 의미 → AI 출력과 같은 모양의 공급 조각(quotes·supplyGroups·coverage). 공급표가 하나도 없으면 None."""
+def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str, offered: set[str] | None = None) -> dict[str, Any] | None:
+    """열 의미 → AI 출력과 같은 모양의 공급 조각(quotes·supplyGroups·coverage). 공급표가 하나도 없으면 None.
+    offered: 공급 규모 줄이 이름으로 적은 공급 호실 번호(offered_units). 수량 열 없는 호실 표가 그 호실을 담으면 그 호실만 모집 1입니다."""
     by_label = {t.label: t for t in tables}
     quotes: list[dict[str, Any]] = []
     quote_of: dict[str, str] = {}
@@ -702,11 +726,15 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         if filled:
             previous = (table, filled[-1])
         # 호실마다 한 행인 모집 표(동·호·면적·보증금)에 수량 열이 없으면 한 행이 모집 1호입니다(실측 LH 김포 장애인 자립주택: 모집 수 0/4).
-        # 이미 입주한 호실(행의 어느 칸이든 「입주완료」, 병합 칸 포함)은 빼요(_occupied)
+        # 이미 입주한 호실(행의 어느 칸이든 「입주완료」, 병합 칸 포함)은 빼고(_occupied), 공급 규모 줄이 이 표의 호실을 이름으로 적었으면
+        # 그 호실만 셉니다(named_units)
         unit_rows = entry.get("rowUnit") == "HOUSING_UNIT" and not any(c["meaning"] == "COUNT" for c in columns)
         first_data = next((r for r, row in enumerate(filled) if any(_numeric(c) for c in row)), None)
         if first_data is None:
             continue
+        unit_columns = [c["column"] - 1 for c in keys if c["meaning"] == "UNIT"]
+        table_units = {_unit_key(row[i]) for row in filled[first_data:] for i in unit_columns if i < len(row)} - {None}
+        named_units = (offered or set()) & table_units
         row_names = _row_names(filled, columns, keys, first_data)
         side = read.get(table.beside or "")
         inherited: dict[int, dict[str, str]] = {}
@@ -825,7 +853,7 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
                     current["_type_ambiguous"] = title_types
                 groups.append(current)
                 current_key, current_rows = key, set()
-                if unit_rows and not _occupied(row):
+                if unit_rows and not _occupied(row) and (not named_units or _unit_key(named.get("UNIT")) in named_units):
                     current["counts"].append(
                         {
                             "id": f"{group_id}.count1",
