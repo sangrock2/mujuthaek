@@ -613,6 +613,28 @@ def test_a_lower_bound_in_eligibility_reaches_the_agent_as_a_check_with_how_to()
     assert "## 확인할 것 1개" in shown and "- LOWER_BOUND_IN_ELIGIBILITY:" in shown and "낙첨자" in shown and "그대로 둡니다" in shown
 
 
+def test_a_whole_target_left_out_of_a_criteria_table_is_a_fix_and_section_problems_come_first():
+    # 2026-11-07 유료 확인 jbdc-16011: 「일반 공급, 노부모 부양 특별 공급」이 빠졌다는 메모를 「확인할 것」 18개 속에서 받고 넘김
+    target = "/quality/coverage/eligibility"
+    group = {"code": "CRITERIA_GROUP_OMISSION_SUSPECTED", "target": target, "description": "원문 자격 기준표에서 조건이 하나도 없는 대상: 일반 공급"}
+    rows = {"code": "CRITERIA_TABLE_OMISSION_SUSPECTED", "target": target, "description": "원문 자격 기준표 2행의 기준값 120%"}
+    item = {"code": "EXCEPTION_SUSPECTED", "target": "/eligibility/0", "item": "a", "description": "기준값 바로 뒤에 다른 기준값"}
+    assert group["code"] in section.LOST_VALUE_NOTES  # 화면에서는 메모(자격 섹션을 막지 않음)
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    shown = verify_report(draft, [item, rows, group])
+    assert shown.index("## 고칠 것 1개") < shown.index("CRITERIA_GROUP_OMISSION_SUSPECTED") < shown.index("## 확인할 것 2개")
+    checks = shown[shown.index("## 확인할 것 2개") : shown.index("## 고치는 법")]
+    assert checks.index("CRITERIA_TABLE_OMISSION_SUSPECTED") < checks.index("EXCEPTION_SUSPECTED")  # 섹션 문제가 항목 경고보다 먼저
+    assert "- CRITERIA_GROUP_OMISSION_SUSPECTED:" in shown and "scope.targetGroups에 그 대상 이름" in shown
+
+
+def test_the_trace_keeps_the_whole_verification_report_the_agent_received():
+    # 2026-11-07: 앞 800자만 남겨 담당이 어떤 경고를 받고 끝냈는지 알 수 없었음
+    report_text = "# 검증 결과\n" + "가" * 5000
+    assert section._trace([AIMessage(content=""), HumanMessage(report_text)])[0]["verify"] == report_text
+    assert len(section._trace([AIMessage(content=""), HumanMessage("나" * 20000)])[0]["verify"]) == section.VERIFY_TRACE_CHARS
+
+
 def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when_verification_improves(monkeypatch):
     # 4단계 해결 에이전트(2026-11-07 23건 재조립: 남은 검토 이슈의 절반이 담당이 경고를 받고도 글로 남긴 자격 기준)
     age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})

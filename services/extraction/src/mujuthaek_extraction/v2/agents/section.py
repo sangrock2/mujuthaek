@@ -50,6 +50,9 @@ MODEL_CALLS = {"eligibility": 10}
 # 호출 상한 미들웨어(ModelCallLimitMiddleware, exit_behavior="end")가 상한에서 대화를 끝내며 붙이는 답의 머리
 CALL_LIMIT_MESSAGE = "Model call limits exceeded"
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
+# 대화 기록에 남길 검증 결과 길이. 앞 800자만 남기면 담당이 어떤 경고를 받고 끝냈는지 알 수 없었음(2026-11-07 유료 확인 jbdc-16011:
+# 기준표 메모를 몇 번째 차례에 받았는지 모름). 경고 20개(설명 220자씩)·안내·고치는 법이 다 들어가는 길이
+VERIFY_TRACE_CHARS = 8000
 PRIME = "prime"
 PRIME_OUTPUT_TOKENS = 512
 # 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
@@ -435,5 +438,5 @@ def _trace(messages: list[Any]) -> list[dict[str, Any]]:
             content = message.content if isinstance(message.content, str) else json.dumps(message.content, ensure_ascii=False)
             turns[-1]["results"].append({"name": message.name, "result": content[:TRACE_CHARS]})
         elif isinstance(message, HumanMessage) and turns:  # 검증 미들웨어가 넣은 검증 결과
-            turns[-1]["verify"] = str(message.content)[: TRACE_CHARS * 2]
+            turns[-1]["verify"] = str(message.content)[:VERIFY_TRACE_CHARS]
     return turns
