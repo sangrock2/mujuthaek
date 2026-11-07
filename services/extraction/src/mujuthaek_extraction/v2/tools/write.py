@@ -127,7 +127,9 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
         return _patch_pending(context, section, item_id, changes)
     if index is None:
         return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
-    merged = fill_scope(section, _merge(draft.items[section][index], changes if isinstance(changes, dict) else {}), context.documents)
+    # 고치며 넣은 예외의 비운 원문 글도 넣을 때처럼 근거로 채웁니다(2026-11-07 dudc-8934: 가산 행 예외는 넣은 조건을 고치며 더함)
+    merged = _merge(draft.items[section][index], changes if isinstance(changes, dict) else {})
+    merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
     problems = _problems(context, section, merged, adding=False)
     if problems:
         return _dump({"error": "BAD_ITEM", "errors": problems})
@@ -261,9 +263,10 @@ def _original_text_problems(document: DocumentModel, section: str, item: dict[st
             )
             continue
         named = f"({node['id']})" if isinstance(node.get("id"), str) and node["id"] else ""
+        empty = "(예외는 근거를 붙이고 비워 두면 그 근거의 원문으로 채움)" if pointer.startswith("/exceptions/") else ""
         found.append(
             f"{pointer}/originalText{named}: 「{text[:80]}」는 원문에 이어진 글자 그대로 있지 않습니다{_closest(document, text)}. "
-            "원문 글자를 빼거나 바꾸지 말고, 원문에서 이어진 부분(한 줄의 일부만 써도 됨)이나 그 줄 전체를 적습니다"
+            f"원문 글자를 빼거나 바꾸지 말고, 원문에서 이어진 부분(한 줄의 일부만 써도 됨)이나 그 줄 전체를 적습니다{empty}"
         )
     return found
 

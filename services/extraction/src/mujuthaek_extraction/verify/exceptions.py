@@ -155,9 +155,56 @@ def check_renewal_criteria(candidate: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+# 자격의 소득·자산 기준은 상한이라, 하한(「130% 초과」)은 대개 단계별 선정의 소득 구간입니다. 2026-11-07 유료 확인(jbdc-16011):
+# 「(2단계) 추첨공급 : 부부 모두 소득이 있는 신청자 중 … 130% 초과 200% 이하인 분 * 1단계 낙첨자를 포함」을 다자녀 추첨공급의 자격 하한으로 옮겨
+# 게시 — 1단계 낙첨자(외벌이 120% 이하)를 불가로 판정함. 같은 모양 하한 6개(신혼부부·생애최초 2·3단계)는 다른 이슈로 보류됐을 뿐이었음.
+# 하한이 맞는 공급(소득 구간별 공급)도 있어 고치지 않고 그 조건만 사람 확인으로 보냅니다. 23건 저장 결과(V1·V2)에는 하한이 없었음
+LOWER_BOUND_ATTRIBUTES = {"INCOME_BENCHMARK_PERCENT", "MONTHLY_INCOME_KRW", "TOTAL_ASSETS_KRW", "CAR_ASSETS_KRW"}
+LOWER_WORDS = {"GT": "초과", "GTE": "이상", "LT": "이상", "LTE": "초과"}  # NOT 안의 미만·이하는 이상·초과
+
+
+def _lower_bounds(expression: dict[str, Any] | None, negated: bool = False):
+    """조건식의 소득·자산 하한 (원자, 하한 값, 「초과」·「이상」): 초과·이상, 범위(BETWEEN)의 아래 끝, NOT 안의 미만·이하."""
+    if not expression:
+        return
+    if expression.get("kind") == "ATOMIC":
+        operator, value = expression.get("operator"), expression.get("value")
+        if expression.get("attribute") not in LOWER_BOUND_ATTRIBUTES:
+            return
+        if operator in (("LT", "LTE") if negated else ("GT", "GTE")) and isinstance(value, int | float):
+            yield expression, value, LOWER_WORDS[operator]
+        elif operator == "BETWEEN" and not negated and isinstance(value, list) and value and isinstance(value[0], int | float) and value[0] > 0:
+            yield expression, value[0], "이상"
+        return
+    for child in expression.get("children") or []:
+        yield from _lower_bounds(child, negated != (expression.get("kind") == "NOT"))
+
+
+def check_lower_bounds(candidate: dict[str, Any]) -> list[Finding]:
+    """자격 조건(기본 조건식·예외의 바뀐 기준)에 소득·자산 하한이 있는 경우. 예외의 발동 조건(when)은 기준이 아니라 보지 않습니다."""
+    findings = []
+    for index, item in enumerate(candidate["eligibility"]):
+        expressions = [(item.get("rule") or {}).get("expression"), *(e.get("effectExpression") for e in item.get("exceptions") or [])]
+        found = [bound for expression in expressions for bound in _lower_bounds(expression)]
+        if not found:
+            continue
+        shown = ", ".join(f"{value:g}%" if atom.get("unit") == "PERCENT" else f"{value:,.0f}원" for atom, value, _ in found[:2])
+        words = found[0][2]
+        findings.append(
+            Finding(
+                "V5",
+                "LOWER_BOUND_IN_ELIGIBILITY",
+                f"/eligibility/{index}",
+                f"자격 기준에 하한({shown} {words})이 있습니다. 단계별 선정의 소득 구간(「100% 초과 130% 이하」, 앞 단계 낙첨자 포함)이면 "
+                "그보다 낮은 신청자도 대상이라 자격 하한이 아닙니다. 원문 확인이 필요합니다",
+            )
+        )
+    return findings
+
+
 def check_missing_exceptions(candidate: dict[str, Any], sources: SourceBundle) -> list[Finding]:
-    """V5 검사를 모두 돌립니다: 구간 조건 누락, 재계약 기준, 그리고 구조화된 금액·비율 조건마다 빠진 가산·완화 기준 의심."""
-    findings = check_unconditioned_tiers(candidate) + check_renewal_criteria(candidate)
+    """V5 검사를 모두 돌립니다: 구간 조건 누락, 재계약 기준, 자격 하한, 그리고 구조화된 금액·비율 조건마다 빠진 가산·완화 기준 의심."""
+    findings = check_unconditioned_tiers(candidate) + check_renewal_criteria(candidate) + check_lower_bounds(candidate)
     # 다른 자격 조건(예: 3순위 총자산 25,100만원)이 이미 쓰는 기준값은 빠진 예외가 아닙니다
     known = {float(a["value"]) for item in candidate["eligibility"] for a in _atoms(item["rule"]["expression"]) if isinstance(a["value"], int | float)}
     for item in candidate["eligibility"]:

@@ -124,6 +124,34 @@ def test_original_text_inside_parts_is_checked_when_added_and_the_refusal_names_
     assert draft.rejected == {("eligibility", "joined"): failed["errors"]}
 
 
+def test_an_exception_left_without_original_text_is_filled_from_its_own_evidence_when_added_or_changed():
+    # 2026-11-07 유료 확인 dudc-8934: 가산표 행을 예외로 넣으며 originalText를 「2인 1인 120%」처럼 줄여 적어 거절 → 고치는 데 차례 2번을 써 호출 상한에 끊김
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    bare = {k: v for k, v in income["exceptions"][0].items() if k != "originalText"}
+    added = {**income, "id": "added", "evidence": ["p1.1"], "exceptions": [{**bare, "id": "own", "evidence": ["p1.2"]}]}
+    orphan = {**income, "id": "orphan", "evidence": ["p1.1"], "exceptions": [{**bare, "id": "none"}]}  # 예외 근거가 없으면 항목 근거로 채우지 않음
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[added, orphan])]),
+        AIMessage(
+            content="",
+            tool_calls=[call("update_item", section="eligibility", item_id="added", changes={"exceptions": [{**bare, "id": "later", "evidence": ["p1.2"]}]})],
+        ),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    tools = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=tools, context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert answers[0]["added"] == ["added"] and [f["id"] for f in answers[0]["failed"]] == ["orphan"]
+    assert "'originalText' is a required property" in answers[0]["failed"][0]["errors"][0]
+    assert answers[1] == {"ok": "eligibility/added 고침"}  # 고치며 넣은 예외도 채움
+    [exception] = draft.items["eligibility"][0]["exceptions"]
+    assert exception["id"] == "later" and exception["originalText"] == "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"
+
+
 def test_a_problem_inside_a_part_of_an_item_names_the_part_too():
     candidate = {"eligibility": [{"id": "income", "exceptions": [{"id": "one"}, {"id": "two", "when": {"status": "STRUCTURED"}}]}]}
     assert section._item_of(candidate, "/eligibility/0/exceptions/1/originalText") == {"item": "income", "inner": "two"}
@@ -348,7 +376,8 @@ def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypa
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
     # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
     monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
-    monkeypatch.setattr(section, "MAX_MODEL_CALLS", 2)
+    assert section.MODEL_CALLS["eligibility"] == 10 > section.MAX_MODEL_CALLS  # 자격 담당만 상한이 큼(기준표 행 예외)
+    monkeypatch.setattr(section, "MODEL_CALLS", {"eligibility": 2})
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
     rows = [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": ["p1.1"]} for row in ai_part(example("housing"))["eligibility"]]
@@ -541,6 +570,14 @@ def test_criteria_table_rows_left_out_reach_the_eligibility_agent_as_a_check_wit
     draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
     shown = verify_report(draft, [{"code": code, "target": target, "description": "원문 자격 기준표 2행의 기준값 119,000,000원"}])
     assert "## 확인할 것 1개" in shown and f"- {code}:" in shown and "행마다 exceptions(REPLACE" in shown
+
+
+def test_a_lower_bound_in_eligibility_reaches_the_agent_as_a_check_with_how_to():
+    # 2026-11-07 유료 확인 jbdc-16011: 「(2단계) … 130% 초과 200% 이하 * 1단계 낙첨자를 포함」을 자격 하한으로 옮김
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "a"}]})
+    issue = {"code": "LOWER_BOUND_IN_ELIGIBILITY", "target": "/eligibility/0", "item": "a", "description": "자격 기준에 하한(130% 초과)이 있습니다."}
+    shown = verify_report(draft, [issue])
+    assert "## 확인할 것 1개" in shown and "- LOWER_BOUND_IN_ELIGIBILITY:" in shown and "낙첨자" in shown and "그대로 둡니다" in shown
 
 
 def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when_verification_improves(monkeypatch):

@@ -44,6 +44,9 @@ from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
 log = logging.getLogger(__name__)
 
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
+# 담당별 상한. 자격은 기준표 행을 예외로 넣고 고치는 차례가 더 듦(2026-11-07 유료 확인 dudc-8934: 8번째 호출에서 항목 13개를 남기고 끊김).
+# 저장된 유료 기록 282번 중 상한에 끊긴 담당은 자격뿐이었고, 늘린 두 호출은 앞부분을 캐시로 읽어 한 번에 약 $0.002~0.005
+MODEL_CALLS = {"eligibility": 10}
 # 호출 상한 미들웨어(ModelCallLimitMiddleware, exit_behavior="end")가 상한에서 대화를 끝내며 붙이는 답의 머리
 CALL_LIMIT_MESSAGE = "Model call limits exceeded"
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
@@ -75,7 +78,8 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     draft = SectionDraft(spec.sections)
     context = SectionContext(document=document, budget=rt.models.budget, draft=draft, documents=documents)
     context.check = lambda: _issues(spec, draft, state, rt, documents)
-    limit = ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end")
+    calls = MODEL_CALLS.get(spec.name, MAX_MODEL_CALLS)
+    limit = ModelCallLimitMiddleware(run_limit=calls, exit_behavior="end")
     model = chat(spec.name, max_output_tokens=spec.max_output_tokens)  # V1 섹션 호출과 같은 출력 한도(첫 차례에 다 넣음)
     agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware()])
     last: dict[str, Any] = {}
@@ -99,7 +103,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     messages = last.get("messages") or []
     limited = bool(messages) and isinstance(messages[-1], AIMessage) and str(messages[-1].content).startswith(CALL_LIMIT_MESSAGE)
     if stopped is None and limited and not draft.finished:  # 마지막 호출에서 끝내기까지 불렀으면 상한에 닿았어도 끝낸 것
-        stopped = f"모델 호출 상한({MAX_MODEL_CALLS}번)"
+        stopped = f"모델 호출 상한({calls}번)"
         context.usage.append({"agent": spec.name, "stopped": stopped})
     if stopped is not None and not draft.finished:
         _mark_unfinished(draft, spec.sections, stopped)
