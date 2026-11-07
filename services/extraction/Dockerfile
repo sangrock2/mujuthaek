@@ -10,7 +10,8 @@ COPY libs/python-platform libs/python-platform
 COPY contracts contracts
 COPY services/extraction services/extraction
 WORKDIR /app/services/extraction
-RUN uv sync --no-dev --frozen
+# OCR: 두 판독이 같아도 OCR에 없는 숫자는 불일치로(같은 쪽으로 잘못 읽은 값 막기), 남은 불일치는 세 번째 판독(EXTRACTION_IMAGE_THIRD_READING)
+RUN uv sync --no-dev --frozen --extra ocr
 ENV PATH="/app/services/extraction/.venv/bin:$PATH" CONTRACTS_DIR=/app/contracts EXTRACTION_REVIEW_HOST=0.0.0.0
 
 RUN useradd --create-home extraction && chown -R extraction /app
