@@ -70,6 +70,8 @@ NOTE_CODES = {
     "AI_OUTPUT_FIELD_CLEARED",
     # 공급표 전환안의 부호와 숫자가 어긋나 숫자(기본 요금 대비 보증금·월세 증감)로 방향을 고침(supply_tables, 2026-10-24). 고친 값이라 표시만
     "CONVERSION_DIRECTION_CORRECTED",
+    # 행 이름 칸이 없어 읽지 못한 가격표(supply_tables, 2026-11-07). 빠진 값이지 틀린 값이 아니라 읽은 가격은 게시하고 검수 대기열에만 올립니다
+    "SUPPLY_PRICE_TABLE_UNREAD",
 }
 # 공통 검사(2026-10-26 사용자 결정 「모두 검수, 공개 유지」): AI·원본이 준 값을 비우거나 빼거나 바꾼 표시. 판정 섹션 밖이라 메모로 내려가도,
 # 이 코드가 하나라도 있으면 공고는 공개한 채 검수 대기열에 올립니다(store.save). 값을 버리는 새 처리를 만들면 여기 코드 중 하나를 남기세요
@@ -82,6 +84,7 @@ DROPPED_VALUE_CODES = {
     "AI_OUTPUT_VALUE_CHANGED",
     # 원문 안에서 같은 자격의 판단 기준일이 엇갈림(check_basis_date_conflict). 어느 쪽이 맞는지 원문만으로 못 정해 사람이 봅니다
     "SOURCE_BASIS_DATE_CONFLICT",
+    "SUPPLY_PRICE_TABLE_UNREAD",
 }
 # 비교를 못 했을 뿐 불일치가 아닌 API 대조 결과: 섹션과 상관없이 표시만 (불일치 API_MISMATCH는 사람 확인)
 # API_VALUE_NOT_EXTRACTED: API에는 값이 있는데 추출값이 비어 있음(누락). 틀린 값이 아니라 빠진 값이라 공고를 막지 않습니다(2026-10-20)

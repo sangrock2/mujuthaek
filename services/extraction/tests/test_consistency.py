@@ -80,6 +80,38 @@ def test_same_value_in_two_columns_or_no_rank_label_is_not_judged():
     assert codes(candidate(prices=[price("DEPOSIT", 2_000_000)])) == []  # 결과에 순위 표시가 없음
 
 
+def test_row_naming_several_types_fits_each_of_them():
+    # 2026-11-07 23건 대조 umca-4439: 「19A/B/C」 행 가격을 19B·19C 묶음에 붙였는데 행의 주택형을 19A로만 읽어 위치 의심으로 보류
+    row = "| 19A/B/C | 25,120,000 | 140,000 |"
+    text = "\n".join([TABLE, "[표 4-2]", "| 주택형 | 임대보증금(원) | 월임대료(원) |", row])
+
+    def found(housing_type):
+        c = candidate(text=text, prices=[price("DEPOSIT", 25_120_000)])
+        c["evidence"][0] |= {"quote": row, "locator": {"kind": "TEXT_RANGE", "start": text.index(row), "end": text.index(row) + len(row)}}
+        c["supplyGroups"][0]["housingTypeCode"] = housing_type
+        return [code for code, _ in codes(c, text)]
+
+    assert found("19B") == [] and found("19C") == []
+    assert found("26B") == ["VALUE_POSITION_SUSPECTED"]
+
+
+def test_contract_and_balance_must_add_up_to_the_deposit():
+    # 실측(2026-11-07 jbdc-16011): 계약금 「18,400.000」을 18,400원으로 읽어 보증금 92,000,000 = 18,400,000 + 잔금 73,600,000이 어긋난 채 게시됨
+    def parts(contract, *extra, whole="DEPOSIT", plan="p"):
+        return [price(whole, 92_000_000, plan="p"), price("CONTRACT_PAYMENT", contract, plan=plan), price("BALANCE", 73_600_000, plan=plan), *extra]
+
+    def mismatches(prices):
+        return [target for code, target in codes(candidate(prices=prices)) if code == "PRICE_PARTS_MISMATCH"]
+
+    assert mismatches(parts(18_400)) == ["/supplyGroups/0/prices"]
+    assert mismatches(parts(18_400, whole="SALE_PRICE")) == ["/supplyGroups/0/prices"]
+    assert not is_note({"code": "PRICE_PARTS_MISMATCH", "target": "/supplyGroups/0/prices"})  # 메모가 아니라 가격 보류
+    assert mismatches(parts(18_400_000)) == []
+    assert mismatches(parts(9_200_000, price("OTHER", 9_200_000, plan="p"))) == []  # 중도금일 수 있는 금액이 있으면 보지 않음
+    assert mismatches(parts(18_400, plan="q")) == []  # 다른 요금안의 금액끼리는 더하지 않음
+    assert mismatches(parts(18_400, price("CONTRACT_PAYMENT", 18_400_000, plan="p"))) == []  # 같은 종류가 둘이면 어느 것을 더할지 모름
+
+
 def test_value_from_other_housing_type_row_is_suspected():
     row = "| 39A | 101 | 9,330,000 | 82,630 | 9,330,000 | 82,630 |"
     c = candidate(prices=[price("MONTHLY_RENT", 82_630)])

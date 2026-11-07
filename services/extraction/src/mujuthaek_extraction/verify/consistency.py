@@ -61,8 +61,16 @@ def _groups(text: str) -> set[str]:
     return {name for word, name in GROUP_WORDS.items() if word in text}
 
 
+# 한 칸이 같은 번호의 주택형 여럿을 함께 적은 표기(「19A/B/C」)는 각 주택형으로도 봅니다(supply_tables.SHARED_TYPES와 같은 규칙.
+# 2026-11-07 23건 대조 umca-4439: 그 행 가격을 19B·19C 묶음에 붙였는데 행의 주택형을 19A로만 읽어 위치 의심으로 보류)
+SHARED_TYPE_TOKEN = re.compile(r"(?<![\d.])(\d{2,3})([A-Z]{1,2}\d?)((?:\s*[/·ㆍ,]\s*[A-Z]{1,2}\d?)+)(?![\d.A-Z])")
+
+
 def _types(text: str) -> set[str]:
-    return {t.removesuffix("형") for t in TYPE_TOKEN.findall(text)}
+    shared = {
+        f"{match[1]}{suffix}" for match in SHARED_TYPE_TOKEN.finditer(text) for suffix in [match[2], *re.split(r"\s*[/·ㆍ,]\s*", match[3].strip(" /·ㆍ,"))]
+    }
+    return {t.removesuffix("형") for t in TYPE_TOKEN.findall(text)} | shared
 
 
 # 구조 방식(intake/pdf_reader.render(labeled=True))이 표에 덧붙이는 줄. 표 행(|)이 아니지만 같은 표에 속합니다
@@ -965,6 +973,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_unattached_prices(candidate, find)
     _check_price_scope(candidate, found, find)
     _check_consistency(candidate, find)
+    _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
     _check_image_content(candidate, sources, find)
@@ -973,6 +982,31 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_income_tiers(candidate, find)
     _check_definition_scope(candidate, find)
     return findings
+
+
+# 보증금(또는 분양가) = 계약금 + 잔금. 실측(2026-11-07 23건 대조, jbdc-16011): 원문 계약금 「18,400.000」을 18,400원으로 읽어
+# 보증금 92,000,000 = 18,400,000 + 73,600,000인 행의 계약금이 틀린 채 자동 게시됨. 같은 요금안·같은 대상에 전체 금액 하나와
+# 계약금·잔금이 하나씩 있고 다른 금액(중도금일 수 있는 OTHER)이 없을 때만 봅니다. 저장된 23건 결과의 90개 요금안 중 걸린 것은 이 행들뿐
+PRICE_PARTS_MISMATCH = "PRICE_PARTS_MISMATCH"
+WHOLE_NAMES = {"DEPOSIT": "보증금", "SALE_PRICE": "분양가"}
+
+
+def _check_payment_parts(candidate: dict[str, Any], find: Any) -> None:
+    for g, group in enumerate(candidate["supplyGroups"]):
+        plans: dict[tuple[Any, tuple[str, ...]], dict[str, list[dict[str, Any]]]] = {}
+        for price in group["prices"]:
+            key = (price.get("pricePlanId"), tuple(sorted(price["scope"]["targetGroups"])))
+            plans.setdefault(key, {}).setdefault(price["kind"], []).append(price)
+        for kinds in plans.values():
+            wholes = [kind for kind in WHOLE_NAMES if kind in kinds]
+            if len(wholes) != 1 or "OTHER" in kinds or any(len(kinds.get(kind, [])) != 1 for kind in (wholes[0], "CONTRACT_PAYMENT", "BALANCE")):
+                continue
+            whole, contract, balance = (kinds[kind][0].get("amountKrw") for kind in (wholes[0], "CONTRACT_PAYMENT", "BALANCE"))
+            if None in (whole, contract, balance) or whole == contract + balance:
+                continue
+            label = group.get("housingTypeCode") or group.get("unitLabel") or group.get("id")
+            parts = f"계약금({contract:,}원)과 잔금({balance:,}원)의 합이 {WHOLE_NAMES[wholes[0]]}({whole:,}원)와 다릅니다"
+            find("V7", PRICE_PARTS_MISMATCH, f"/supplyGroups/{g}/prices", f"「{label}」 {parts}. 원문 금액을 확인해야 합니다.")
 
 
 # 임대료 소득 구간을 자격으로 넣음(2026-11-05 실측 sh-311087: 「소득 50% 이하」「50% 초과 70% 이하」 임대료 구간이 자격 조건 둘로 들어가

@@ -84,6 +84,7 @@ NO_RECHECK_CODES = frozenset(
         "COUNT_MERGED_AMBIGUOUS",
         "CONVERSION_DIRECTION_UNCERTAIN",
         "IMAGE_READING_DISAGREES",  # 그림 두 판독이 다름(2026-11-05): AI는 글자만 보므로 다시 읽어도 어느 쪽이 맞는지 정할 수 없음
+        "PRICE_PARTS_MISMATCH",  # 보증금 ≠ 계약금 + 잔금(2026-11-07): 표 숫자로 정한 보류. 원문 오타면 다시 읽어도 같은 숫자
     }
 )
 # 화면 메모(verifier.NOTE_CODES)지만 AI 재확인에 보내는 것: 원문 서류 표 행을 어느 서류도 인용하지 않음(2026-10-23).

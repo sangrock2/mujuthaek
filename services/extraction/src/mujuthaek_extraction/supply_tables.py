@@ -69,6 +69,7 @@ LABEL_NOISE = re.compile(r"^\s*표\s*|\s*\(\s*\d+\s*쪽\s*\)\s*$")
 SIGN_CELL = re.compile(r"\(?\s*([+\-−])\s*\)?")  # 전환 구분 칸 「(+)」「(-)」
 SUPPLY_COUNT_KINDS = {"OFFERED", "RESERVE", "WAITLIST", "CURRENT_VACANCIES"}
 HOUSING_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+SPLIT_DECIMAL = re.compile(r"(\d)\.\s+(\d)")
 ABOVE_LINES = 3  # 표 위에서 볼 글 줄 수
 # 표 제목에만 있는 주택형(2026-10-24 채점: 「【31A】 구간별 임대조건」 표의 구간별 가격 18묶음이 주택형 없이 따로 남음).
 # 짧은 제목 줄(※·- 같은 안내 표시로 시작하지 않음)의 주택형 낱말만 봅니다. 줄에 주택형이 여럿이면 정하지 않고 검수 이슈로 둡니다
@@ -76,6 +77,9 @@ TITLE_TYPE = re.compile(r"(?<![\d.A-Za-z])(\d{2,3}[A-Z]{1,2}\d?|\d{2,3}\s*형)(?
 TITLE_CHARS = 40
 NOTE_MARK = re.compile(r"^\s*[※*＊\-·•▶]")
 TYPE_AMBIGUOUS = "SUPPLY_TYPE_AMBIGUOUS"
+# 가격 열은 있는데 행마다 어느 주택형·대상의 금액인지 정할 칸(KEY_MEANINGS)이 하나도 없는 가격표. 예전엔 표 전체를 표시 없이 건너뛰었음
+# (2026-11-07 23건 대조 bmc-75: 「[39A] 구간별 임대조건」처럼 행이 소득 구간이고 주택형이 표 제목에 있는 표 4개, 가격 96개가 검수 없이 빠짐)
+PRICE_TABLE_UNREAD = "SUPPLY_PRICE_TABLE_UNREAD"
 # 표 전체(또는 열)가 특정 대상의 요금임을 말하는 낱말(2026-10-24 채점: 「[주거급여 수급자가 아닌 경우] 상한 임대조건」 표가 대상 없는
 # 기본 요금으로 그 주택형에 붙음). 이런 표·열의 가격을 AI가 대상 없이 STANDARD로 답하면 기본 요금 자리에 두지 않고 보류합니다.
 # 「분양가상한제」는 대상 낱말이 아닙니다
@@ -592,11 +596,14 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
     previous: tuple[Table, list[str]] | None = None  # 바로 앞에 읽은 표와 그 마지막 행(병합 복원)
     current: dict[str, Any] | None = None
     current_key: tuple[str, ...] | None = None
+    unread: list[str] = []  # 행 이름 칸이 없어 읽지 못한 가격표
     for _, table, entry in sorted(resolved, key=lambda item: item[0]):  # 표 순서대로(쪽을 넘어 이어진 표가 앞 조각 바로 뒤에 오게)
         width = len(table.columns)
         columns = [c for c in entry.get("columns") or [] if 1 <= int(c.get("column") or 0) <= width and c.get("meaning") != "IGNORE"]
         keys = [c for c in columns if c["meaning"] in KEY_MEANINGS]
         if not keys or not any(c["meaning"] in ("PRICE", "COUNT", "AREA_EXCLUSIVE") for c in columns):
+            if not keys and any(c["meaning"] == "PRICE" for c in columns) and not option_table(table):
+                unread.append(table.label)
             continue
         root = table.continues or table.label
         title_types = [] if any(c["meaning"] == "HOUSING_TYPE" for c in keys) else _title_types(table)
@@ -879,6 +886,17 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         for group in groups:
             group["counts"] = [count for count in group["counts"] if id(count) not in dropped]
     issues = []
+    if unread:
+        # 묶음을 가리키지 않아 공급 섹션 이슈가 됩니다. 판정 섹션이 아니라 메모로 내려가고 공고는 공개한 채 검수 대기열에 오릅니다
+        # (verifier.NOTE_CODES·DROPPED_VALUE_CODES): 읽은 가격은 그대로 두고 빠진 가격만 사람이 채웁니다
+        issues.append(
+            {
+                "supplyGroupId": None,
+                "code": PRICE_TABLE_UNREAD,
+                "description": f"가격표 {', '.join(unread[:4])}에 행마다 어느 주택형·대상의 금액인지 정할 칸이 없어(예: 소득 구간별 임대조건) "
+                "가격을 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
+            }
+        )
     for group in groups:
         _merge_payment_parts(group)
         for price in group["prices"]:
@@ -1221,15 +1239,23 @@ def _merge_payment_parts(group: dict[str, Any]) -> bool:
     return moved
 
 
+# 한 행이 같은 번호의 주택형 여럿을 함께 적은 표기(「19A/B/C」「26A·B」)
+SHARED_TYPES = re.compile(r"(\d+)([A-Za-z][A-Za-z0-9]*)((?:\s*[/·ㆍ,]\s*[A-Za-z][A-Za-z0-9]*)+)")
+TYPE_SEPARATOR = re.compile(r"\s*[/·ㆍ,]\s*")
+
+
 def _type_names(group: dict[str, Any]) -> set[str]:
     """주택형 이름들: 코드가 칸 둘을 이어 쓴 것(「24 24ABC」 = 공급형 + 청약 구분)이면 글자가 든 낱말(「24ABC」)도 따로 봅니다.
     앞의 공급형 숫자를 뗀 나머지도 공백·쉼표를 빼고 봅니다. 공급표 「35 35A1,B1」과 가격표 「35A1, B1」은 같은 주택형인데
-    낱말로만 나누면 「35A1,B1」과 「35A1,」·「B1」이 되어 짝이 안 맞았음(2026-10-28 GH 행복주택 파주 병원 복합)."""
+    낱말로만 나누면 「35A1,B1」과 「35A1,」·「B1」이 되어 짝이 안 맞았음(2026-10-28 GH 행복주택 파주 병원 복합).
+    「19A/B/C」처럼 여럿을 함께 적은 표기는 각 주택형(19A·19B·19C)으로도 봅니다(2026-11-07 23건 대조 umca-4439: 가격 행 「19A/B/C」가
+    19A·19B·19C 모집 묶음에 붙지 않고 따로 남아 가격 48개가 빠짐)."""
     raw = str(group.get("housingTypeCode") or "")
     words = raw.split()
     lettered = {w.upper() for w in words if re.search(r"[A-Za-z]", w)}
     rest = _norm(" ".join(words[1:])).upper() if len(words) > 1 and re.fullmatch(r"\d+", words[0]) else ""
-    return {_norm(raw).upper(), *lettered, rest} - {""}
+    shared = {f"{match[1]}{suffix}".upper() for match in SHARED_TYPES.finditer(raw) for suffix in [match[2], *TYPE_SEPARATOR.split(match[3].strip(" /·ㆍ,"))]}
+    return {_norm(raw).upper(), *lettered, rest, *shared} - {""}
 
 
 def _same_type(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -1239,7 +1265,9 @@ def _same_type(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 def _housing_number(group: dict[str, Any]) -> float | None:
     for text in (group.get("housingTypeCode"), group.get("unitLabel")):
-        found = HOUSING_NUMBER.findall(text or "")
+        # 소수점 뒤에 공백이 낀 번호(PDF 글자 사이 공백)는 한 숫자입니다(2026-11-07 23건 대조 jbdc-16011: 모집 표 「059. 9288 A」가 59로 읽혀
+        # 가격표 「059.9288A」(59.9288) 행이 모집 묶음에 붙지 않음)
+        found = HOUSING_NUMBER.findall(SPLIT_DECIMAL.sub(r"\1.\2", text or ""))
         if found:
             return float(found[0])  # 「0039 (복층형)」「39㎡」「39 (일반형)」 → 39
     return group.get("exclusiveAreaSqm")
@@ -1357,11 +1385,14 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 CLASS_NOTE = re.compile(r"\([^)]*\)")
+# 같은 계층 안의 소득 유무 구분. 괄호 없이 칸을 나눠 적으면(「청 년」|「소득 有」) 대상이 「청 년 소득 有」로 이어져 계층 이름에 붙음
+# (2026-11-07 23건 대조 umca-4439: 모집 표 「청년」과 맞지 않아 「19A/B/C」 가격 16개가 모집 묶음에 붙지 않음)
+INCOME_PRESENCE = re.compile(r"소득\s*[有無]")
 
 
 def _class_words(name: str) -> set[str]:
-    """계층 이름의 낱말. 괄호 설명은 빼고 「·」「,」「/」로 나눕니다: 「대학생· 청년(소득無)」 → {대학생, 청년}."""
-    return {_norm(w) for w in re.split(r"[·․ㆍ・‧,/]", CLASS_NOTE.sub("", name)) if _norm(w)}
+    """계층 이름의 낱말. 괄호 설명·소득 유무 구분은 빼고 「·」「,」「/」로 나눕니다: 「대학생· 청년(소득無)」 → {대학생, 청년}."""
+    return {_norm(w) for w in re.split(r"[·․ㆍ・‧,/]", INCOME_PRESENCE.sub("", CLASS_NOTE.sub("", name))) if _norm(w)}
 
 
 def _classes_match(a: set[str], b: set[str]) -> bool:
