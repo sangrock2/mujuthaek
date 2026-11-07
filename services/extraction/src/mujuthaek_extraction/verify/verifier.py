@@ -61,6 +61,9 @@ NOTE_CODES = {
     # 원문 서류 표 행을 어느 서류도 인용하지 않음(consistency, 2026-10-23). 빠진 값이지 틀린 값이 아니라 표시만 하고,
     # AI 재확인에는 보냅니다(recheck.RECHECK_NOTE_CODES: 서류 섹션 전체를 다시 읽어 빠진 서류만 더함)
     "DOCUMENT_OMISSION_SUSPECTED",
+    # 원문 자격 기준표 행의 기준값(소득 %·자산 금액)을 어느 자격 조건·예외도 쓰지 않음(consistency, 2026-11-07). 빠진 값이라 표시만 하고,
+    # V2 자격 담당에게는 「확인할 것」으로 알립니다(담당 검증 결과는 이 메모도 보여 줌)
+    "CRITERIA_TABLE_OMISSION_SUSPECTED",
     # V9 비교 방향 대조(OPERATOR_MISMATCH)는 넣지 않습니다: 자격 항목에만 걸리고, 방향이 반대면 판정이 뒤집히므로 늘 사람 확인입니다
     # 그림 판독 글자(AI가 옮김)를 근거로 한 공급·일정 등은 표시만. 자격·공고 정보는 EVIDENCE_FROM_IMAGE로 사람 확인
     "IMAGE_TRANSCRIBED_VALUES",

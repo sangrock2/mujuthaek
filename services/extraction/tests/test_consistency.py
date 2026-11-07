@@ -578,3 +578,140 @@ def test_document_omission_is_a_note_that_is_still_rechecked():
     issue = {"code": "DOCUMENT_OMISSION_SUSPECTED", "target": "/quality/coverage/requiredDocuments", "description": "서류 표 행 3개"}
     assert is_note(issue)
     assert "DOCUMENT_OMISSION_SUSPECTED" in RECHECK_NOTE_CODES
+
+
+# 대구도시개발공사 행복주택 「대학생 계층 출생자녀 수에 따른 가산 소득·자산 기준」 표 모양(줄임)
+CRITERIA_TABLE = "\n".join(
+    [
+        "《 대학생 계층 출생자녀 수에 따른 가산 소득·자산 기준 》",
+        "[표 7-2]",
+        "  [열 제목] 1. 구분 | 2. 가구원 수 | 3. 출생자녀 수 (태아포함) | 4. 최종 소득 · 자산기준 › 적용 소득기준 | "
+        "5. 최종 소득 · 자산기준 › 적용 자산기준 › 총자산가액",
+        "| 구분 | 가구원 수 | 출생자녀 수 (태아포함) | 최종 소득 · 자산기준 |  |",
+        "|  |  |  | 적용 소득기준 | 총자산가액 |",
+        "| 대학생 | 1인 | 0인 | 120% | 108,000,000원 |",
+        "  ↳ 대학생 1인 0인 — 적용 소득기준 120% · 총자산가액 108,000,000원",
+        "|  | 2인 | 0인 | 110% | 108,000,000원 |",
+        "  ↳ 대학생 2인 0인 — 적용 소득기준 110% · 총자산가액 108,000,000원",
+        "|  |  | 1인 | 120% | 119,000,000원 |",
+        "  ↳ 대학생 2인 1인 — 적용 소득기준 120% · 총자산가액 119,000,000원",
+        "|  | 3인 이상 | 0인 | 100% | 108,000,000원 |",
+        "  ↳ 대학생 3인 이상 0인 — 적용 소득기준 100% · 총자산가액 108,000,000원",
+        "|  |  | 2인 이상 | 120% | 130,000,000원 |",
+        "  ↳ 대학생 3인 이상 2인 이상 — 적용 소득기준 120% · 총자산가액 130,000,000원",
+    ]
+)
+
+
+def limit(attribute, value, unit):
+    return {"kind": "ATOMIC", "attribute": attribute, "operator": "LTE", "value": value, "unit": unit, "evidenceIds": []}
+
+
+def criterion(category, attribute, value, unit, *replaced, groups=("대학생",)):
+    """기본 기준 조건식과, 값만 바꾸는 예외(발동 조건은 글로만)."""
+    exceptions = [{"when": {"status": "UNSTRUCTURED", "expression": None}, "effectExpression": limit(attribute, v, unit)} for v in replaced]
+    rule = {"status": "STRUCTURED", "expression": limit(attribute, value, unit)}
+    return {"category": category, "rule": rule, "scope": scope(*groups), "evidenceIds": [], "exceptions": exceptions}
+
+
+def criteria_omission(text, eligibility):
+    found = check_consistency(candidate(text=text, eligibility=eligibility), SourceBundle(texts={"pdf-text": text}))
+    flagged = [f for f in found if f.code == "CRITERIA_TABLE_OMISSION_SUSPECTED"]
+    return flagged[0] if flagged else None
+
+
+def test_criteria_table_rows_whose_values_no_condition_uses_are_noted():
+    # 2026-11-07 23건 원인 분석(dudc-8934): 출생자녀 가산 행의 총자산 기준을 예외로 넣지 않아 V1·V2가 함께 놓쳤는데 잡는 검사가 없었음
+    text = TABLE + "\n" + CRITERIA_TABLE
+    income = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 120, 110)
+    assets = criterion("ASSETS", "TOTAL_ASSETS_KRW", 108_000_000, "KRW")
+    finding = criteria_omission(text, [income, assets])
+    assert finding.target == "/quality/coverage/eligibility" and is_note(finding.issue())
+    assert "2행의 기준값 119,000,000원, 130,000,000원" in finding.description and "「대학생 2인 1인 — 적용 소득기준 120%" in finding.description
+    # 가산 행을 예외로 넣었으면 다룬 것입니다
+    full = criterion("ASSETS", "TOTAL_ASSETS_KRW", 108_000_000, "KRW", 119_000_000, 130_000_000)
+    assert criteria_omission(text, [income, full]) is None
+
+
+def test_asset_amounts_take_their_unit_from_the_column_title():
+    # bmc-72: 금액 칸에 단위가 없고 열 제목 「적용 자산기준금액(원)」에 있음. 재조립한 초안이 자산 조건을 통째로 뺐는데 비율만 보면 못 잡음
+    text = "\n".join(
+        [
+            "[표 8-1]",
+            "  [열 제목] 1. 입주자격구분 | 2. 우대항목 › 가구원수 | 3. 최종 소득,자산기준 (한도) › 적용 소득기준 | "
+            "4. 최종 소득,자산기준 (한도) › 적용 자산기준금액(원) › 총자산가액",
+            "| 나. 국가유공자 등 | 1인 | 90% | 237,000,000 |",
+            "|  | 2인 | 90% | 261,000,000 |",
+            "|  | 3인 이상 | 90% | 285,000,000 |",
+        ]
+    )
+    income = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 90, "PERCENT")
+    finding = criteria_omission(TABLE + "\n" + text, [income, criterion("ASSETS", "TOTAL_ASSETS_KRW", 237_000_000, "KRW")])
+    assert "2행의 기준값 261,000,000, 285,000,000" in finding.description
+    assert criteria_omission(TABLE + "\n" + text, [income, criterion("ASSETS", "TOTAL_ASSETS_KRW", 237_000_000, "KRW", 261_000_000, 285_000_000)]) is None
+
+
+# 전북개발공사 분양 공고 「<표3> 전년도 도시근로자 가구원수별 가구당 월평균소득 기준」 모양(공급유형 × 공급방식 × 외벌이·맞벌이, 줄임)
+MATRIX_TABLE = "\n".join(
+    [
+        "(표3) 전년도 도시근로자 가구원수별 가구당 월평균소득 기준 (단위 : 원)",
+        "[표 10-1]",
+        "  [열 제목] 1. 공급유형 | 2. 공급유형 | 3. 구분 | 4. 1인 | 5. 2인",
+        "| 공급유형 |  | 구분 | 1인 | 2인 |",
+        "| 일반 공급 | 우선공급 (30%) | 도시근로자 가구원수별 가구당 월평균소득액의 100% | 4,576,036 | 6,452,897 |",
+        "  ↳ 일반 공급 우선공급 (30%) 도시근로자 가구원수별 가구당 월평균소득액의 100% — 1인 4,576,036 · 2인 6,452,897",
+        "|  |  | 도시근로자 가구원수별 가구당 월평균소득액의 140% (본인 및 배우자가 모두 소득이 있는 경우) |  | 8,799,405 |",
+        "  ↳ 일반 공급 우선공급 (30%) 도시근로자 가구원수별 가구당 월평균소득액의 140% (본인 및 배우자가 모두 소득이 있는 경우) — 2인 8,799,405",
+        "| 다자녀 가구 특별 공급 | 우선공급(90%) | 도시근로자 가구원수별 가구당 월평균소득액의 120% |  | 9,802,115 |",
+        "  ↳ 다자녀 가구 특별 공급 우선공급(90%) 도시근로자 가구원수별 가구당 월평균소득액의 120% — 2인 9,802,115",
+        "|  |  | 도시근로자 가구원수별 가구당 월평균소득액의 130% (본인 및 배우자가 모두 소득이 있는 경우) |  | 10,618,958 |",
+        "  ↳ 다자녀 가구 특별 공급 우선공급(90%) 도시근로자 가구원수별 가구당 월평균소득액의 130% (본인 및 배우자가 모두 소득이 있는 경우) — 2인 10,618,958",
+    ]
+)
+
+
+def test_rows_of_a_supply_type_matrix_left_out_are_noted_but_rows_left_as_text_count():
+    # jbdc-16011(V1): 공급유형×공급방식×맞벌이 소득표에서 다자녀 행만 옮김. 공급 물량 몫 「(30%)」은 소득 기준이 아닙니다
+    text = TABLE + "\n" + MATRIX_TABLE
+    many = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT", 130, groups=("다자녀가구 특별공급 우선공급",))
+    finding = criteria_omission(text, [many])
+    assert "2행의 기준값 100%, 140%" in finding.description and "30%" not in finding.description.split("「")[0]
+    # 조건식 없이 글로만 남긴 조건의 원문에 그 비율이 있으면 다룬 것으로 칩니다(조건식 없음은 CRITERION_NOT_STRUCTURED가 따로 봄)
+    loose = {"category": "INCOME", "rule": {"status": "UNSTRUCTURED", "expression": None}, "scope": scope("일반공급 우선공급"), "evidenceIds": []}
+    loose["originalText"] = "월평균소득의 100% 이하인 자(본인 및 배우자가 모두 소득이 있는 경우 140%)"
+    assert criteria_omission(text, [many, loose]) is None
+
+
+def test_reference_rent_prose_and_schedule_tables_are_not_criteria_tables():
+    tables = "\n".join(
+        [
+            # 단계별 참고 소득표: 대상 칸이 하나뿐
+            "[표 11-2]",
+            "  [열 제목] 1. 구분 | 2. 소득기준 | 3. 1인 | 4. 2인",
+            "| 구분 | 소득기준 | 1인 | 2인 |",
+            "| 도시근로자 월평균소득 | 80% | 3,050,690 | 4,693,016 |",
+            "|  | 90% | 3,432,027 | 5,279,643 |",
+            "",
+            # 소득 구간별 임대조건
+            "[표 12-1]",
+            "  [열 제목] 1. 소득 구간 | 2. 임대보증금 | 3. 월임대료",
+            "| 소득 50% 이하 | 10,000,000 | 100,000 |",
+            "| 소득 70% 이하 | 12,000,000 | 120,000 |",
+            "",
+            # 문단을 칸에 담은 표(bmc-71)
+            "[표 6-1]",
+            "| 구분 | 소득 및 자산보유 기준 |",
+            "| 소득 | 2024년도 도시근로자 가구원수별 가구당 월평균 소득(원) 가구원수 70% 80% 90% 참고사항 1인 2,518,715 2,878,531 "
+            "3,238,348 2인 3,833,902 4,381,602 4,929,303 (1인 20%, 2인 10% 가산) |",
+            "| 자산 | 세대 구성원 전원이 보유한 총자산의 합산 금액이 3억 3,700만원 이하일 것 ※ 총자산: 부동산, 자동차, 금융자산, "
+            "일반 자산을 합산한 금액에서 부채를 차감한 금액(소득 50% 이하 가구 포함) |",
+            "",
+            # 접수 일정(gh-808)
+            "[표 4-1]",
+            "| 신청자격 | 신청접수 |",
+            "| 진건B1블록 월평균소득100%이하 1순위 | ‘26.8.24.(월) 10:00~18:00 |",
+            "| 진건B1블록 월평균소득100%이하 2·3순위 | ‘26.8.25.(화) 10:00~18:00 |",
+        ]
+    )
+    income = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT")
+    assert criteria_omission(TABLE + "\n" + tables, [income]) is None

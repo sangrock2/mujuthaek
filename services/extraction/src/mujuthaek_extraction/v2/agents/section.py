@@ -44,6 +44,8 @@ from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, NOTE_CODES
 log = logging.getLogger(__name__)
 
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
+# 호출 상한 미들웨어(ModelCallLimitMiddleware, exit_behavior="end")가 상한에서 대화를 끝내며 붙이는 답의 머리
+CALL_LIMIT_MESSAGE = "Model call limits exceeded"
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
 PRIME = "prime"
 PRIME_OUTPUT_TOKENS = 512
@@ -94,6 +96,13 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         stopped = f"{type(error).__name__}: {error}"[:300]
         context.usage.append({"agent": spec.name, "stopped": stopped})
         log.exception("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name})
+    messages = last.get("messages") or []
+    limited = bool(messages) and isinstance(messages[-1], AIMessage) and str(messages[-1].content).startswith(CALL_LIMIT_MESSAGE)
+    if stopped is None and limited and not draft.finished:  # 마지막 호출에서 끝내기까지 불렀으면 상한에 닿았어도 끝낸 것
+        stopped = f"모델 호출 상한({MAX_MODEL_CALLS}번)"
+        context.usage.append({"agent": spec.name, "stopped": stopped})
+    if stopped is not None and not draft.finished:
+        _mark_unfinished(draft, spec.sections, stopped)
     resolver: dict[str, Any] = {}
     if stopped is None and os.getenv(RESOLVER_ENV, "").lower() == "true":
         resolved, resolver = _resolve(spec, draft, state, rt, documents, chat, context.usage)
@@ -112,6 +121,16 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         },
     }
     return parts_of(spec, draft, document, documents), context.usage, trace
+
+
+def _mark_unfinished(draft: SectionDraft, sections: tuple[str, ...], why: str) -> None:
+    """끝내기 전에 멈춘 담당(호출 상한·예산·모델 오류)의 섹션: 넣은 항목은 두고 범위를 PARTIAL로 적어 섹션을 사람 확인으로 보냅니다.
+    담당이 범위를 적지 않으면 항목이 있는 섹션은 「다 넣음(EXTRACTED)」이 되어, 넣던 중에 끊긴 항목이 빠진 채 게시됐습니다
+    (2026-11-07 유료 확인 dudc-8934: 기준표 가산 행을 예외로 넣다 8번째 호출에서 끊겨 고령자 총자산·자동차 등 13개 항목이 빠짐).
+    담당이 PARTIAL·FAILED로 직접 적었으면 그 이유를 두고, 항목이 없는 섹션은 parts_of가 FAILED로 적습니다."""
+    for section in sections:
+        if draft.items.get(section) and (draft.coverage.get(section) or {}).get("status") not in ("PARTIAL", "FAILED"):
+            draft.coverage[section] = {"status": "PARTIAL", "reason": f"담당이 끝내기 전에 멈췄어요({why}). 넣지 못한 항목이 있을 수 있어요."}
 
 
 def _resolve(

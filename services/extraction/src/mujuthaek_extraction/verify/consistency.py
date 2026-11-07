@@ -7,7 +7,8 @@ V6 표 위치 대조: 값이 원문에 "있는지"(V2·V3)가 아니라 "제자�
 V7 앞뒤 일관성: 일정 순서(공고 ≤ 접수 시작 ≤ 당첨 발표 ≤ 계약 ≤ 입주, 시작 ≤ 끝), 값의 정상 범위(금액·면적·나이·소득 비율),
     월임대료가 보증금보다 큰 가격안, 주택형별 모집 수 합과 공고 전체 모집 수, 낱말 정의로 만든 자격 조건의 대상(2026-11-06).
 V8 누락 탐지: AI가 "다 뽑았다(EXTRACTED)"고 한 섹션이 비었는데 원문에 그 절 제목이 있는 경우, 배점표가 있는데 가점 행이 없는 경우,
-    첨부 엑셀 주택 목록의 행 수보다 위치·공급 묶음이 크게 적은 경우, 원문 서류 표의 행을 어느 서류도 인용하지 않은 경우(2026-10-23).
+    첨부 엑셀 주택 목록의 행 수보다 위치·공급 묶음이 크게 적은 경우, 원문 서류 표의 행을 어느 서류도 인용하지 않은 경우(2026-10-23),
+    원문 자격 기준표 행의 기준값을 어느 자격 조건·예외도 쓰지 않은 경우(2026-11-07).
 모두 사람 확인 후보(의심)이며, 판정에 쓰는 섹션(공고·자격)이 아니면 화면 표시 메모로 갑니다(verifier.NOTE_CODES).
 """
 
@@ -18,7 +19,9 @@ from datetime import date
 from typing import Any
 
 from mujuthaek_extraction.assemble.quotes import normalize
+from mujuthaek_extraction.assemble.values import to_krw
 from mujuthaek_extraction.intake.pdf_reader import image_pages
+from mujuthaek_extraction.verify.exceptions import AMOUNT
 from mujuthaek_extraction.verify.model import Finding, SourceBundle
 
 IMAGE_BLOCK_HEAD = "=== 그림 판독 "  # image_reading.BLOCK_HEAD와 같음 (검증 모듈이 추출 모듈을 가져오지 않도록 따로 둡니다)
@@ -1001,6 +1004,171 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
         find("V8", DOCUMENT_OMISSION, "/quality/coverage/requiredDocuments", " ".join(parts))
 
 
+# ---- V8 자격 기준표 행 누락 (2026-11-07) ----
+# 23건 원인 분석: 계층×가구원 수×출생자녀 수 가산 소득·자산 기준표(dudc-8934·dcco-24804), 공급유형×공급방식×맞벌이 여부 소득표(jbdc-16011)의
+# 행 일부를 자격 조건으로 옮기지 않았는데 잡는 검사가 없었음(V1·V2가 함께 놓친 자격 값 40개). 기준표 행의 기준값(소득 %·자산 금액)을
+# 어느 자격 조건·예외·선정 조건식도 쓰지 않으면 빠진 행으로 셉니다.
+# 기준표: 소득 % 칸(칸이나 열 제목에 「소득」)이나 자산 금액 칸(열 제목 마지막 단계에 자산·자동차)이 두 행 이상이고, 대상 칸(계층·공급유형·
+# 가구원 수·자녀 수)이 행마다 바뀌는 표. 단계별 참고 소득표(「80% | 3,050,690 | …」)는 대상 칸이 하나뿐이라 빠지고, 임대조건·할증·배점·
+# 신청서·일정 표는 낱말로 뺍니다. 글로만 남긴 조건의 원문에 있는 값은 다룬 것으로 칩니다(조건식 없음은 CRITERION_NOT_STRUCTURED가 봄).
+# 23건 저장 결과에서 걸린 공고는 V1 bmc-106·dcco-24804·dudc-8934·jbdc-16011, V2 dcco-24804·dudc-8934(+ 다시 산 초안의 bmc-72)이고
+# 모두 실제 누락(잘못 잡은 것 없음). 빠진 값이지 틀린 값이 아니라 서류 표 행 누락처럼 화면 메모로 두고(verifier.NOTE_CODES),
+# V2 자격 담당에게는 「확인할 것」으로 알립니다
+CRITERIA_OMISSION = "CRITERIA_TABLE_OMISSION_SUSPECTED"
+CRITERIA_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(서류 표 행 누락과 같음)
+CRITERIA_PERCENT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:%|퍼센트)")
+INCOME_WORD = re.compile(r"소\s*득")
+ASSET_WORD = re.compile(r"자\s*산|자\s*동\s*차|차\s*량|부\s*동\s*산")
+LETTER = re.compile(r"[가-힣A-Za-z]")
+# 기준표가 아닌 표: 임대조건·전환·할증(재계약) 표, 배점표, 공급신청서 양식. 열 제목·첫 행들·표 위 세 줄에서 찾습니다.
+# 「공급 가」로 줄이면 「특별공급 가점항목」에 걸리므로 공급가격·공급가액만 씁니다
+NOT_CRITERIA_TABLE = re.compile(
+    r"보증금|임대료|월\s*세|분양\s*가|계약금|잔금|중도금|전환|관리비|임대\s*조건|공급\s*가[격액]|신청서|접수\s*번호|서식|양식|배\s*점|점\s*수|가\s*점|재계약|갱신|할증"
+)
+# 일정 표(접수 시각·요일). 「’23년 3월 28일 이후 출생」 같은 자격 문구의 날짜, 「기준 중위소득 (월)」의 월은 일정이 아닙니다
+SCHEDULE_CELL = re.compile(r"\d{1,2}\s*:\s*\d{2}|\d\s*\.?\s*\((?:월|화|수|목|금|토|일)\)")
+CRITERIA_CAPTION_LINES = 3
+# 기준값 칸의 최대 길이. 문단을 통째로 담은 칸(bmc-71 「소득 | 2024년도 … 70% 80% 90% … 1인 20%, 2인 10%」)의 비율은 기준표 값이 아닙니다.
+# 가장 긴 기준값 칸은 「도시근로자 가구원수별 가구당 월평균소득액의 140% (본인 및 배우자가 모두 소득이 있는 경우)」(jbdc-16011) 정도
+CRITERIA_CELL_CHARS = 80
+# 금액 칸에 단위가 없으면 열 제목의 단위(「적용 자산기준금액(원) › 총자산가액 | 237,000,000」, bmc-72)로 읽습니다
+TITLE_UNIT = re.compile(r"\(\s*(천원|만원|원)\s*\)")
+
+
+def _criteria_titles(block: list[str]) -> list[str]:
+    """표의 열 제목: 구조 방식이면 열 제목 줄, 아니면 기준값 칸이 나오기 전 머리글 행들을 열마다 이은 것."""
+    title = next((line for line in block if line.startswith(TITLE_LINE)), None)
+    if title:
+        return [TITLE_NUMBER.sub("", cell) for cell in _cells(title[len(TITLE_LINE) :])]
+    headers = []
+    for line in [line for line in block if _row_line(line)][:3]:
+        cells = _cells(line)
+        if any(NUMERIC_CELL.fullmatch(cell) or CRITERIA_PERCENT.search(cell) for cell in cells):
+            break
+        headers.append(cells)
+    return [_column_header(headers, c) for c in range(max(map(len, headers), default=0))]
+
+
+def _criteria_values(cells: list[str], titles: list[str]) -> list[tuple[str, float, str]]:
+    """행의 기준값 (PERCENT·KRW, 값, 원문 표기): 소득 %는 칸이나 열 제목에 「소득」이 있을 때(「○○% 초과」 구간 칸 제외),
+    자산 금액은 열 제목 마지막 단계(「최종 소득 · 자산기준 › 적용 자산기준 › 총자산가액」의 「총자산가액」)에 자산·자동차가 있을 때."""
+    found = []
+    for c, cell in enumerate(cells):
+        if len(cell) > CRITERIA_CELL_CHARS:
+            continue
+        title = titles[c] if c < len(titles) else ""
+        leaf = title.split("›")[-1]
+        leaf = leaf if INCOME_WORD.search(leaf) or ASSET_WORD.search(leaf) else title
+        if CRITERIA_PERCENT.search(cell) and (INCOME_WORD.search(cell) or INCOME_WORD.search(title)) and "초과" not in cell:
+            found += [("PERCENT", float(m[1]), m[0]) for m in CRITERIA_PERCENT.finditer(cell)]
+        elif ASSET_WORD.search(leaf) and not INCOME_WORD.search(leaf):
+            unit = TITLE_UNIT.search(title)
+            amounts = [(m[0], None) for m in AMOUNT.finditer(cell)] or [(m[0], unit[1]) for m in AMOUNT_CELL.finditer(cell) if unit]
+            for raw, scale in amounts:
+                krw = to_krw(re.sub(r"\s", "", raw), scale).amount_krw
+                if krw:
+                    found.append(("KRW", float(krw), raw))
+    return found
+
+
+def _varies(labels: list[list[str]]) -> bool:
+    """대상 칸 가운데 행마다 값이 바뀌는 열이 있는지. 병합 칸은 빈칸으로 읽히므로 위 행 값을 이어받습니다."""
+    for c in range(max(map(len, labels), default=0)):
+        seen, last = set(), ""
+        for row in labels:
+            last = (row[c] if c < len(row) else "") or last
+            if last:
+                seen.add(last)
+        if len(seen) >= 2:
+            return True
+    return False
+
+
+def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
+    """원문 자격 기준표의 행 → (보여 줄 행 글, 기준값들). 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다."""
+    lines = text.split(SHEET_START, 1)[0].split("\n")
+    found = []
+    i = 0
+    while i < len(lines):
+        if not _in_table(lines[i]) or (i > 0 and _in_table(lines[i - 1])):
+            i += 1
+            continue
+        start = i
+        while i < len(lines) and _in_table(lines[i]):
+            i += 1
+        block = lines[start:i]
+        rows = [n for n, line in enumerate(block) if _row_line(line)]
+        if any(SCHEDULE_CELL.search(block[n]) for n in rows):
+            continue
+        titles = _criteria_titles(block)
+        above: list[str] = []  # 표 위 글 줄(바로 위가 다른 표면 그 표의 행은 넣지 않음)
+        for line in reversed(lines[:start]):
+            if _in_table(line) or len(above) == CRITERIA_CAPTION_LINES:
+                break
+            if line.strip() and not PAGE_MARK.match(line):
+                above.append(line)
+        if NOT_CRITERIA_TABLE.search(" ".join([*titles, *block[:3], *above])):
+            continue
+        data, labels = [], []
+        for n in rows:
+            cells = _cells(block[n])
+            values = _criteria_values(cells, titles)
+            if not values:
+                continue
+            aid = block[n + 1][len(AID_LINE) :] if n + 1 < len(block) and block[n + 1].startswith(AID_LINE) else None
+            data.append((aid or " ".join(cell for cell in cells if cell), values))
+            labels.append([cell if LETTER.search(cell) and not any(raw in cell for _, _, raw in values) else "" for cell in cells])
+        if len(data) >= 2 and _varies(labels):
+            found += data
+    return found
+
+
+def _used_criteria(candidate: dict[str, Any]) -> tuple[set[float], set[float]]:
+    """(비율, 금액): 자격 조건·예외(발동 조건·바뀐 기준)·선정 조건식의 값과, 글로만 남긴 자격 조건 원문에 적힌 소득 %·금액."""
+    percents: set[float] = set()
+    amounts: set[float] = set()
+    expressions = [(rule.get("rule") or {}).get("expression") for rule in candidate["selectionRules"]]
+    for item in candidate["eligibility"]:
+        expressions.append(item["rule"].get("expression"))
+        for exception in item.get("exceptions") or []:
+            expressions += [(exception.get("when") or {}).get("expression"), exception.get("effectExpression")]
+        if item["rule"].get("status") != "STRUCTURED":
+            text = item.get("originalText") or ""
+            percents |= {float(m[1]) for m in CRITERIA_PERCENT.finditer(text)}
+            amounts |= {float(krw) for krw in (to_krw(re.sub(r"\s", "", m[0]), None).amount_krw for m in AMOUNT.finditer(text)) if krw}
+    for expression in expressions:
+        for _, atom in _atoms(expression, ""):
+            values = atom.get("value") if isinstance(atom.get("value"), list) else [atom.get("value")]
+            for value in values:
+                if isinstance(value, int | float) and not isinstance(value, bool):
+                    if atom.get("unit") == "PERCENT":
+                        percents.add(float(value))
+                    elif atom.get("unit") == "KRW":
+                        amounts.add(float(value))
+    return percents, amounts
+
+
+def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
+    if not candidate["eligibility"]:
+        return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
+    percents, amounts = _used_criteria(candidate)
+    missed = []
+    for shown, values in _criteria_rows("\n".join(sources.texts.values())):
+        gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
+        if gone:
+            missed.append((shown, gone))
+    if len(missed) < CRITERIA_OMISSION_MIN_ROWS:
+        return
+    values = list(dict.fromkeys(raw for _, gone in missed for raw in gone))
+    rows = ", ".join(f"「{shown[:70]}」" for shown, _ in missed[:2])
+    # V2 담당에게는 설명 앞 220자만 가므로 빠진 값과 첫 행을 앞에 둡니다
+    description = (
+        f"원문 자격 기준표 {len(missed)}행의 기준값 {', '.join(values[:4])}{' 등' if len(values) > 4 else ''}을 쓰는 자격 조건·예외가 없습니다"
+        f"(빠진 기준 의심): {rows}{' …' if len(missed) > 2 else ''}"
+    )
+    find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
+
+
 def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[Finding]:
     """정답표 없이 원문과 결과만으로 하는 V6·V7·V8 검사를 모두 돌려 결과를 돌려줍니다."""
     findings: list[Finding] = []
@@ -1017,6 +1185,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
+    _check_criteria_rows(candidate, sources, find)
     _check_image_content(candidate, sources, find)
     _check_image_evidence(candidate, sources, find)
     _check_notice_document(candidate, find)
