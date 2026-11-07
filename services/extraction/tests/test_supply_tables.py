@@ -13,6 +13,7 @@ from mujuthaek_extraction.extract import run_extraction
 from mujuthaek_extraction.intake import InMemorySourceReader, build_intake
 from mujuthaek_extraction.model import RecordedModel
 from mujuthaek_extraction.rules.housing_notice import RULES
+from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES, is_note
 
 
 def column(n, meaning, ck=None, pk=None, unit=None, plan=None, stage=None, group=None):
@@ -354,6 +355,97 @@ def test_price_rows_named_only_by_complex_attach_to_the_one_count_group_of_that_
     offered = [g for g in groups if g["counts"]]
     assert [len(g["prices"]) for g in offered] == [0, 0, 2]  # 동삼2는 주택형이 둘이라 붙이지 않음(다대4만 붙음)
     assert [g["_complex"] for g in groups if not g["counts"]] == ["동삼2"]
+
+
+def test_price_row_listing_several_types_or_with_split_decimal_attaches_to_its_count_groups():
+    # 2026-11-07 23건 대조: umca-4439 가격 행 「19A/B/C」가 19A·19B·19C 모집 묶음에 붙지 않고 따로 남아 가격 48개가 빠졌고,
+    # jbdc-16011 모집 표 「059. 9288 A」(PDF 글자 사이 공백)가 59로 읽혀 가격표 「059.9288A」 행이 모집 묶음에 붙지 않음
+    def build(count_types, price_type):
+        count_rows = (("주택형", "모집"), *((t, "10") for t in count_types))
+        lease_rows = (("주택형", "임대보증금(원)", "월임대료(원)"), (price_type, "25,120,000", "140,000"))
+        tables = [st.Table("1-1", 1, "", count_rows[0], count_rows, None), st.Table("2-1", 2, "", lease_rows[0], lease_rows, None)]
+        prices = [column(2, "PRICE", pk="DEPOSIT", unit="원"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원")]
+        mapping = {
+            "tables": [
+                {
+                    "table": "1-1",
+                    "role": "SUPPLY",
+                    "rowUnit": "HOUSING_TYPE",
+                    "complex": None,
+                    "columns": [column(1, "HOUSING_TYPE"), column(2, "COUNT", ck="OFFERED")],
+                },
+                {"table": "2-1", "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": [column(1, "HOUSING_TYPE"), *prices]},
+            ]
+        }
+        return [(g["housingTypeCode"], len(g["prices"])) for g in st.build_part(tables, mapping, "pdf-text")["supplyGroups"]]
+
+    assert build(("19A", "19B", "19C", "26A"), "19A/B/C") == [("19A", 2), ("19B", 2), ("19C", 2), ("26A", 0)]
+    assert build(("19A", "19B", "19C"), "19A·B") == [("19A", 2), ("19B", 2), ("19C", 0)]
+    assert build(("059. 9288 A",), "059.9288A") == [("059. 9288 A", 2)]
+
+
+def test_income_presence_in_its_own_column_is_a_qualifier_not_a_class():
+    # 2026-11-07 23건 대조 umca-4439: 모집 표 대상은 「청년」, 가격표는 대상 칸 둘 「청 년」|「소득 有」·「소득 無」라 대상이 「청 년 소득 有」로
+    # 이어져 「청년」과 다른 계층으로 보고 붙이지 않음(괄호로 적은 「청년(소득有)」은 이미 맞춤)
+    count_rows = (("주택형", "계층", "모집"), ("19A", "청년", "6"), ("19B", "청년", "15"))
+    lease_rows = (("주택형", "계층", "소득", "임대보증금(원)"), ("19A/B", "청 년", "소득 有", "25,120,000"), ("", "", "소득 無", "23,720,000"))
+    counts = st.Table("1-1", 1, "", count_rows[0], count_rows, None)
+    lease = st.Table("2-1", 2, "", lease_rows[0], lease_rows, ((0, 1, 2, 3), (4, 5, 6, 7), (4, 5, 8, 9)))
+    mapping = {
+        "tables": [
+            {
+                "table": "1-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "HOUSING_TYPE"), column(2, "TARGET_GROUP"), column(3, "COUNT", ck="OFFERED")],
+            },
+            {
+                "table": "2-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "HOUSING_TYPE"), column(2, "TARGET_GROUP"), column(3, "TARGET_GROUP"), column(4, "PRICE", pk="DEPOSIT", unit="원")],
+            },
+        ]
+    }
+    groups = st.build_part([counts, lease], mapping, "pdf-text")["supplyGroups"]
+    assert [(g["housingTypeCode"], g["scope"]["targetGroups"], sorted(p["sourceAmount"] for p in g["prices"])) for g in groups] == [
+        ("19A", ["청년"], ["23,720,000", "25,120,000"]),
+        ("19B", ["청년"], ["23,720,000", "25,120,000"]),
+    ]
+    assert not st._classes_match({"고령자 소득 有"}, {"청년"})
+
+
+def test_price_table_without_row_names_is_reported_instead_of_skipped_silently():
+    # 2026-11-07 23건 대조 bmc-75: 「[39A] 구간별 임대조건」(행 = 소득 구간, 주택형은 표 제목)에 열 해석이 가격 열만 답해 표 4개, 가격 96개가
+    # 표시 없이 빠짐. 읽은 다른 표는 그대로 두고, 읽지 못한 가격표를 공급 섹션 이슈로 남깁니다(메모 + 검수 대기열)
+    count_rows = (("주택형", "모집"), ("39A", "19"))
+    tier_rows = (("구간", "임대보증금(원)", "월임대료(원)"), ("1구간 (~30%)", "16,240,000", "130,700"), ("2구간 (~50%)", "18,560,000", "149,300"))
+    tables = [st.Table("3-1", 3, "", count_rows[0], count_rows, None), st.Table("9-2", 9, "[ 39A ] 구간별 임대조건", tier_rows[0], tier_rows, None)]
+    mapping = {
+        "tables": [
+            {
+                "table": "3-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "HOUSING_TYPE"), column(2, "COUNT", ck="OFFERED")],
+            },
+            {
+                "table": "9-2",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(2, "PRICE", pk="DEPOSIT", unit="원"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원")],
+            },
+        ]
+    }
+    part = st.build_part(tables, mapping, "pdf-text")
+    assert [(g["housingTypeCode"], [c["value"] for c in g["counts"]], g["prices"]) for g in part["supplyGroups"]] == [("39A", [19], [])]
+    [issue] = part[st.ISSUES_KEY]
+    assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-2" in issue["description"]
+    assert is_note({"code": issue["code"], "target": "/supplyGroups"}) and issue["code"] in DROPPED_VALUE_CODES  # 게시 유지, 검수 대기열
 
 
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():

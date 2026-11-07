@@ -381,6 +381,25 @@ def test_cell_with_two_amounts_is_not_read_as_one_number():
     assert to_krw("3억 5천만", "원").amount_krw == 350_000_000  # 단위 글자 사이 공백은 한 금액
 
 
+def test_point_followed_by_three_digits_is_not_guessed():
+    # 실측(2026-11-07 jbdc-16011): 계약금 칸 「18,400.000」(보증금 92,000,000 = 18,400,000 + 잔금 73,600,000)이 18,400원으로 자동 게시됨
+    for amount, unit in (("18,400.000", "원"), ("389.000", "원"), ("12.500", "천원"), ("1.234 억원", None)):
+        result = to_krw(amount, unit)
+        assert result.amount_krw is None and "마침표" in result.reason
+    assert to_krw("1.5", "억원").amount_krw == 150_000_000  # 소수점 한두 자리는 그대로 읽음
+    assert to_krw("2.25", "만원").amount_krw == 22_500
+    assert to_krw("18,400,000", "원").amount_krw == 18_400_000
+
+
+def test_cell_carrying_the_same_unit_as_its_column_uses_the_unit_once():
+    # 실측(2026-11-07 23건 대조 gndc): 열 단위 「만원」인 표의 칸 「100만원」·「7만원」 14개가 해석할 수 없는 표기로 남음
+    assert to_krw("100만원", "만원").amount_krw == 1_000_000
+    assert to_krw("7 만원", "만원").amount_krw == 70_000
+    assert to_krw("1,500천원", "천원").amount_krw == 1_500_000
+    assert to_krw("1,000만", "만원").amount_krw is None  # 칸의 「만」과 열 단위 「만원」이 겹친 것인지 정할 수 없음
+    assert to_krw("1억 2,000만원", "만원").amount_krw is None  # 칸에 다른 단위가 섞임
+
+
 def test_equally_near_candidates_stay_ambiguous():
     # 검토 지적: 앞 항목 근거가 두 후보를 모두 덮어 거리가 둘 다 0이면 「0 <= 0 * 0.5」로 첫 후보를 골랐음
     text = "가점표 보훈대상자 설명 보훈대상자 끝"

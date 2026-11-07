@@ -34,6 +34,8 @@ class AmountResult:
 # 글자만 든 괄호 꼬리말(「(정액)」「(부가세 포함)」). 단위(「(만원)」)·미정 표시는 금액을 바꾸므로 떼지 않습니다
 AMOUNT_NOTE = re.compile(r"\s*\(\s*(?![^)]*(?:원|미정))[가-힣][가-힣\s]{0,9}\)\s*$")
 TWO_AMOUNTS = re.compile(r"\d[\d,.]*\s+\(?[+\-−]?\)?\s*\d")
+# 마침표 뒤 숫자가 꼭 세 자리(「18,400.000」「389.000」)면 자릿수 쉼표를 마침표로 잘못 찍은 것인지 소수점인지 글자만으로 정할 수 없습니다
+POINT_OR_COMMA = re.compile(r"\d\.\d{3}(?!\d)")
 
 
 def _clean(text: str) -> str:
@@ -73,6 +75,10 @@ def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     # (실측 2026-10-18 LH 포항 행복주택: 1,261억 원 보증금이 자동 게시됨). 공백으로 떨어진 숫자가 둘 이상이면 읽지 않습니다
     if TWO_AMOUNTS.search(unicodedata.normalize("NFKC", source_amount)):
         return AmountResult(None, f"금액이 둘 이상 적혀 있습니다: {source_amount!r}")
+    # 실측(2026-11-07 23건 대조, jbdc-16011): 계약금 칸 「18,400.000」(보증금 92,000,000 = 18,400,000 + 잔금 73,600,000)을
+    # 소수점으로 읽어 계약금 18,400원이 자동 게시됨. 어느 쪽인지 짐작하지 않고 검수로 넘깁니다
+    if POINT_OR_COMMA.search("".join(unicodedata.normalize("NFKC", source_amount).split())):
+        return AmountResult(None, f"마침표 뒤 숫자가 세 자리라 자릿수 쉼표의 오타인지 소수점인지 모호합니다: {source_amount!r}")
     # 금액 뒤 괄호 꼬리말(「500 (정액)」「1,000(부가세 포함)」)은 금액의 성격을 말할 뿐이라 떼고 읽습니다(2026-10-24 세 번째 채점:
     # 계약금 「500 (정액)」이 환산되지 않아 화면에 계약금 숫자가 없었음). 꼬리말에 숫자가 있으면 다른 금액일 수 있어 떼지 않습니다
     amount = _clean(AMOUNT_NOTE.sub("", unicodedata.normalize("NFKC", source_amount)))
@@ -80,6 +86,10 @@ def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     # "원/호", "만원/월"처럼 단위 뒤에 붙은 기준(호당·월당)은 금액 환산과 무관해 뗍니다(기준은 billingPeriod·scope로 표현).
     # 실측: 청년 전세임대 지원한도액 "120백만" / "원/호"
     unit = re.sub(r"/[^/]*$", "", unit)
+    # 칸에도 열과 같은 단위가 붙은 금액(「100만원」 + 열 단위 「만원」)은 단위를 한 번만 씁니다(2026-11-07 23건 대조 gndc: 보증금 「100만원」·
+    # 월세 「7만원」 14개가 해석할 수 없는 표기로 남음). 단위를 뗀 나머지가 숫자뿐일 때만: 「1,000만」 + 「만원」처럼 다른 단위가 겹친 것은 그대로 읽지 않습니다
+    if unit in UNIT_SCALES and unit != "원" and amount.endswith(unit) and re.fullmatch(r"[\d.]+", amount[: -len(unit)]):
+        amount = amount[: -len(unit)]
     if amount.endswith("원"):  # "1,000만원"처럼 단위가 금액 칸에 붙은 경우
         amount, unit = amount[:-1], "원" if not unit else unit
     try:
