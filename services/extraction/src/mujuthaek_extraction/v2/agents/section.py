@@ -58,11 +58,16 @@ PRIME_OUTPUT_TOKENS = 512
 # 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
 # 담당이 고칠 수 없는 표시(그림 판독·전환 부호 고침)는 뺌(2026-11-06 네 번째 실행: 세로 글자 표 칸 「청」·「계」 짧은 인용 13개를 세 차례 내내 받음)
 NOT_ADDED = "ITEM_NOT_ADDED"  # 넣을 때 거절되어 아직 초안에 없는 항목(검증 미들웨어의 「고칠 것」)
-# 해결 에이전트(4단계): 담당이 끝낸 뒤 판단 경고가 남은 항목만 새 대화로 다시 봄. 유료 측정 전이라 기본은 꺼짐(true로 켬)
+# 해결 에이전트(4단계): 담당이 끝낸 뒤 판단 경고가 남은 항목만 새 대화로 다시 봄. 기본 켬(false로 끔, 2026-11-08 사용자 결정)
 RESOLVER = "resolver"
 RESOLVER_ENV = "EXTRACTION_V2_RESOLVER"
 RESOLVER_CODES = ("CRITERION_NOT_STRUCTURED", "EXCEPTION_SUSPECTED", "CONTRACT_")
 RESOLVER_CALLS = 4
+# 한꺼번에 도는 해결 담당 수와 출력 한도. 예산은 호출마다 최악 비용(입력 전부·출력 한도 전부)을 미리 잡으므로, 경고 항목을 모두 동시에
+# 자격 출력 한도(3.6만)로 부르면 잡아 둔 금액이 공고 상한에 닿음(2026-11-08 유료 확인 dudc-8934: 12개 중 10개가 시작도 못 함, 아직
+# 돌던 다른 담당도 막을 수 있음). 항목 하나 고치기 출력은 저장 기록 14번 중 최대 1.12만(dudc 표 행 예외), 보통 2천 아래
+RESOLVER_WORKERS = 3
+RESOLVER_OUTPUT_TOKENS = 16_000
 LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "IMAGE_TRANSCRIBED_VALUES",
     "CONVERSION_DIRECTION_CORRECTED",
@@ -111,7 +116,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     if stopped is not None and not draft.finished:
         _mark_unfinished(draft, spec.sections, stopped)
     resolver: dict[str, Any] = {}
-    if stopped is None and os.getenv(RESOLVER_ENV, "").lower() == "true":
+    if stopped is None and resolver_on():
         resolved, resolver = _resolve(spec, draft, state, rt, documents, chat, context.usage)
         draft = resolved or draft
     trace = {
@@ -140,6 +145,11 @@ def _mark_unfinished(draft: SectionDraft, sections: tuple[str, ...], why: str) -
             draft.coverage[section] = {"status": "PARTIAL", "reason": f"담당이 끝내기 전에 멈췄어요({why}). 넣지 못한 항목이 있을 수 있어요."}
 
 
+def resolver_on() -> bool:
+    """해결 담당을 쓸지: 기본 켬, EXTRACTION_V2_RESOLVER=false면 끔."""
+    return os.getenv(RESOLVER_ENV, "true").strip().lower() != "false"
+
+
 def _resolve(
     spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtime, documents: tuple[str, ...], chat: Any, usage: list[dict[str, Any]]
 ) -> tuple[SectionDraft | None, dict[str, Any]]:
@@ -147,8 +157,8 @@ def _resolve(
     고친 초안은 경고가 있던 항목만 바뀌고(빼지 않음) 검증 결과에 새 문제 없이 문제가 줄었을 때만 씁니다(_settled). 모델 호출은 usage에 더합니다.
     2026-11-07 23건 재조립: 남은 검토 이슈 106개 중 53개가 자격의 판단 경고(조건식 없음 31·예외 의심 22)였고, 정답표와 대조하면 대부분
     조건식으로 나타낼 수 있는 기준(「도시근로자 월평균소득 100% 이하」 등, 정답표의 놓친 값)을 담당이 경고를 받고도 첫 판단대로 글로 남긴 것.
-    경고 항목마다 따로 새 대화를 동시에 돌립니다(2026-11-07 3건 표본 dcco-24812: 항목 3개를 한 대화에서 고쳐 첫 차례 출력 8천 토큰·55초,
-    고치기 차례까지 112초가 담당 뒤에 더해짐). 항목마다 고른 결과(_settled)를 합친 초안도 같은 조건을 넘을 때만 씁니다."""
+    경고 항목마다 따로 새 대화를 RESOLVER_WORKERS개씩 동시에 돌립니다(2026-11-07 3건 표본 dcco-24812: 항목 3개를 한 대화에서 고쳐 첫 차례
+    출력 8천 토큰·55초, 고치기 차례까지 112초가 담당 뒤에 더해짐). 항목마다 고른 결과(_settled)를 합친 초안도 같은 조건을 넘을 때만 씁니다."""
     before = _issues(spec, draft, state, rt, documents)
     targets = [issue for issue in before if str(issue.get("code") or "").startswith(RESOLVER_CODES) and issue.get("item")]
     if not targets:
@@ -159,7 +169,7 @@ def _resolve(
         mine = [issue for issue in targets if issue["item"] == item_id]
         return _resolve_item(spec, draft, state, rt, documents, chat, mine, before)
 
-    with ThreadPoolExecutor(max_workers=len(warned)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(warned), RESOLVER_WORKERS)) as pool:
         runs = dict(zip(warned, pool.map(one, warned), strict=True))
     merged = _copy(spec, draft)
     taken = []
@@ -194,7 +204,8 @@ def _resolve_item(
     context = SectionContext(document=document, budget=rt.models.budget, draft=trial, documents=documents)
     context.check = lambda: _issues(spec, trial, state, rt, documents)
     limit = ModelCallLimitMiddleware(run_limit=RESOLVER_CALLS, exit_behavior="end")
-    agent = _agent(chat(RESOLVER, max_output_tokens=spec.max_output_tokens), RESOLVER, state, documents, [limit, VerifyMiddleware()])
+    model = chat(RESOLVER, max_output_tokens=min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS))
+    agent = _agent(model, RESOLVER, state, documents, [limit, VerifyMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
     try:

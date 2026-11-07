@@ -789,3 +789,54 @@ def test_the_resolver_looks_at_each_warned_item_in_its_own_conversation_at_the_s
     assert {item: run["adopted"] for item, run in record["items"].items()} == {"age": True, "age2": False}
     assert [(row["id"], row["rule"]["status"]) for row in resolved.items["eligibility"]] == [("age", "STRUCTURED"), ("age2", "UNSTRUCTURED")]
     assert [row["rule"]["status"] for row in draft.items["eligibility"]] == ["UNSTRUCTURED", "UNSTRUCTURED"]  # 담당 초안은 그대로
+
+
+def test_the_resolver_is_on_by_default_and_runs_three_items_at_a_time_with_a_smaller_output_limit(monkeypatch):
+    # 2026-11-08 유료 확인 dudc-8934: 경고 항목 12개를 한꺼번에 자격 출력 한도(3.6만)로 불러, 호출마다 최악 비용을 미리 잡는 예산이 공고
+    # 상한에 닿아 10개가 시작도 못 함. 사용자 결정으로 기본 켬(false로 끔)
+    monkeypatch.delenv(section.RESOLVER_ENV, raising=False)
+    assert section.resolver_on()
+    monkeypatch.setenv(section.RESOLVER_ENV, "FALSE")
+    assert not section.resolver_on()
+    monkeypatch.setenv(section.RESOLVER_ENV, "true")
+    assert section.resolver_on()
+
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
+    document = parse(TEXT)
+    text_only = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
+    text_only["originalText"] = document.text("p1.2")
+    names = [f"age{n}" for n in range(5)]
+
+    def issues(spec, draft, state, rt, documents):
+        return [
+            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": "조건식 없이 글로만 남겼습니다."}
+            for i, row in enumerate(draft.items["eligibility"])
+            if row["rule"]["status"] == "UNSTRUCTURED"
+        ]
+
+    class ByItem(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            task = next(str(m.content) for m in messages if isinstance(m, HumanMessage) and "해결 담당" in str(m.content))
+            item = next(name for name in names if f'"id": "{name}"' in task)
+            fix = call("update_item", section="eligibility", item_id=item, changes={"rule": {**age["rule"], "reason": None}})
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[fix, call("finish", summary="봤어요.")]))])
+
+    def agent(model, name, state, documents, middleware):
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        return create_agent(ByItem(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
+
+    workers, limits = [], []
+    pool = section.ThreadPoolExecutor
+    monkeypatch.setattr(section, "ThreadPoolExecutor", lambda max_workers: workers.append(max_workers) or pool(max_workers=max_workers))
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_issues", issues)
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{**text_only, "id": name} for name in names]})
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=36_000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+
+    def chat(name, max_output_tokens=None):
+        limits.append(max_output_tokens)
+
+    resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), chat, [])
+    assert workers == [section.RESOLVER_WORKERS] == [3] and limits == [section.RESOLVER_OUTPUT_TOKENS] * 5
+    assert record["adopted"] and [row["rule"]["status"] for row in resolved.items["eligibility"]] == ["STRUCTURED"] * 5  # 다섯 항목 모두 고침
