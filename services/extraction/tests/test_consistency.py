@@ -531,6 +531,39 @@ def test_document_table_rows_not_cited_by_any_document_are_suspected():
     assert ("DOCUMENT_OMISSION_SUSPECTED", "/quality/coverage/requiredDocuments") not in codes(one_missing, text)
 
 
+ASSET_DOCUMENT_TABLE = "\n".join(
+    [
+        "5. 제출서류",
+        "[표 9-1]",
+        "| 구 분 | 제 출 서 류 | 비 고 |",
+        "| 공통 | 가상 자산 보유 사실 확인서 | • 관련 증빙을 첨부하여 제출함 - 임차보증금 및 임대보증금 : 임대차계약서 사본(확정일자 표시 필수) "
+        "- 비상장주식 : 증권사 조회내역, 주식보관증 등 가액을 증명할 수 있는 자료 - 장기카드대출(카드론) : 신용카드사가 발급한 증빙서류 |",
+    ]
+)
+
+
+def document_omission(text, names):
+    found = [f for f in check_consistency(document_candidate(text, names), SourceBundle(texts={"pdf-text": text})) if f.code == "DOCUMENT_OMISSION_SUSPECTED"]
+    return found[0] if found else None
+
+
+def test_attached_evidence_listed_in_a_cited_document_row_is_checked_too():
+    # 2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행 비고 칸의 「- 비상장주식 : 증권사 조회내역 …」을 V2 서류 담당이 두 공고에서 나누지 않음.
+    # 그 행은 상위 서류가 인용해 행 누락으로는 잡히지 않았습니다
+    text = TABLE + "\n" + ASSET_DOCUMENT_TABLE
+    finding = document_omission(text, ["가상 자산 보유 사실 확인서"])
+    assert finding.target == "/quality/coverage/requiredDocuments" and omitted_document_rows(finding.description) == 3
+    assert finding.description.startswith("서류 칸에 나열된 첨부 증빙 3개") and "임대차계약서" in finding.description
+    # 증빙 서류를 이름으로 넣었거나(임대차계약서 사본·증권사 조회내역), 그 상황을 적용 대상으로 둔 서류가 있으면(장기카드대출) 다룬 것입니다
+    split = document_candidate(text, ["가상 자산 보유 사실 확인서", "임대차계약서 사본", "증권사 조회내역", "카드사 발급 서류"])
+    split["requiredDocuments"][3]["appliesTo"] = "장기카드대출이 있는 경우"
+    assert ("DOCUMENT_OMISSION_SUSPECTED", "/quality/coverage/requiredDocuments") not in codes(split, text)
+    # 서류 표 행 누락과 함께 있으면 한 메모에 둘 다 세고(재확인이 줄었는지 비교), 첨부 증빙을 먼저 적습니다
+    both = text + "\n" + "\n".join(DOCUMENT_TABLE.split("\n")[3:6])
+    finding = document_omission(both, ["가상 자산 보유 사실 확인서"])
+    assert omitted_document_rows(finding.description) == 3 + 3 and "서류 표 행 3개" in finding.description
+
+
 def test_document_omission_is_a_note_that_is_still_rechecked():
     issue = {"code": "DOCUMENT_OMISSION_SUSPECTED", "target": "/quality/coverage/requiredDocuments", "description": "서류 표 행 3개"}
     assert is_note(issue)
