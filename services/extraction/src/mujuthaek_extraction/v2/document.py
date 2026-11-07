@@ -125,6 +125,22 @@ class DocumentModel:
         cited = [row for row in found if row.strip() in {r.strip() for r in rows}]
         return cited[0] if len(cited) == 1 else None
 
+    def span(self, pieces: list[str]) -> str | None:
+        """조각들이 차례대로 든 원문 줄·표 행이 하나뿐이면 그 줄의 첫 조각 처음부터 끝 조각 끝까지(원문 그대로). 2026-11-07 유료 확인 jbdc-16011:
+        담당이 originalText를 「신청자의 가구원수가 1인인 경우 20% ... 추가 완화된 기준으로 적용」처럼 「...」로 줄여 적어 거절됨."""
+        found = []
+        for _, text, _ in self._searchable():
+            start = text.find(pieces[0])
+            at = start
+            for piece in pieces:
+                at = text.find(piece, at) if at >= 0 else -1
+                if at < 0:
+                    break
+                at += len(piece)
+            if start >= 0 and at >= 0:
+                found.append(text[start:at])
+        return found[0] if len(set(found)) == 1 else None
+
     @cached_property
     def _aids(self) -> tuple[tuple[str, str], ...]:
         """(읽기 도움 줄의 정규화 글, 그 줄이 붙은 표 행): 원문 글자에서 표 행 바로 아래의 도움 줄들."""

@@ -270,8 +270,12 @@ RANK_OR_CLAUSE = re.compile(rf"\d+순위|[{CLAUSE}]목|[{CLAUSE}]\.|「[{CLAUSE}
 QUALIFIER = re.compile(r"\d|%|소득|자산|이하|이상|초과|미만|경우|출생|출산|맞벌이|외벌이|충족|기준|태아|이후|이전|^자녀")
 
 
+# 낱말 끝 조사: 소유격 「의」와 「에서·에게·으로」(「아동복지시설에서 퇴소하는 사람」 ↔ 정답표 「아목 아동복지시설 퇴소자」, bmc-106)
+PARTICLE = re.compile(r"(?<=[가-힣]{2})(?:에서|에게|으로|의)$")
+
+
 def _words(part: str) -> set[str]:
-    words = {re.sub(r"(?<=[가-힣])의$", "", w) for w in re.split(r"[\s()~'‘’「」]+", part)}
+    words = {PARTICLE.sub("", w) for w in re.split(r"[\s()~'‘’「」]+", part)}
     return {w for w in words if len(w) >= 2}
 
 

@@ -480,6 +480,48 @@ def _income_index(part):
     return next(i for i, e in enumerate(part["eligibility"]) if (e["rule"].get("expression") or {}).get("attribute") == "INCOME_BENCHMARK_PERCENT")
 
 
+STAGE_BAND = "(2단계) 일반공급 : 100% 초과 130% 이하(부부 모두 소득이 있는 경우 120% 초과 140% 이하)"
+
+
+def _stage_band(note, exception_band=True):
+    data = example("housing")
+    source = source_for("housing", data)
+    material = dataclasses.replace(source.material, text=source.material.text + "\n" + STAGE_BAND + "\n" + note + "\n")
+    part = copy.deepcopy(ai_part(data))
+    index = _income_index(part)
+    item = part["eligibility"][index]
+    item["originalText"] = STAGE_BAND
+    atom = item["rule"]["expression"]
+    item["rule"]["expression"] = {"kind": "ALL", "children": [{**atom, "operator": "GT", "value": 100}, {**atom, "value": 130}]}
+    if exception_band:
+        atom = item["exceptions"][0]["effectExpression"]
+        item["exceptions"][0]["effectExpression"] = {"kind": "ALL", "children": [{**atom, "operator": "GT", "value": 120}, {**atom, "value": 140}]}
+    return index, assemble([part], dataclasses.replace(source, material=material))
+
+
+def test_stage_band_including_earlier_losers_keeps_only_upper_bounds():
+    # 2026-11-07 유료 확인 jbdc-16011: 「1단계 낙첨자를 포함」하는 2단계 구간의 하한(100% 초과)이 자격 조건식에 들어가 사람 확인으로 보류됨
+    index, result = _stage_band("* 1단계 낙첨자를 포함")
+    item = result.candidate["eligibility"][index]
+    assert {k: item["rule"]["expression"][k] for k in ("operator", "value")} == {"operator": "LTE", "value": 130}
+    assert {k: item["exceptions"][0]["effectExpression"][k] for k in ("operator", "value")} == {"operator": "LTE", "value": 140}
+    [changed] = [i for i in result.issues if i["code"] == "AI_OUTPUT_VALUE_CHANGED" and i["target"] == f"/eligibility/{index}"]
+    assert "100 초과, 120 초과" in changed["description"]
+
+
+@pytest.mark.parametrize(
+    ("note", "exception_band"),
+    [
+        ("* 소득 구간은 단계마다 다릅니다", True),  # 앞 단계 낙첨자를 포함한다는 말이 없으면 하한도 자격입니다
+        ("* 1단계 낙첨자를 포함", False),  # 기본 조건만 구간(다자녀 추첨의 맞벌이 구간)이면 하한을 빼면 외벌이에게도 상한이 적용됩니다
+    ],
+)
+def test_stage_band_stays_without_earlier_losers_or_exception_band(note, exception_band):
+    index, result = _stage_band(note, exception_band)
+    assert result.candidate["eligibility"][index]["rule"]["expression"]["kind"] == "ALL"
+    assert not [i for i in result.issues if i["code"] == "AI_OUTPUT_VALUE_CHANGED" and i["target"] == f"/eligibility/{index}"]
+
+
 def test_previous_year_only_in_original_text_still_gets_year_and_keeps_the_phrase():
     # 검토 지적: 항목 원문의 「전년도」를 버전에 옮겨 적은 뒤에는 연도 계산을 건너뛰어 referenceYear가 계속 비었음
     data = example("housing")

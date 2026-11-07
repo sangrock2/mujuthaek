@@ -103,8 +103,12 @@ def _has_text(node: dict[str, Any]) -> bool:
     return isinstance(node.get("originalText"), str) and bool(node["originalText"].strip())
 
 
+ELLIPSIS = re.compile(r"\s*(?:…|⋯|\.{3,})\s*")
+
+
 def _from_aid(node: dict[str, Any], document: DocumentModel, evidence: Any) -> dict[str, Any]:
-    """originalText가 원문에 없고 표 읽기 도움 줄(↳, 원문 아님)의 글이면 그 도움 줄이 붙은 표 행의 원문으로 바꿉니다(값은 그대로, 글만 원문으로)."""
+    """originalText가 원문에 없으면 원문 글로 바로잡습니다(값은 그대로, 글만 원문으로): 표 읽기 도움 줄(↳, 원문 아님)의 글이면 그 줄이 붙은
+    표 행의 원문으로, 「…」「...」로 줄인 글이면 그 조각들이 차례대로 든 원문 줄의 그 부분으로(앞뒤만 줄였으면 남은 조각)."""
     text = node["originalText"]
     if document.verbatim(text):
         return node
@@ -117,7 +121,11 @@ def _from_aid(node: dict[str, Any], document: DocumentModel, evidence: Any) -> d
         except KeyError:
             continue
     row = document.aid_row(text, tuple(rows))
-    return {**node, "originalText": _row_sentence(row)} if row else node
+    if row:
+        return {**node, "originalText": _row_sentence(row)}
+    pieces = [piece for piece in ELLIPSIS.split(text) if piece.strip()]
+    span = document.span(pieces) if pieces and pieces != [text] else None
+    return {**node, "originalText": span} if span else node
 
 
 def _first_sentence(document: DocumentModel, evidence: Any) -> str | None:

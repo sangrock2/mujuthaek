@@ -64,6 +64,20 @@ def test_original_text_is_filled_from_the_first_evidence_and_never_rewritten():
     assert "originalText" not in fill_original_text("eligibility", {"id": "e", "evidence": ["p9.9"]}, doc)  # 근거 오류는 넣기 검사가
 
 
+def test_original_text_shortened_with_an_ellipsis_becomes_the_source_span():
+    # 2026-11-07 유료 확인 jbdc-16011: 담당이 originalText를 「...」로 가운데를 줄여 적어 원문에 없다고 거절됨 → 고치는 데 차례를 씀
+    line = "신청자의 가구원수가 1인인 경우 20%p, 2인인 경우 10%p를 추가 완화된 기준으로 적용"
+    doc = parse("\n".join(["--- 1쪽 ---", line, "다른 줄 20%p 기준"]))
+
+    def written(original):
+        return fill_original_text("eligibility", {"id": "e", "originalText": original, "evidence": ["p1.1"]}, doc)["originalText"]
+
+    assert written("신청자의 가구원수가 1인인 경우 20%p ... 추가 완화된 기준으로 적용") == line
+    assert written("신청자의 가구원수가 1인인 경우 20%p…") == "신청자의 가구원수가 1인인 경우 20%p"  # 뒤만 줄였으면 남은 조각
+    assert written("20%p ... 기준") == "20%p ... 기준"  # 두 줄에서 다른 글이 되면 정할 수 없어 그대로(넣기 검사가 거절)
+    assert written("10%p ... 1인인") == "10%p ... 1인인"  # 조각 차례가 원문과 다르면 그대로
+
+
 def test_missing_nullable_fields_and_lists_are_filled_back_exactly_for_every_section():
     data = example("housing")
     part = ai_part(data)

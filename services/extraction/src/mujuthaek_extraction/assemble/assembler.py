@@ -59,6 +59,24 @@ SCATTER_REVIEW_SUPPLY = {"prices", "counts"}
 # 모집 단계(예비·최초·우선 입주자)는 수량 종류(OFFERED·RESERVE·WAITLIST)로 나타내지 신청 대상이 아닙니다(2026-11-07 23건 대조: 공고 수량
 # 「OFFERED 280 [예비입주자]」「RESERVE 15 [예비 입주자]」처럼 대상 칸에 적혀 공고 전체 모집 수가 대상을 한정한 수로 보임 — V2 4건·V1 5건)
 STAGE_TARGET = re.compile(r"^(?:(?P<reserve>예비\s*입주자|예비자)|(?P<first>(?:최초|우선)\s*입주자))$")
+# 단계별 선정의 소득 구간(「(2단계) 일반공급 : 100% 초과 130% 이하(부부 모두 소득이 있는 경우 120% 초과 140% 이하)」 * 1단계 낙첨자를 포함)은
+# 앞 단계 낙첨자도 대상이라 하한은 신청 자격이 아닙니다(2026-11-07 유료 확인 jbdc-16011: 하한을 조건식에 넣어 사람 확인으로 보류됨).
+# 기본 조건과 맞벌이 예외가 모두 구간이면 두 상한만 남깁니다. 한쪽만 구간이면(「부부 모두 소득이 있는 신청자 중 130% 초과 200% 이하」를
+# 기본 조건으로 넣은 다자녀 추첨공급) 하한을 빼면 외벌이에게도 200%가 적용되므로 그대로 둡니다(LOWER_BOUND_IN_ELIGIBILITY로 사람 확인)
+STAGE_BAND_ATTRIBUTES = {"INCOME_BENCHMARK_PERCENT", "MONTHLY_INCOME_KRW"}
+STAGE_INCLUDED = re.compile(r"낙\s*첨\s*자")
+STAGE_LINES = 2  # 구간 문장 줄 아래로 「낙첨자를 포함」을 찾을 줄 수
+
+
+def _band(expression: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """「하한 초과(이상) 그리고 상한 이하(미만)」 구간 조건식이면 (하한 원자, 상한 원자)."""
+    if not isinstance(expression, dict) or expression.get("kind") != "ALL" or len(expression.get("children") or []) != 2:
+        return None
+    lower = [c for c in expression["children"] if isinstance(c, dict) and c.get("kind") == "ATOMIC" and c.get("operator") in ("GT", "GTE")]
+    upper = [c for c in expression["children"] if isinstance(c, dict) and c.get("kind") == "ATOMIC" and c.get("operator") in ("LT", "LTE")]
+    if len(lower) != 1 or len(upper) != 1 or lower[0].get("attribute") != upper[0].get("attribute"):
+        return None
+    return (lower[0], upper[0]) if lower[0].get("attribute") in STAGE_BAND_ATTRIBUTES else None
 
 
 def _relative_years(text: Any) -> dict[int, str]:
@@ -678,6 +696,34 @@ class _Assembler:
                         f"{_pointer(tokens)}: 소득 기준 연도를 {basis}의 「{word}」와 공고일({announced})로 계산했습니다({benchmark['referenceYear']}년)"
                     )
 
+    def normalize_stage_bands(self) -> None:
+        """단계별 선정 구간의 하한을 뺍니다: 자격 조건의 기본 조건식과 그 REPLACE 예외의 바뀐 기준이 모두 소득 구간이고, 조건 원문이 있는 줄이나
+        그 아래 두 줄에 「낙첨자」가 있을 때만(앞 단계 낙첨자를 포함하는 단계). 값을 바꾼 것이라 AI_OUTPUT_VALUE_CHANGED 메모를 남깁니다."""
+        lines = [normalize(line) for line in self.source.material.text.split("\n")]
+        for i, item in enumerate(self.sections.get("eligibility") or []):
+            rule = item.get("rule") if isinstance(item, dict) else None
+            main = _band((rule or {}).get("expression"))
+            replaced = [
+                (exception, band)
+                for exception in item.get("exceptions") or []
+                if isinstance(exception, dict) and exception.get("effect") == "REPLACE" and (band := _band(exception.get("effectExpression")))
+            ]
+            needle = normalize(str(item.get("originalText") or ""))[:40]
+            if main is None or not replaced or not needle:
+                continue
+            at = next((n for n, line in enumerate(lines) if needle in line), None)
+            if at is None or not any(STAGE_INCLUDED.search(line) for line in lines[at : at + 1 + STAGE_LINES]):
+                continue
+            rule["expression"] = main[1]
+            for exception, band in replaced:
+                exception["effectExpression"] = band[1]
+            lowers = ", ".join(f"{band[0]['value']} {'초과' if band[0].get('operator') == 'GT' else '이상'}" for band in [main, *(b for _, b in replaced)])
+            self.issue(
+                ["eligibility", i],
+                "AI_OUTPUT_VALUE_CHANGED",
+                f"단계별 선정 구간의 하한({lowers})은 앞 단계 낙첨자를 포함하는 구간이라 신청 자격의 하한이 아니어서 뺐습니다(상한은 그대로)",
+            )
+
     def compute_values(self) -> None:
         """가격에 원 단위 금액(또는 금액 범위)을, 위치에 법정동코드를 붙입니다. 계산하지 못한 칸은 누락 사유로 남깁니다."""
         for g, group in enumerate(self.sections.get("supplyGroups", [])):
@@ -717,6 +763,7 @@ class _Assembler:
         self.fill_missing_prices(evidence)
         self.normalize_counts()
         self.fill_benchmark_years()
+        self.normalize_stage_bands()
 
         context = self.source.context
         sections = {s: self.sections.get(s, []) for s in SECTIONS}
