@@ -614,10 +614,15 @@ def criterion(category, attribute, value, unit, *replaced, groups=("대학생",)
     return {"category": category, "rule": rule, "scope": scope(*groups), "evidenceIds": [], "exceptions": exceptions}
 
 
-def criteria_omission(text, eligibility):
+def criteria_findings(text, eligibility):
     found = check_consistency(candidate(text=text, eligibility=eligibility), SourceBundle(texts={"pdf-text": text}))
-    flagged = [f for f in found if f.code == "CRITERIA_TABLE_OMISSION_SUSPECTED"]
-    return flagged[0] if flagged else None
+    return {f.code: f for f in found if f.code in ("CRITERIA_GROUP_OMISSION_SUSPECTED", "CRITERIA_TABLE_OMISSION_SUSPECTED")}
+
+
+def criteria_omission(text, eligibility):
+    """기준표 누락 알림 하나: 대상이 통째로 빠진 것(CRITERIA_GROUP_OMISSION_SUSPECTED)이 있으면 그것, 없으면 행 일부가 빠진 것."""
+    flagged = criteria_findings(text, eligibility)
+    return flagged.get("CRITERIA_GROUP_OMISSION_SUSPECTED") or flagged.get("CRITERIA_TABLE_OMISSION_SUSPECTED")
 
 
 def test_criteria_table_rows_whose_values_no_condition_uses_are_noted():
@@ -675,7 +680,8 @@ def test_rows_of_a_supply_type_matrix_left_out_are_noted_but_rows_left_as_text_c
     text = TABLE + "\n" + MATRIX_TABLE
     many = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT", 130, groups=("다자녀가구 특별공급 우선공급",))
     finding = criteria_omission(text, [many])
-    assert "2행의 기준값 100%, 140%" in finding.description and "30%" not in finding.description.split("「")[0]
+    assert finding.code == "CRITERIA_GROUP_OMISSION_SUSPECTED" and "30%" not in finding.description.split("「")[0]
+    assert finding.description.startswith("원문 자격 기준표에서 조건이 하나도 없는 대상: 일반 공급(2행, 기준값 100%, 140%)")
     # 조건식 없이 글로만 남긴 조건의 원문에 그 비율이 있으면 다룬 것으로 칩니다(조건식 없음은 CRITERION_NOT_STRUCTURED가 따로 봄)
     loose = {"category": "INCOME", "rule": {"status": "UNSTRUCTURED", "expression": None}, "scope": scope("일반공급 우선공급"), "evidenceIds": []}
     loose["originalText"] = "월평균소득의 100% 이하인 자(본인 및 배우자가 모두 소득이 있는 경우 140%)"
@@ -687,8 +693,9 @@ def test_rows_of_a_supply_type_are_missing_even_when_another_type_uses_the_same_
     text = TABLE + "\n" + MATRIX_TABLE
     many = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT", 130, groups=("다자녀가구 특별공급 우선공급",))
     newlywed = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("신혼부부 특별공급 우선공급",))
-    finding = criteria_omission(text, [many, newlywed])
-    assert "2행의 기준값 100%, 140%" in finding.description and "기준표 행이 하나도 조건에 없는 대상: 일반 공급." in finding.description
+    found = criteria_findings(text, [many, newlywed])
+    assert list(found) == ["CRITERIA_GROUP_OMISSION_SUSPECTED"]  # 행 일부만 빠진 대상은 없음
+    assert "조건이 하나도 없는 대상: 일반 공급(2행, 기준값 100%, 140%)" in found["CRITERIA_GROUP_OMISSION_SUSPECTED"].description
     # 그 공급의 조건이면 다룬 것입니다
     general = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("일반공급 1순위 우선공급",))
     assert criteria_omission(text, [many, general]) is None
@@ -701,7 +708,7 @@ def test_rows_of_a_supply_type_are_missing_even_when_another_type_uses_the_same_
     )
     method = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 100, "PERCENT", 140, groups=("신혼부부 특별공급 일반공급(20%)",))
     finding = criteria_omission(text + "\n" + newlywed_rows, [many, method])
-    assert "2행의 기준값 100%, 140%" in finding.description and "조건에 없는 대상: 일반 공급." in finding.description
+    assert "조건이 하나도 없는 대상: 일반 공급(2행, 기준값 100%, 140%)" in finding.description
 
 
 def test_list_marks_and_a_one_target_table_tie_rows_to_their_conditions():
@@ -720,7 +727,7 @@ def test_list_marks_and_a_one_target_table_tie_rows_to_their_conditions():
     cha = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 50, "PERCENT", 70, 60, groups=("일반공급 2순위 차목 소득 50% 이하",))
     assert criteria_omission(TABLE + "\n" + marked, [ta, cha]) is None
     unmarked = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 50, "PERCENT", 70, 60, groups=("일반공급 2순위 소득 50% 이하",))
-    assert "조건에 없는 대상: 차. 일반입주자." in criteria_omission(TABLE + "\n" + marked, [ta, unmarked]).description
+    assert "조건이 하나도 없는 대상: 차. 일반입주자(2행" in criteria_omission(TABLE + "\n" + marked, [ta, unmarked]).description
     # dudc-8934·bmc-75: 청년 표의 「세대원(본인)」 행. 표에서 맞춰진 대상 이름이 「청년」 하나면 그 표의 행은 모두 청년 조건으로 봅니다
     youth = "\n".join(
         [

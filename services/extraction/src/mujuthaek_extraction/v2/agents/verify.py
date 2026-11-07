@@ -42,9 +42,12 @@ MUST_FIX = (
     "ITEM_DROPPED",
     "ITEM_NOT_ADDED",
     "CLAIM_UNSUPPORTED",
+    # 원문 기준표에서 대상(공급유형·계층)이 통째로 빠짐: 23건 저장 결과에서 모두 실제 누락이었고(잘못 잡은 것 없음), 「확인할 것」으로는
+    # 담당이 다른 경고를 고친 뒤 넘겼음(2026-11-07 유료 확인 jbdc-16011)
+    "CRITERIA_GROUP_OMISSION",
 )
 FIX_GUIDE = (
-    "고칠 것: 형식·계약·근거 오류입니다. 그대로 두면 값이 빠지거나 사람 확인으로 가므로 원문에 있는 대로 고칩니다. "
+    "고칠 것: 형식·계약·근거 오류와 원문 기준표에서 통째로 빠진 대상입니다. 그대로 두면 값이 빠지거나 사람 확인으로 가므로 원문에 있는 대로 고칩니다. "
     "「다시」면 앞서 고친 방법이 안 된 것이니 다른 방법으로 한 번 더 고치고, 그래도 남으면 그대로 둡니다."
 )
 CHECK_GUIDE = (
@@ -76,6 +79,11 @@ HOW_TO = {
         "자녀 수·출생자녀 수·맞벌이 여부에 따라 바뀌는 값은 그 대상의 기본 기준 조건에 행마다 exceptions(REPLACE, effectExpression은 그 행의 기준값, "
         "발동 조건을 다 표현할 수 없으면 when.status UNSTRUCTURED)로 넣고 그 표 행을 예외의 evidence로 인용합니다(예외 originalText를 비우면 "
         "그 근거 행의 원문으로 채움). 가점·임대조건처럼 신청 자격이 아닌 표이거나 이번 모집에 적용하지 않는 표면 그대로 둡니다."
+    ),
+    "CRITERIA_GROUP_OMISSION_SUSPECTED": (
+        "적힌 대상(공급유형·계층)마다 조건을 따로 만들고 scope.targetGroups에 그 대상 이름을 적습니다. 그 대상의 기준표 행 가운데 대부분 가구에 "
+        "적용되는 값을 기본 조건식으로, 맞벌이·가구원 수·출생자녀 수 행은 그 조건의 exceptions(REPLACE)로 넣고 표 행을 evidence로 인용합니다. "
+        "원문상 그 대상이 이번 모집의 신청 자격이 아니면(가점·임대조건 표, 이번에 공급하지 않는 유형) 그대로 둡니다."
     ),
     # 2026-11-07 유료 확인(jbdc-16011): 「(2단계) 추첨공급 : … 130% 초과 200% 이하 * 1단계 낙첨자를 포함」을 자격 하한으로 옮김
     "LOWER_BOUND_IN_ELIGIBILITY": (
@@ -120,8 +128,11 @@ def report(draft: Any, issues: list[dict[str, Any]]) -> str:
     if not issues:
         lines.append("맡은 섹션에 남은 문제가 없습니다. 원문에서 빠뜨린 항목이 없으면 finish를 부릅니다.")
         return "\n".join(lines)
-    fix = [issue for issue in issues if must_fix(issue)]
-    check = [issue for issue in issues if not must_fix(issue)]
+    # 섹션 전체에 걸친 문제(범위·기준표 누락 메모, 위치 「/quality/coverage/…」)를 항목별 문제보다 먼저: 항목 경고가 20개 가까우면 뒤에 붙은
+    # 섹션 문제를 담당이 놓침(2026-11-07 유료 확인 jbdc-16011: 기준표 메모가 「확인할 것」 18개 속에 섞임)
+    ordered = sorted(issues, key=lambda issue: not str(issue.get("target") or "").startswith("/quality/coverage/"))
+    fix = [issue for issue in ordered if must_fix(issue)]
+    check = [issue for issue in ordered if not must_fix(issue)]
     for title, group, guide in (("고칠 것", fix, FIX_GUIDE), ("확인할 것", check, CHECK_GUIDE)):
         if group:
             shown = f" (앞 {ISSUES_SHOWN}개)" if len(group) > ISSUES_SHOWN else ""

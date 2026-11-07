@@ -1016,6 +1016,9 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
 # (잘못 잡은 것 없음). 빠진 값이지 틀린 값이 아니라 서류 표 행 누락처럼 화면 메모로 두고(verifier.NOTE_CODES),
 # V2 자격 담당에게는 「확인할 것」으로 알립니다
 CRITERIA_OMISSION = "CRITERIA_TABLE_OMISSION_SUSPECTED"
+# 기준표 행이 하나도 조건에 없는 대상(공급유형·계층이 통째로 빠짐). 행 일부가 빠진 것과 따로 알려 V2 자격 담당에게 「고칠 것」으로 보냅니다
+# (2026-11-07 유료 확인 jbdc-16011: 「일반 공급, 노부모 부양 특별 공급」을 「확인할 것」 18개 속 메모로 받고 「이미 한 차례 고친 경고」로 넘김)
+CRITERIA_GROUP_OMISSION = "CRITERIA_GROUP_OMISSION_SUSPECTED"
 CRITERIA_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(서류 표 행 누락과 같음)
 CRITERIA_PERCENT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:%|퍼센트)")
 INCOME_WORD = re.compile(r"소\s*득")
@@ -1232,7 +1235,7 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
             pools[key] = _used_criteria({**everyone, "eligibility": [*everyone["eligibility"], *items]})
         return pools[key]
 
-    missed = []
+    missed: list[tuple[str, list[str], str | None]] = []
     lacking: dict[str, str] = {}  # 기준표 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 → 원문 이름)
     for table in _criteria_tables("\n".join(sources.texts.values())):
         owners = _row_owners(list(dict.fromkeys(group for _, _, group in table if group)), named)
@@ -1241,24 +1244,36 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
             percents, amounts = used if owners is None or group is None else pool(owners[group])
             gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
             if gone:
-                missed.append((shown, gone))
+                missed.append((shown, gone, normalize(group) if owners is not None and group is not None else None))
             if owners is not None and group is not None:
                 covered[group] = covered.get(group, False) or not gone
         for group, any_row in covered.items():
             if not any_row:
                 lacking.setdefault(normalize(group), group)
-    if len(missed) < CRITERIA_OMISSION_MIN_ROWS:
-        return
-    values = list(dict.fromkeys(raw for _, gone in missed for raw in gone))
-    rows = ", ".join(f"「{shown[:70]}」" for shown, _ in missed[:2])
-    names = list(lacking.values())
-    groups = f" 기준표 행이 하나도 조건에 없는 대상: {', '.join(names[:3])}{' 등' if len(names) > 3 else ''}." if names else ""
-    # V2 담당에게는 설명 앞 220자만 가므로 빠진 값·조건이 없는 대상·첫 행을 앞에 둡니다
-    description = (
-        f"원문 자격 기준표 {len(missed)}행의 기준값 {', '.join(values[:4])}{' 등' if len(values) > 4 else ''}을 쓰는 자격 조건·예외가 없습니다"
-        f"(빠진 기준 의심).{groups} {rows}{' …' if len(missed) > 2 else ''}"
-    )
-    find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
+    whole = [row for row in missed if row[2] in lacking]
+    partial = [row for row in missed if row[2] not in lacking] if len(whole) >= CRITERIA_OMISSION_MIN_ROWS else missed
+    # V2 담당에게는 설명 앞 220자만 가므로 대상·빠진 값·첫 행을 앞에 둡니다
+    if len(whole) >= CRITERIA_OMISSION_MIN_ROWS:
+        names = list(dict.fromkeys(lacking[key] for _, _, key in whole))
+        description = (
+            f"원문 자격 기준표에서 조건이 하나도 없는 대상: {', '.join(names[:3])}{' 등' if len(names) > 3 else ''}"
+            f"({len(whole)}행, 기준값 {_shown_values(whole)}). 그 대상마다 조건으로 넣어야 합니다(빠진 기준 의심): {_shown_rows(whole)}"
+        )
+        find("V8", CRITERIA_GROUP_OMISSION, "/quality/coverage/eligibility", description)
+    if len(partial) >= CRITERIA_OMISSION_MIN_ROWS:
+        description = (
+            f"원문 자격 기준표 {len(partial)}행의 기준값 {_shown_values(partial)}을 쓰는 자격 조건·예외가 없습니다(빠진 기준 의심): {_shown_rows(partial)}"
+        )
+        find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
+
+
+def _shown_values(rows: list[tuple[str, list[str], str | None]]) -> str:
+    values = list(dict.fromkeys(raw for _, gone, _ in rows for raw in gone))
+    return f"{', '.join(values[:4])}{' 등' if len(values) > 4 else ''}"
+
+
+def _shown_rows(rows: list[tuple[str, list[str], str | None]]) -> str:
+    return ", ".join(f"「{shown[:70]}」" for shown, _, _ in rows[:2]) + (" …" if len(rows) > 2 else "")
 
 
 def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[Finding]:
