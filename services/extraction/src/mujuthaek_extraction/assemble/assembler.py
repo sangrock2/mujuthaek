@@ -56,6 +56,9 @@ RELATIVE_YEARS = (("전년도", -1), ("전년", -1), ("당해연도", 0), ("당�
 # 흩어진 낱말로 찾은 근거(find_scattered)를 검수로 보낼 위치: 판정·선정·금액·일정에 쓰는 값이라 낱말 순서가 바뀌면 뜻이 뒤집힐 수 있습니다
 SCATTER_REVIEW_SECTIONS = {"eligibility", "selectionRules", "schedules"}
 SCATTER_REVIEW_SUPPLY = {"prices", "counts"}
+# 모집 단계(예비·최초·우선 입주자)는 수량 종류(OFFERED·RESERVE·WAITLIST)로 나타내지 신청 대상이 아닙니다(2026-11-07 23건 대조: 공고 수량
+# 「OFFERED 280 [예비입주자]」「RESERVE 15 [예비 입주자]」처럼 대상 칸에 적혀 공고 전체 모집 수가 대상을 한정한 수로 보임 — V2 4건·V1 5건)
+STAGE_TARGET = re.compile(r"^(?:(?P<reserve>예비\s*입주자|예비자)|(?P<first>(?:최초|우선)\s*입주자))$")
 
 
 def _relative_years(text: Any) -> dict[int, str]:
@@ -154,6 +157,26 @@ def _get(root: Any, tokens: list[str | int]) -> Any:
     for token in tokens:
         root = root[token]
     return root
+
+
+def _stage_only(count: dict[str, Any], siblings: list[dict[str, Any]]) -> str | None:
+    """수량의 대상이 모집 단계뿐이고 그 단계가 수량 종류와 맞으면 그 단계 이름(비울 것), 아니면 None.
+    예비자는 RESERVE·WAITLIST, 또는 같은 자리에 다른 OFFERED가 없는 OFFERED(예비입주자만 모집하는 공고는 예비자 수가 OFFERED)일 때,
+    최초·우선 입주자는 OFFERED일 때만입니다. 비우면 같은 종류의 대상 없는 수량과 겹치는 경우도 두지 않습니다."""
+    scope = count.get("scope")
+    groups = scope.get("targetGroups") if isinstance(scope, dict) else None
+    stages = [STAGE_TARGET.match(" ".join(str(g).split())) for g in groups or []]
+    if not stages or not all(stages):
+        return None
+    kind, others = count.get("kind"), [o for o in siblings if o is not count]
+    reserve, first = any(m["reserve"] for m in stages), any(m["first"] for m in stages)
+    if reserve == first or (first and kind != "OFFERED"):
+        return None
+    if reserve and kind not in ("RESERVE", "WAITLIST") and (kind != "OFFERED" or any(o.get("kind") == "OFFERED" for o in others)):
+        return None
+    if any(o.get("kind") == kind and not (o.get("scope") or {}).get("targetGroups") for o in others):
+        return None
+    return ", ".join(map(str, groups or []))
 
 
 class _Assembler:
@@ -590,10 +613,16 @@ class _Assembler:
         where: dict[str, list[str | int]] = {}
         for section in SECTIONS:
             for tokens, node in _walk(self.sections.get(section), [section]):
+                siblings = [c for c in node.get("counts") or [] if isinstance(c, dict)]
                 for i, count in enumerate(node.get("counts") or []):
                     if isinstance(count, dict) and "id" in count:
                         counts[count["id"]] = count
                         where[count["id"]] = [*tokens, "counts", i]
+                        stage = _stage_only(count, siblings)
+                        if stage:
+                            count["scope"]["targetGroups"] = []
+                            text = f"모집 단계(「{stage}」)는 수량 종류({count.get('kind')})로 나타내므로 대상에서 뺐습니다(값은 그대로)"
+                            self.issue(where[count["id"]], "AI_OUTPUT_VALUE_CHANGED", text)
         for count_id, count in counts.items():
             parent_id = count.get("parentCountId")
             if parent_id is None:

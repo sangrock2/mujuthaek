@@ -546,6 +546,39 @@ def test_table_beside_the_previous_one_only_across_a_short_connector():
     assert besides("※ 임대보증금과 월임대료는 상호 전환할 수 있으며 전환 한도는 아래와 같습니다") == [None, None]  # 긴 글
 
 
+def test_type_table_and_class_count_table_are_joined_by_housing_type():
+    # 2026-11-07 23건 대조 dcco-24791: 「주택형 | 전용면적 | 세대수」 표와 「주택형 | 계층 | 세대수 | 모집」 표가 나뉘어 계층 묶음에 면적이 없고
+    # 21A가 두 번 나옴(계층별 모집 수가 같은 면적의 주택형 행과 이어지지 않음)
+    type_rows = (("주택형", "전용면적", "세대수"), ("21A", "21.9993", "10"), ("29A", "29.8703", "11"), ("29B", "29.9559", "13"))
+    class_rows = (
+        ("주택형", "계층", "세대수", "모집"),
+        ("21A", "대학생", "10", "5"),
+        ("29A", "대학생", "9", "5"),
+        ("", "고령자", "2", "2"),
+        ("29B", "대학생", "8", "4"),
+    )
+    class_cells = ((0, 1, 2, 3), (4, 5, 6, 7), (8, 9, 10, 11), (8, 12, 13, 14), (15, 16, 17, 18))
+    tables = [st.Table("3-2", 3, "", type_rows[0], type_rows, None), st.Table("3-3", 3, "", class_rows[0], class_rows, class_cells)]
+    answers = {
+        "3-2": [column(1, "HOUSING_TYPE"), column(2, "AREA_EXCLUSIVE"), column(3, "COUNT", ck="TOTAL_HOUSING")],
+        "3-3": [column(1, "HOUSING_TYPE"), column(2, "TARGET_GROUP"), column(3, "COUNT", ck="TOTAL_HOUSING"), column(4, "COUNT", ck="OFFERED")],
+    }
+    mapping = {"tables": [{"table": t, "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": c} for t, c in answers.items()]}
+    part = st.build_part(tables, mapping, "pdf-text")
+    shown = [
+        (g["housingTypeCode"], g["scope"]["targetGroups"], g["exclusiveAreaSqm"], [(c["kind"], c["value"]) for c in g["counts"]]) for g in part["supplyGroups"]
+    ]
+    assert shown == [
+        ("29B", [], 29.9559, [("TOTAL_HOUSING", 13)]),  # 계층 세대수 합(8)이 13과 달라 주택형 묶음을 둡니다
+        ("21A", ["대학생"], 21.9993, [("TOTAL_HOUSING", 10), ("OFFERED", 5)]),
+        ("29A", ["대학생"], 29.8703, [("TOTAL_HOUSING", 9), ("OFFERED", 5)]),
+        ("29A", ["고령자"], 29.8703, [("TOTAL_HOUSING", 2), ("OFFERED", 2)]),
+        ("29B", ["대학생"], 29.9559, [("TOTAL_HOUSING", 8), ("OFFERED", 4)]),
+    ]
+    quotes = {q["ref"]: q["text"] for q in part["quotes"]}
+    assert any("21.9993" in quotes[ref] for ref in part["supplyGroups"][1]["quoteRefs"])  # 옮긴 면적이 적힌 행도 근거로
+
+
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금
     supply_rows = (("주택형", "전용", "모집"), ("39", "39.70 ~ 39.87", "100"))
