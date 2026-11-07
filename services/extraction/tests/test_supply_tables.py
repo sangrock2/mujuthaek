@@ -473,6 +473,79 @@ def test_price_table_without_row_names_is_reported_instead_of_skipped_silently()
     assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-3" in issue["description"]
 
 
+def test_stacked_conversion_lines_beside_a_titled_tier_table_join_its_rows():
+    # 2026-11-07 bmc-75: 「[39A] 구간별 임대조건」 표 오른쪽에 「임차인 선택사항」 화살표만 사이에 두고 「상호전환 시 임대조건」 표가 따로 읽힘.
+    # 구간마다 (-)·(+)·(+) 세 줄이 점선이라 칸마다 금액 셋으로 붙었고 표 제목에 주택형이 없어 빈 묶음 12개(메모)·전환 가격 72개가 빠짐
+    count_rows = (("주택형", "모집"), ("39A", "19"), ("59B", "80"))
+    tier_rows = (("구간", "임대보증금(원)", "월임대료(원)"), ("1구간 (~30%)", "16,240,000", "130,700"), ("2구간 (~50%)", "18,560,000", "149,300"))
+    head = ("임대보증금 변동액(원)", "임대보증금(원)", "월임대료(원)", "월임대료(원)")
+    switch_rows = (
+        head,
+        ("(-) 4,880,000 (+) 4,870,000 (+) 11,360,000", "11,360,000 21,110,000 27,600,000", "144,900 106,300 73,900", "1 구 간"),
+        ("(-) 5,570,000 (+) 5,560,000 (+) 12,990,000", "12,990,000 24,120,000 31,550,000", "165,500 121,500 84,300", "2 구 간"),
+    )
+    tables = [
+        st.Table("3-1", 3, "", count_rows[0], count_rows, None),
+        st.Table("9-2", 9, "[ 39A ] 구간별 임대조건", tier_rows[0], tier_rows, None, above=("◾[ 39A ] 구간별 임대조건",)),
+        st.Table("9-3", 9, "임차인 선택사항", head, switch_rows, None, above=("선택사항", "임차인"), beside="9-2"),
+    ]
+    switch = [column(1, "CONVERSION_LIMIT", unit="원")]
+    for n, kind in ((2, "DEPOSIT"), (3, "MONTHLY_RENT")):  # 지시 v8 답 그대로: 가격 열마다 감액·증액·최대 증액 세 번
+        stages = (("보증금 감액", "CONVERSION_DEPOSIT_DOWN"), ("보증금 증액", "CONVERSION_DEPOSIT_UP"), ("보증금 최대 증액", "CONVERSION_DEPOSIT_UP"))
+        switch += [column(n, "PRICE", pk=kind, unit="원", plan=plan, stage=stage) for plan, stage in stages]
+    tier_prices = [column(2, "PRICE", pk="DEPOSIT", unit="원", stage="STANDARD"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원", stage="STANDARD")]
+    answers = {
+        "3-1": [column(1, "HOUSING_TYPE"), column(2, "COUNT", ck="OFFERED")],
+        "9-2": [column(1, "TARGET_GROUP"), *tier_prices],
+        "9-3": [*switch, column(4, "TARGET_GROUP")],
+    }
+    mapping = {"tables": [{"table": t, "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": c} for t, c in answers.items()]}
+    part = st.build_part(tables, copy.deepcopy(mapping), "pdf-text")
+    type_39a, type_59b = part["supplyGroups"]
+    assert (type_39a["housingTypeCode"], type_59b["prices"]) == ("39A", []) and st.ISSUES_KEY not in part
+    plans: dict[str, list[tuple]] = {}
+    for p in type_39a["prices"]:
+        plans.setdefault(p["pricePlanId"], []).append((p["scope"]["targetGroups"], p["priceStage"], p["scope"]["description"], p["sourceAmount"]))
+    down, up, tier = "CONVERSION_DEPOSIT_DOWN", "CONVERSION_DEPOSIT_UP", ["1구간 (~30%)"]  # 구간 이름은 왼쪽 표의 것(같은 대상의 기본안과 비교)
+    assert len(plans) == 8 and [v for v in plans.values() if v[0][0] == tier] == [
+        [(tier, "STANDARD", "기본 요금안입니다.", "16,240,000"), (tier, "STANDARD", "기본 요금안입니다.", "130,700")],
+        [(tier, down, "보증금 감액 요금안입니다.", "11,360,000"), (tier, down, "보증금 감액 요금안입니다.", "144,900")],
+        [(tier, up, "보증금 증액 요금안입니다.", "21,110,000"), (tier, up, "보증금 증액 요금안입니다.", "106,300")],
+        [(tier, up, "보증금 최대 증액 요금안입니다.", "27,600,000"), (tier, up, "보증금 최대 증액 요금안입니다.", "73,900")],
+    ]
+
+    # 열을 한 번만 답해도 줄마다 증감 표시로 방향을 정하고, 같은 방향 두 줄은 번호로 나눈 요금안입니다
+    once = [column(1, "CONVERSION_LIMIT", unit="원"), column(2, "PRICE", pk="DEPOSIT", unit="원", plan="상호전환", stage="CONVERSION_DEPOSIT_UP")]
+    once += [column(3, "PRICE", pk="MONTHLY_RENT", unit="원", plan="상호전환", stage="CONVERSION_DEPOSIT_UP"), column(4, "TARGET_GROUP")]
+    single = copy.deepcopy(mapping)
+    single["tables"][2]["columns"] = once
+    names = {p["scope"]["description"] for p in st.build_part(tables, single, "pdf-text")["supplyGroups"][0]["prices"] if p["priceStage"] != "STANDARD"}
+    assert names == {"상호전환 (보증금 감액) 요금안입니다.", "상호전환 (보증금 증액) 요금안입니다.", "상호전환 (보증금 증액) 2 요금안입니다."}
+
+    # 옆 표의 행이 앞 표와 하나씩 같지 않으면 이어받지 않습니다: 주택형을 모르는 전환 가격은 게시하지 않고 읽지 못한 가격표로 알림
+    tables[2] = replace(tables[2], rows=(*switch_rows[:2], (*switch_rows[2][:3], "3 구 간")))
+    part = st.build_part(tables, copy.deepcopy(mapping), "pdf-text")
+    assert [len(g["prices"]) for g in part["supplyGroups"]] == [4, 0]
+    [issue] = part[st.ISSUES_KEY]
+    assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and "9-3" in issue["description"]
+
+
+def test_table_beside_the_previous_one_only_across_a_short_connector():
+    def besides(between):
+        blocks = [
+            {"type": "text", "text": "◾[ 39A ] 구간별 임대조건"},
+            {"type": "table", "id": "9-2", "columns": ["구간", "임대보증금(원)"], "rows": [["1구간", "16,240,000"]], "cells": None},
+            *([{"type": "text", "text": between}] if between else []),
+            {"type": "table", "id": "9-3", "columns": ["임대보증금(원)", "구간"], "rows": [["11,360,000", "1 구 간"]], "cells": None},
+        ]
+        source = replace(material(), pdf_pages=[{"pages": [{"page": 9, "blocks": blocks}]}], sheets=())
+        return [t.beside for t in st.candidates(source)]
+
+    assert besides("\n임차인\n선택사항") == [None, "9-2"] and besides("") == [None, "9-2"]
+    assert besides("◾[ 59B ] 구간별 임대조건") == [None, None]  # 사이 글에 주택형이 있으면 다른 표
+    assert besides("※ 임대보증금과 월임대료는 상호 전환할 수 있으며 전환 한도는 아래와 같습니다") == [None, None]  # 긴 글
+
+
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금
     supply_rows = (("주택형", "전용", "모집"), ("39", "39.70 ~ 39.87", "100"))
@@ -856,8 +929,10 @@ def test_two_amount_cell_is_split_by_arrow_and_word_signs_in_written_order():
     # 감액이 먼저 적혀 있으면 첫 금액이 감액안입니다
     reversed_order = conversion_prices("감액 5,000 증액 10,000", "15,000 30,000", "350,000 250,000")[0]
     assert sorted(reversed_order) == sorted(expected)
-    assert st._sign_order("(+) - (-) 10,000") == ["(+)", "(-)"]  # 가운데 맨 「-」는 빈 값이라 표시가 아님
-    assert st._sign_order("10,000") is None and st._sign_order("↑ 10,000") is None
+    assert st._sign_lines("(+) - (-) 10,000") == [("(+)", False), ("(-)", True)]  # 가운데 맨 「-」는 빈 값이라 표시가 아님
+    assert st._sign_lines("10,000") == [] and st._sign_lines("↑ 10,000") == [("(+)", True)]
+    # 한도 칸의 표시 수와 칸의 금액 수가 다르면 나누지 않습니다(표시 하나에 금액 둘)
+    assert conversion_prices("↑ 10,000", "30,000 15,000", "250,000 350,000")[0] == []
 
 
 def test_column_answered_twice_as_up_and_down_takes_only_its_own_amount():
