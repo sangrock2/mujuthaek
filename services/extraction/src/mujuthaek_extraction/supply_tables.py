@@ -58,7 +58,19 @@ def option_table(table: Table) -> bool:
 MAX_TABLES = 40
 SUPPLY_HINT = re.compile(r"보증금|임대료|월세|분양|가격|전용|면적|호수|세대\s*수|모집|공급|공가|예비|deposit|rent|price|area|units", re.I)
 UNIT_FLOOR = re.compile(r"(\d{1,2})\d{2}")  # 3~4자리 숫자 호수의 앞자리 = 층 (지하·문자 호수는 건드리지 않음)
+# 호실 행의 입주 상태(2026-11-07 gndc-ddb1: 「비 고」 칸이 「입주완료」(세 호실에 병합)·「즉시 입주 가능」(한 호실)인 표에 수량 열이 없어 네 호실을
+# 모두 모집 1로 셈 — 공고는 즉시 입주 1명·예비 4명 모집. 이미 입주한 호실은 이번 모집 호실이 아닙니다)
+OCCUPIED_UNIT = re.compile(r"입주\s*완료|입주\s*중|거주\s*중|계약\s*완료|임대\s*중")
+AVAILABLE_UNIT = re.compile(r"공\s*가|입주\s*가능|즉시\s*입주")
 SUBTOTAL = re.compile(r"^(?:합\s*계|소\s*계|총\s*계|계|합계)$")
+
+
+def _occupied(row: list[str]) -> bool:
+    """호실 행이 이미 입주한 호실인지: 행의 어느 칸(병합 칸을 채운 값 포함)에 입주 완료·거주 중 표시가 있고 공가·입주 가능 표시는 없음."""
+    text = " ".join(row)
+    return bool(OCCUPIED_UNIT.search(text)) and not AVAILABLE_UNIT.search(text)
+
+
 NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 UNIT_IN_TITLE = re.compile(r"\((천원|만원|원)\)|(천원|만원)")
 KEY_MEANINGS = ("COMPLEX", "ADDRESS", "BUILDING", "HOUSING_TYPE", "UNIT", "FLOOR", "TARGET_GROUP")
@@ -689,7 +701,8 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         filled, origin = _filled(table, seed)
         if filled:
             previous = (table, filled[-1])
-        # 호실마다 한 행인 모집 표(동·호·면적·보증금)에 수량 열이 없으면 한 행이 모집 1호입니다(실측 LH 김포 장애인 자립주택: 모집 수 0/4)
+        # 호실마다 한 행인 모집 표(동·호·면적·보증금)에 수량 열이 없으면 한 행이 모집 1호입니다(실측 LH 김포 장애인 자립주택: 모집 수 0/4).
+        # 이미 입주한 호실(행의 어느 칸이든 「입주완료」, 병합 칸 포함)은 빼요(_occupied)
         unit_rows = entry.get("rowUnit") == "HOUSING_UNIT" and not any(c["meaning"] == "COUNT" for c in columns)
         first_data = next((r for r, row in enumerate(filled) if any(_numeric(c) for c in row)), None)
         if first_data is None:
@@ -812,7 +825,7 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
                     current["_type_ambiguous"] = title_types
                 groups.append(current)
                 current_key, current_rows = key, set()
-                if unit_rows:
+                if unit_rows and not _occupied(row):
                     current["counts"].append(
                         {
                             "id": f"{group_id}.count1",

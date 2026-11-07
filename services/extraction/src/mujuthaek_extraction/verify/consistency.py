@@ -711,7 +711,9 @@ NUMBER_IN_LABEL = re.compile(r"\d+(?:\.\d+)?")
 
 def _check_unattached_prices(candidate: dict[str, Any], find: Any) -> None:
     """가격만 있고 수량이 없는 공급 묶음인데, 수량이 있는 다른 묶음과 주택형 번호(정수 부분)가 같으면 가격이 제 묶음에 붙지 못한 것입니다.
-    실측(LH 인천석남 「21A 청년(소득有)」, LH 부산당감 「39.70」「39.87」): 가격은 맞게 뽑았지만 모집 수 없는 묶음으로 따로 남음."""
+    실측(LH 인천석남 「21A 청년(소득有)」, LH 부산당감 「39.70」「39.87」): 가격은 맞게 뽑았지만 모집 수 없는 묶음으로 따로 남음.
+    주택형 코드 없이 호실 번호로만 이름이 붙은 호실 묶음은 보지 않습니다: 이미 입주한 호실은 모집 수 없이 자기 가격만 있고,
+    「202-1호」「202-2호」의 202는 주택형이 아니라 호실 번호입니다(2026-11-07 gndc-ddb1)."""
 
     def number(group: dict[str, Any]) -> int | None:
         for text in (group.get("housingTypeCode"), group.get("unitLabel")):
@@ -722,7 +724,8 @@ def _check_unattached_prices(candidate: dict[str, Any], find: Any) -> None:
 
     counted = {number(g) for g in candidate["supplyGroups"] if g["counts"]} - {None}
     for g, group in enumerate(candidate["supplyGroups"]):
-        if group["prices"] and not group["counts"] and number(group) in counted:
+        room = group.get("itemKind") == "HOUSING_UNIT" and not group.get("housingTypeCode")
+        if group["prices"] and not group["counts"] and not room and number(group) in counted:
             label = group.get("housingTypeCode") or group.get("unitLabel")
             find("V8", "SUPPLY_PRICE_UNATTACHED", f"/supplyGroups/{g}", f"「{label}」 가격이 같은 주택형의 모집 묶음에 붙지 않고 따로 남았습니다.")
 

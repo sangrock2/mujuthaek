@@ -828,6 +828,29 @@ def test_unit_rows_without_count_column_are_one_offered_unit_each():
     assert all(g["counts"] == [] for g in st.build_part([table], housing, "pdf-text")["supplyGroups"])  # 주택형 행은 그대로
 
 
+def test_occupied_unit_rows_are_not_counted_as_offered():
+    # 2026-11-07 gndc-ddb1: 「비 고」 칸 「입주완료」가 세 호실에 병합되고 한 호실만 「즉시 입주 가능」인데, 수량 열이 없어 네 호실 모두 모집 1로 셈
+    # (공고는 즉시 입주 1명·예비 4명 모집)
+    rows = (
+        ("층", "호실", "전용", "보증금", "비 고"),
+        ("2층", "201-1호", "16.00", "3,000", "입주완료"),
+        ("", "201-2호", "16.22", "", ""),
+        ("", "202-2호", "9.07", "", "즉시 입주 가능"),
+    )
+    cells = ((0, 1, 2, 3, 4), (5, 6, 7, 8, 9), (5, 10, 11, 8, 9), (5, 12, 13, 8, 14))
+    table = st.Table("1-1", 1, "", rows[0], rows, cells)
+    columns = [column(1, "FLOOR"), column(2, "UNIT"), column(3, "AREA_EXCLUSIVE"), column(4, "PRICE", pk="DEPOSIT", unit="천원")]
+    mapping = {"tables": [{"table": "1-1", "role": "SUPPLY", "rowUnit": "HOUSING_UNIT", "complex": "거북이집", "columns": columns}]}
+    groups = st.build_part([table], mapping, "pdf-text")["supplyGroups"]
+    assert [(g["unitLabel"], [(c["kind"], c["value"]) for c in g["counts"]]) for g in groups] == [
+        ("201-1호", []),
+        ("201-2호", []),  # 병합 칸의 「입주완료」도 그 호실의 상태
+        ("202-2호", [("OFFERED", 1)]),
+    ]
+    assert all(p["sourceAmount"] == "3,000" for g in groups for p in g["prices"]) and all(g["prices"] for g in groups)  # 가격은 그대로
+    assert st._occupied(["", "301호", "공가(입주완료 후 퇴거)"]) is False  # 공가 표시가 있으면 모집 호실
+
+
 def test_unit_floor_comes_from_unit_number_when_there_is_no_floor_column():
     # 실측 2026-10-26 LH 청년 매입임대 주택목록: 층 열이 없고 호 칸(214·1005)만 있어 31호 모두 층이 비었어요
     rows = (
