@@ -132,8 +132,8 @@ def _inline(node: Any, copies: dict[str, Any]) -> Any:
     return {k: _inline(v, copies) for k, v in node.items()}
 
 
-def _unroll(schema: dict[str, Any]) -> dict[str, Any]:
-    """쓰지 않는 정의를 빼고, 자기 자신을 다시 가리키는 정의(조건식)는 MAX_DEPTH 단계로 펼쳐 쓰는 자리에 직접 넣습니다.
+def _unroll(schema: dict[str, Any], depth: int = MAX_DEPTH) -> dict[str, Any]:
+    """쓰지 않는 정의를 빼고, 자기 자신을 다시 가리키는 정의(조건식)는 depth 단계로 펼쳐 쓰는 자리에 직접 넣습니다.
 
     엄격 모드는 재귀를 받지 않고, 다른 정의를 참조하는 anyOf를 최상위에 둔 정의도 거부합니다(실측). 펼친 단계는 정의로 두지 않습니다.
     """
@@ -142,7 +142,7 @@ def _unroll(schema: dict[str, Any]) -> dict[str, Any]:
     cyclic = {name for name in used if name in _reachable(_refs(defs[name]), defs)}
     # 가장 깊은 단계는 재귀 선택지를 지우고, 그 위 단계는 아래 단계를 직접 넣어 만듭니다.
     copies = {name: _collapse(_retarget(defs[name], cyclic, None)) for name in cyclic}
-    for _ in range(MAX_DEPTH - 1):
+    for _ in range(depth - 1):
         copies = {name: _collapse(_inline(defs[name], copies)) for name in cyclic}
     rest = _collapse(_inline({k: v for k, v in schema.items() if k != "$defs"}, copies))
     new_defs = {name: _collapse(_inline(defs[name], copies)) for name in used if name not in cyclic}
