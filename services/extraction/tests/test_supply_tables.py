@@ -461,6 +461,17 @@ def test_price_table_without_row_names_is_reported_instead_of_skipped_silently()
         [(["2구간 (~50%)"], "DEPOSIT", "18,560,000"), (["2구간 (~50%)"], "MONTHLY_RENT", "149,300")],
     ]
 
+    # 2026-11-07 v8 유료 확인 bmc-75: 이어진 「상호전환 시 임대조건」 표는 (-)·(+)·(+) 세 줄이 칸마다 금액 셋으로 읽히고 제목에 주택형이 없어,
+    # 주택형·수량·가격 없는 빈 묶음마다 가격 빈칸 이슈가 붙었음 → 빈 묶음은 두지 않고 읽지 못한 가격표 메모 하나로
+    switch_rows = (("구간", "임대보증금(원)", "월임대료(원)"), ("1 구 간", "11,360,000 21,110,000 27,600,000", "144,900 106,300 73,900"))
+    tables.append(st.Table("9-3", 9, "상호전환 시 임대조건", switch_rows[0], switch_rows, None))
+    prices = [column(2, "PRICE", pk="DEPOSIT", unit="원", stage="CONVERSION_DEPOSIT_UP"), column(3, "PRICE", pk="MONTHLY_RENT", unit="원")]
+    mapping["tables"].append({"table": "9-3", "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": [column(1, "TARGET_GROUP"), *prices]})
+    part = st.build_part(tables, mapping, "pdf-text")
+    assert [g["housingTypeCode"] for g in part["supplyGroups"]] == ["39A"] and len(part["supplyGroups"][0]["prices"]) == 4
+    [issue] = part[st.ISSUES_KEY]
+    assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-3" in issue["description"]
+
 
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금

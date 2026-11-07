@@ -869,6 +869,12 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         if group["itemKind"] == "HOUSING_UNIT" and not group.get("floor") and unit and int(unit[1]) > 0:
             group["floor"] = f"{int(unit[1])}층"
     groups = _attach_price_tables(groups)
+    # 수량도 읽은 가격도 없이 금액 여럿이 붙은 칸만 남은 행은 빈 공급 묶음으로 두지 않고 읽지 못한 가격표로 알립니다(2026-11-07 지시 v8 유료 확인
+    # bmc-75: 「상호전환 시 임대조건」 표의 (-)·(+)·(+) 세 줄이 칸마다 「11,360,000 21,110,000 27,600,000」로 읽혀, 주택형 없는 빈 묶음 12개마다
+    # 가격 빈칸 이슈가 붙음)
+    blank = [g for g in groups if not g["counts"] and not g["prices"] and g.get("_unsplit")]
+    crammed = list(dict.fromkeys(g["id"].rsplit("-r", 1)[0].removeprefix("sg-t") for g in blank))
+    groups = [g for g in groups if g not in blank]
     if not groups:
         return None
     merged_counts: dict[str, list[str]] = {}  # 공급 묶음 → 여러 행이 나눠 가진 병합 칸 수량
@@ -901,6 +907,15 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
                 "code": PRICE_TABLE_UNREAD,
                 "description": f"가격표 {', '.join(unread[:4])}에 행마다 어느 주택형·대상의 금액인지 정할 칸이 없어(예: 소득 구간별 임대조건) "
                 "가격을 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
+            }
+        )
+    if crammed:
+        issues.append(
+            {
+                "supplyGroupId": None,
+                "code": PRICE_TABLE_UNREAD,
+                "description": f"가격표 {', '.join(crammed[:4])}의 금액 칸에 금액이 여럿 붙어 있어(위아래 행이 한 칸으로 읽힘) 어느 행의 가격인지 "
+                "정하지 못해 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
             }
         )
     for group in groups:
