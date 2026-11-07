@@ -851,6 +851,28 @@ def test_occupied_unit_rows_are_not_counted_as_offered():
     assert st._occupied(["", "301호", "공가(입주완료 후 퇴거)"]) is False  # 공가 표시가 있으면 모집 호실
 
 
+def test_unit_rows_count_only_the_units_named_in_the_supply_scale_line():
+    # 2026-11-07 gndc-12394176: 「□ 공급규모 : 1인실 2호(남성 : 101호, 여성 : 202-1호)」인데 호실 표는 일곱 호실의 임대료 표라,
+    # 행마다 모집 1로 세면 다섯 호실이 틀린 모집 1
+    text = "Ⅰ 공급현황\n□ 공급규모 : 1인실 2호(남성 : 101호, 여성 : 202-1호)\n- 위 치 : 가상시 가상로 1"
+    assert st.offered_units(text) == {"101", "202-1"}
+    assert (
+        st.offered_units("□ 공급호수 : 10호(101호 등)") == set() and st.offered_units("□ 공급호수 : 3호(101호, 102호)") == set()
+    )  # 줄였거나 수가 다르면 안 셈
+    assert st.offered_units("□ 공급세대 : 25세대(지하철 6호선 인근)") == set()
+    rows = (("층", "호실", "전용", "월임대료"), ("1층", "101호", "11.38", "7만원"), ("", "102호", "12.60", "8만원"), ("2층", "202-1호", "8.25", "5만원"))
+    table = st.Table("1-1", 1, "", rows[0], rows, ((0, 1, 2, 3), (4, 5, 6, 7), (4, 8, 9, 10), (11, 12, 13, 14)))
+    columns = [column(1, "FLOOR"), column(2, "UNIT"), column(3, "AREA_EXCLUSIVE"), column(4, "PRICE", pk="MONTHLY_RENT", unit="원")]
+    mapping = {"tables": [{"table": "1-1", "role": "SUPPLY", "rowUnit": "HOUSING_UNIT", "complex": "거북이집", "columns": columns}]}
+
+    def offered(units):
+        groups = st.build_part([table], mapping, "pdf-text", offered=units)["supplyGroups"]
+        return [(g["unitLabel"], [c["value"] for c in g["counts"]]) for g in groups]
+
+    assert offered(st.offered_units(text)) == [("101호", [1]), ("102호", []), ("202-1호", [1])]
+    assert offered(set()) == offered({"301", "302"}) == [("101호", [1]), ("102호", [1]), ("202-1호", [1])]  # 이 표의 호실이 아니면 그대로
+
+
 def test_unit_floor_comes_from_unit_number_when_there_is_no_floor_column():
     # 실측 2026-10-26 LH 청년 매입임대 주택목록: 층 열이 없고 호 칸(214·1005)만 있어 31호 모두 층이 비었어요
     rows = (
