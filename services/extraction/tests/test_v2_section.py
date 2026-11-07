@@ -816,6 +816,37 @@ def test_the_resolver_looks_at_each_warned_item_in_its_own_conversation_at_the_s
     assert [row["rule"]["status"] for row in draft.items["eligibility"]] == ["UNSTRUCTURED", "UNSTRUCTURED"]  # 담당 초안은 그대로
 
 
+def test_previous_add_arguments_are_sent_as_ids_only_and_rejected_items_stay_whole():
+    # 2026-11-08 저장 결과 23건: 둘째 차례부터의 새 입력 111.5만 토큰 중 앞 차례 출력이 77만(대부분 넣기 인자)을 다음 차례마다 다시 보냄
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "evidence": ["p1.2"]}
+    bad = {**schedule, "id": "bad", "evidence": ["p9.9"]}  # 없는 근거 id라 거절됨
+    add = call("add_schedules", items=[{**schedule, "id": "good"}, bad])
+    block = {"type": "function_call", "call_id": add["id"], "name": "add_schedules", "arguments": json.dumps(add["args"], ensure_ascii=False)}
+    fix = call("update_item", section="schedules", item_id="bad", changes={"evidence": ["p1.2"]})
+    seen = []
+
+    class Seeing(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            seen.append(messages)
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    turns = iter([AIMessage(content=[block], tool_calls=[add]), AIMessage(content="", tool_calls=[fix]), AIMessage(content="끝")])
+    tools_ = [add_tool("schedules", ("text",)), *WRITE_TOOLS]
+    agent = create_agent(Seeing(messages=turns), tools=tools_, middleware=[section.CompactHistoryMiddleware()], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    for messages in seen[1:]:  # 둘째·셋째 차례: 앞 차례 넣기 인자는 넣어진 항목 id만, 거절된 항목은 그대로(호출 목록·응답 블록 모두)
+        sent = next(m for m in messages if isinstance(m, AIMessage) and m.tool_calls and m.tool_calls[0]["name"] == "add_schedules")
+        assert sent.tool_calls[0]["args"]["items"] == [{"id": "good"}, bad] and "생략" in sent.tool_calls[0]["args"]
+        assert json.loads(sent.content[0]["arguments"])["items"] == [{"id": "good"}, bad]
+    later = next(m for m in seen[2] if isinstance(m, AIMessage) and m.tool_calls and m.tool_calls[0]["name"] == "update_item")
+    assert later.tool_calls[0]["args"] == fix["args"]  # 고치기 인자는 그대로
+    kept = next(m for m in result["messages"] if isinstance(m, AIMessage) and m.tool_calls)
+    assert kept.tool_calls[0]["args"] == add["args"]  # 작업 기록(상태)의 대화는 줄이지 않음
+    assert [row["id"] for row in draft.items["schedules"]] == ["good", "bad"]  # 줄여 보내도 넣기·고치기는 그대로
+
+
 def test_the_resolver_is_on_by_default_and_runs_three_items_at_a_time_with_a_smaller_output_limit(monkeypatch):
     # 2026-11-08 유료 확인 dudc-8934: 경고 항목 12개를 한꺼번에 자격 출력 한도(3.6만)로 불러, 호출마다 최악 비용을 미리 잡는 예산이 공고
     # 상한에 닿아 10개가 시작도 못 함. 사용자 결정으로 기본 켬(false로 끔)

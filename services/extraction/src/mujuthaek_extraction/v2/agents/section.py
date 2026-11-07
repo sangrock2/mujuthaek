@@ -312,6 +312,64 @@ class ToolErrorMiddleware(AgentMiddleware):
             return ToolMessage(content=content, tool_call_id=call["id"], name=call.get("name"), status="error")
 
 
+COMPACT_TOOL_PREFIX = "add_"  # 인자를 줄여 보낼 넣기 도구(add_<섹션>)
+COMPACT_NOTE = "넣어진 항목은 id만 남겼습니다(내용은 초안에 있고 다시 보내지 않음). 거절된 항목은 그대로입니다."
+
+
+class CompactHistoryMiddleware(AgentMiddleware):
+    """모델에 보내는 대화에서 앞 차례 넣기 도구의 인자(항목 JSON)를 줄입니다: 넣어진 항목은 id만, 거절된 항목은 그대로(고칠 때 보게).
+    앞 차례 출력은 다음 차례마다 입력으로 다시 보내져 처음엔 캐시 쓰기, 그 뒤엔 캐시 읽기 값을 냅니다(2026-11-08 저장 결과 23건: 둘째 차례부터의
+    새 입력 111.5만 토큰 중 앞 차례 출력이 77만, 보이는 출력 57.6만은 대부분 넣기 인자 — 응답 하나의 넣기 인자가 5.9만 글자인 것도 있음).
+    도구 호출 목록과 응답 내용의 function_call 블록(Responses API가 이것을 다시 보냄)을 함께 줄이고, 생각(reasoning)·고치기·도구 결과는 그대로
+    둡니다. 상태(작업 기록)의 대화는 바꾸지 않고, 매 차례 같은 규칙으로 줄여 앞부분 캐시가 흔들리지 않습니다."""
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        failed = _failed_items(request.messages)
+        messages = [_compact(message, failed) if isinstance(message, AIMessage) else message for message in request.messages]
+        return handler(request.override(messages=messages))
+
+
+def _failed_items(messages: list[Any]) -> dict[str, set[str]]:
+    """도구 호출 id → 그 넣기에서 거절된 항목 id들(도구 결과의 failed)."""
+    failed: dict[str, set[str]] = {}
+    for message in messages:
+        if not isinstance(message, ToolMessage) or not str(message.name or "").startswith(COMPACT_TOOL_PREFIX):
+            continue
+        try:
+            answer = json.loads(message.content) if isinstance(message.content, str) else {}
+        except json.JSONDecodeError:
+            continue
+        failed[message.tool_call_id] = {str(row.get("id")) for row in answer.get("failed") or [] if isinstance(row, dict)}
+    return failed
+
+
+def _compact(message: AIMessage, failed: dict[str, set[str]]) -> AIMessage:
+    short = {
+        call["id"]: _compact_args(call.get("args"), failed.get(call["id"], set()))
+        for call in message.tool_calls
+        if call.get("name", "").startswith(COMPACT_TOOL_PREFIX) and isinstance((call.get("args") or {}).get("items"), list)
+    }
+    if not short:
+        return message
+    content = message.content
+    if isinstance(content, list):
+        content = [
+            {**block, "arguments": json.dumps(short[block["call_id"]], ensure_ascii=False)}
+            if isinstance(block, dict) and block.get("type") == "function_call" and block.get("call_id") in short
+            else block
+            for block in content
+        ]
+    calls = [{**call, "args": short[call["id"]]} if call["id"] in short else call for call in message.tool_calls]
+    return message.model_copy(update={"tool_calls": calls, "content": content})
+
+
+def _compact_args(args: dict[str, Any], failed: set[str]) -> dict[str, Any]:
+    def short(item: Any) -> Any:
+        return item if not isinstance(item, dict) or str(item.get("id")) in failed else {"id": item.get("id")}
+
+    return {**args, "items": [short(item) for item in args["items"]], "생략": COMPACT_NOTE}
+
+
 class StopAfterModel(AgentMiddleware):
     """모델 답을 받으면 도구를 실행하지 않고 끝냅니다(캐시 데우기)."""
 
@@ -349,8 +407,8 @@ def _agent(model: Any, name: str, state: Any, documents: tuple[str, ...], middle
         model,
         tools=[*shared_tools(tuple(state["plan"]["sections"]), documents), *WRITE_TOOLS],
         system_prompt=system_prompt(rules),
-        # 재시도가 바깥: 다시 보낼 때마다 예산을 다시 예약. 도구 오류는 그 호출의 오류 답으로(담당은 계속)
-        middleware=[retry_middleware(), BudgetMiddleware(name), ToolErrorMiddleware(), *middleware],
+        # 재시도가 바깥: 다시 보낼 때마다 예산을 다시 예약. 앞 차례 넣기 인자는 줄여 보내고(예산도 줄인 크기로 잡음), 도구 오류는 그 호출의 오류 답으로
+        middleware=[retry_middleware(), CompactHistoryMiddleware(), BudgetMiddleware(name), ToolErrorMiddleware(), *middleware],
         context_schema=SectionContext,
         name=name,
     )
