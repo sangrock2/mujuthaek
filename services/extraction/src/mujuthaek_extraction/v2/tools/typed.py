@@ -29,7 +29,7 @@ from typing import Any
 from langchain.tools import ToolRuntime
 from langchain_core.tools import StructuredTool
 
-from mujuthaek_extraction.model.strict_schema import _inline_all, _unroll
+from mujuthaek_extraction.model.strict_schema import _collapse, _inline, _inline_all, _reachable, _refs, _retarget
 from mujuthaek_extraction.rules.base import call_schema
 from mujuthaek_extraction.v2.tools.write import SectionContext, add
 
@@ -57,9 +57,24 @@ SCOPE_OPTIONAL = {"supplyCategory": "생략하면 ALL", "resolution": "생략하
 
 @lru_cache(maxsize=64)
 def item_schema(section: str, documents: tuple[str, ...]) -> dict[str, Any]:
-    schema = _inline_all(_unroll(copy.deepcopy(call_schema((section,), list(documents))), depth=TOOL_DEPTH))
+    schema = _inline_all(_unroll(copy.deepcopy(call_schema((section,), list(documents))), TOOL_DEPTH))
     node = schema["properties"][section]
     return _first_descriptions(_relax(node if section == "notice" else node["items"], top=True))
+
+
+def _unroll(schema: dict[str, Any], depth: int) -> dict[str, Any]:
+    """strict_schema._unroll과 같되 depth 단계로 펼칩니다. strict_schema.py는 V1 호출 캐시 열쇠(call_cache.response_code_hash)에
+    들어가 고치면 저장된 V1 답을 모두 다시 삼(2026-11-08 유료 확인: 단계 인자를 그 파일에 더했다가 공급표·구조·다시 보기·그림 판독
+    호출이 모두 캐시를 못 써 $0.095를 더 씀)."""
+    defs = schema.get("$defs", {})
+    used = _reachable(_refs({k: v for k, v in schema.items() if k != "$defs"}), defs)
+    cyclic = {name for name in used if name in _reachable(_refs(defs[name]), defs)}
+    copies = {name: _collapse(_retarget(defs[name], cyclic, None)) for name in cyclic}
+    for _ in range(depth - 1):
+        copies = {name: _collapse(_inline(defs[name], copies)) for name in cyclic}
+    rest = _collapse(_inline({k: v for k, v in schema.items() if k != "$defs"}, copies))
+    new_defs = {name: _collapse(_inline(defs[name], copies)) for name in used if name not in cyclic}
+    return {**rest, "$defs": new_defs} if new_defs else rest
 
 
 def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:

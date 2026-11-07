@@ -580,6 +580,12 @@ def _schema_nodes(node):
 def test_tool_definitions_read_every_turn_stay_short_and_deeper_conditions_are_still_accepted():
     # 2026-11-08 저장 결과 23건: 담당 공통 앞부분 평균 5.9만 토큰 중 지시·도구가 3.2만, 자격 도구만 1.65만(조건식이 규칙·예외 발동 조건·
     # 바뀐 기준에 3단계로 펼쳐져 세 번). 담당 출력 조건식 1,800여 개 중 3단계 이상은 10개
+    from mujuthaek_extraction.model import strict_schema
+    from mujuthaek_extraction.rules.base import call_schema
+    from mujuthaek_extraction.v2.tools.typed import _unroll
+
+    # 펼치기는 V1 것과 같은 방법(단계만 다름). strict_schema.py는 V1 호출 캐시 열쇠에 들어가 그 파일을 고치지 않고 따로 둠
+    assert _unroll(call_schema(("eligibility",), ["text"]), strict_schema.MAX_DEPTH) == strict_schema._unroll(call_schema(("eligibility",), ["text"]))
     item = typed_item_schema("eligibility", ("text",))
     nodes = list(_schema_nodes(item))
     descriptions = [node["description"] for node in nodes if isinstance(node.get("description"), str)]
