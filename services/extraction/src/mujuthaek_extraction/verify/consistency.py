@@ -870,7 +870,15 @@ DOCUMENT_WORD = re.compile(
 )
 HEADING_LOOKBACK = 3  # 표 위로 볼 글 줄 수(쪽 표시·빈 줄 제외)
 DOCUMENT_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(한 행은 다른 표·글로 넣은 서류일 때가 많음)
-OMITTED_ROWS = re.compile(r"서류 표 행 (\d+)개")
+OMITTED_ROWS = re.compile(r"(?:서류 표 행|첨부 증빙) (\d+)개")
+# 서류 칸 안에 「- 상황 : 서류」로 나열된 첨부 증빙(2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행의 비고 칸 「- 비상장주식 : 증권사 조회내역,
+# 주식보관증 …」「- 장기카드대출 : 신용카드사가 발급한 증빙서류」를 V1은 모두 상황마다 서류로 나눴는데, V2 서류 담당은 bmc-71·gh-808에서 상위 서류
+# 하나만 넣고 끝냄. 그 행은 상위 서류가 인용해 행 누락으로는 잡히지 않았음). 그 증빙 서류를 이름으로 넣었거나 그 상황을 적용 대상으로 둔 서류가
+# 없으면 빠진 서류로 셉니다. 23건 첨부 항목 29개 중 이렇게 걸린 8개는 모두 진짜 누락(V1 0개)
+ATTACHMENT_ITEM = re.compile(r"(?:^|\s)[-–]\s*([^:：\-–•]{2,30}?)\s*[:：]\s*(.+?)(?=\s[-–]\s|\s•|$)")
+ATTACHMENT_DOCUMENT = re.compile(DOCUMENT_WORD.pattern + r"|내역|증서|증빙|자료|영수증")
+SITUATION_SPLIT = re.compile(r"및|/|,|·|또는")
+NAME_NOTE = re.compile(r"\([^)]*\)")
 # 서류 표의 머리 행(2026-10-24 오탐: 표 위 제목으로 서류 표가 된 표의 「| 구 분 | 계약서류 |」 머리 행을 빠진 서류로 셈).
 # 모든 칸이 머리 낱말(구분·서류·발급처·비고 등)뿐인 행은 서류 행이 아닙니다
 HEADER_CELL = re.compile(
@@ -902,9 +910,9 @@ def _step_row(row: str) -> bool:
 
 
 def omitted_document_rows(description: str) -> int:
-    """DOCUMENT_OMISSION_SUSPECTED 설명의 빠진 행 수(재확인이 일부만 채웠는지 비교하는 데 씀). 없으면 1."""
-    found = OMITTED_ROWS.search(description or "")
-    return int(found[1]) if found else 1
+    """DOCUMENT_OMISSION_SUSPECTED 설명의 빠진 행·첨부 증빙 수(재확인이 일부만 채웠는지 비교하는 데 씀). 없으면 1."""
+    found = OMITTED_ROWS.findall(description or "")
+    return sum(map(int, found)) if found else 1
 
 
 def _document_table_rows(text: str) -> list[str]:
@@ -935,6 +943,25 @@ def _document_table_rows(text: str) -> list[str]:
     return out
 
 
+def _unhandled_attachments(documents: list[dict[str, Any]], rows: list[str]) -> list[str]:
+    """서류 표 행의 칸 안에 「- 상황 : 서류」로 나열된 첨부 증빙 가운데, 그 증빙 서류를 이름으로 넣었거나 그 상황을 적용 대상(appliesTo)으로 둔
+    서류가 하나도 없는 것."""
+    names = [n for n in (normalize(NAME_NOTE.sub("", str(d.get("name") or ""))) for d in documents) if len(n) >= 3]
+    applies = [normalize(str(d.get("appliesTo") or "")) for d in documents]
+    missed = []
+    for row in rows:
+        for cell in _cells(row):
+            for situation, docs in ATTACHMENT_ITEM.findall(cell):
+                if not ATTACHMENT_DOCUMENT.search(docs):
+                    continue
+                plain = normalize(NAME_NOTE.sub("", docs))
+                words = [w for w in (normalize(x) for x in SITUATION_SPLIT.split(NAME_NOTE.sub("", situation))) if len(w) >= 2]
+                if any(n in plain for n in names) or any(w in a for w in words for a in applies):
+                    continue
+                missed.append(f"- {situation.strip()} : {docs.strip()}"[:60])
+    return missed
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -942,22 +969,27 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
     quotes = {ev["id"]: normalize(ev["quote"]) for ev in candidate.get("evidence") or []}
     cited = [quotes[i] for d in documents for i in d.get("evidenceIds") or [] if len(quotes.get(i, "")) >= 4]
     names = [n for n in (normalize(str(d.get("name") or "")) for d in documents) if len(n) >= 2]
+    rows = _document_table_rows("\n".join(sources.texts.values()))
     missed = []
-    for row in _document_table_rows("\n".join(sources.texts.values())):
+    for row in rows:
         if not DOCUMENT_WORD.search(row):
             continue
         plain = normalize(row)
         if any(q in plain or plain in q for q in cited) or any(n in plain for n in names):
             continue
         missed.append(" ".join(c for c in _cells(row) if c)[:60])
+    parts = []
+    attachments = _unhandled_attachments(documents, rows)
+    if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)
+        shown = ", ".join(f"「{item}」" for item in attachments[:2])
+        parts.append(
+            f"서류 칸에 나열된 첨부 증빙 {len(attachments)}개를 다룬 서류가 없습니다(상황마다 증빙 서류로): {shown}{' …' if len(attachments) > 2 else ''}"
+        )
     if len(missed) >= DOCUMENT_OMISSION_MIN_ROWS:
         shown = ", ".join(f"「{row}」" for row in missed[:3])
-        find(
-            "V8",
-            DOCUMENT_OMISSION,
-            "/quality/coverage/requiredDocuments",
-            f"원문 서류 표 행 {len(missed)}개를 근거로 쓴 서류가 없습니다(빠진 서류 의심): {shown}{' …' if len(missed) > 3 else ''}",
-        )
+        parts.append(f"원문 서류 표 행 {len(missed)}개를 근거로 쓴 서류가 없습니다(빠진 서류 의심): {shown}{' …' if len(missed) > 3 else ''}")
+    if parts:
+        find("V8", DOCUMENT_OMISSION, "/quality/coverage/requiredDocuments", " ".join(parts))
 
 
 def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[Finding]:
