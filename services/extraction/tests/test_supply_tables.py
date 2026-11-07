@@ -447,6 +447,20 @@ def test_price_table_without_row_names_is_reported_instead_of_skipped_silently()
     assert issue["code"] == "SUPPLY_PRICE_TABLE_UNREAD" and issue["supplyGroupId"] is None and "9-2" in issue["description"]
     assert is_note({"code": issue["code"], "target": "/supplyGroups"}) and issue["code"] in DROPPED_VALUE_CODES  # 게시 유지, 검수 대기열
 
+    # 지시 v8대로 구간 칸을 TARGET_GROUP으로 답하면 구간마다 요금안이 나뉘어 표 제목의 주택형(39A) 모집 묶음에 붙습니다
+    tables[1] = st.Table("9-2", 9, "[ 39A ] 구간별 임대조건", tier_rows[0], tier_rows, None, above=("◾[ 39A ] 구간별 임대조건",))
+    mapping["tables"][1]["columns"].insert(0, column(1, "TARGET_GROUP"))
+    part = st.build_part(tables, mapping, "pdf-text")
+    [group] = part["supplyGroups"]
+    assert (group["housingTypeCode"], [c["value"] for c in group["counts"]]) == ("39A", [19]) and st.ISSUES_KEY not in part
+    plans = {}
+    for p in group["prices"]:
+        plans.setdefault(p["pricePlanId"], []).append((p["scope"]["targetGroups"], p["kind"], p["sourceAmount"]))
+    assert sorted(plans.values()) == [
+        [(["1구간 (~30%)"], "DEPOSIT", "16,240,000"), (["1구간 (~30%)"], "MONTHLY_RENT", "130,700")],
+        [(["2구간 (~50%)"], "DEPOSIT", "18,560,000"), (["2구간 (~50%)"], "MONTHLY_RENT", "149,300")],
+    ]
+
 
 def test_price_rows_split_by_area_attach_to_the_type_whose_area_range_holds_them():
     # 실측(LH 부산당감 50년 공공임대): 공급표 「39 | 39.70 ~ 39.87 | 100」, 임대조건표는 면적 「39.70」「39.87」 행마다 보증금
