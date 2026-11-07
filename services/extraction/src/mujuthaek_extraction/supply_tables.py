@@ -993,6 +993,7 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str) -
         dropped = {id(count) for count in complex_totals}
         for group in groups:
             group["counts"] = [count for count in group["counts"] if id(count) not in dropped]
+    groups = _join_type_tables(groups)
     issues = []
     if unread:
         # 묶음을 가리키지 않아 공급 섹션 이슈가 됩니다. 판정 섹션이 아니라 메모로 내려가고 공고는 공개한 채 검수 대기열에 오릅니다
@@ -1526,6 +1527,45 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             target["quoteRefs"] = list(dict.fromkeys([*target["quoteRefs"], *group["quoteRefs"]]))
             if group.get("_unsplit"):
                 target.setdefault("_unsplit", []).extend(group["_unsplit"])
+    return kept
+
+
+def _join_type_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 주택형을 두 표가 나눠 적은 공고(「주택형·전용면적·세대수」 표와 「주택형 × 계층별 모집 수」 표)의 묶음을 잇습니다
+    (2026-11-07 23건 대조 dcco-24791·24804: 계층 묶음에 전용면적이 없어 21A가 면적·세대수 묶음과 계층별 모집 묶음으로 두 번 나오고,
+    계층별 모집 수 15개가 같은 면적의 주택형 행과 이어지지 않음).
+    - 면적: 면적 없는 묶음과 주택형 코드가 똑같은 다른 표 묶음(같은 단지)의 면적이 하나뿐이면 그 면적을 쓰고, 면적이 적힌 그 행도 인용합니다
+    - 합계 묶음: 대상 없이 대상 주택 수만 적힌 묶음은, 같은 주택형의 다른 표 계층 묶음들이 모두 대상 주택 수를 따로 적었고 그 합이 같으면
+      뺍니다(계층 묶음들이 같은 수를 나눠 가짐). 합이 다르거나 계층 묶음에 대상 주택 수가 없으면 그대로 둡니다"""
+    complexes = {_norm(g.get("_complex")) for g in groups} - {""}
+
+    def code(group: dict[str, Any]) -> str:
+        return _norm(group.get("housingTypeCode")).upper()
+
+    def has_area(group: dict[str, Any]) -> bool:
+        return group.get("exclusiveAreaSqm") is not None or bool(group.get("exclusiveAreaRange"))
+
+    def related(a: dict[str, Any], b: dict[str, Any]) -> bool:  # 다른 표의 같은 주택형(같은 단지)
+        same_place = len(complexes) <= 1 or _norm(a.get("_complex")) == _norm(b.get("_complex"))
+        return a is not b and _table_label(a) != _table_label(b) and bool(code(a)) and code(a) == code(b) and same_place
+
+    for group in groups:
+        if has_area(group):
+            continue
+        donors = [d for d in groups if related(group, d) and has_area(d)]
+        if len({(d.get("exclusiveAreaSqm"), json.dumps(d.get("exclusiveAreaRange"), sort_keys=True)) for d in donors}) == 1:
+            group["exclusiveAreaSqm"], group["exclusiveAreaRange"] = donors[0].get("exclusiveAreaSqm"), donors[0].get("exclusiveAreaRange")
+            group["quoteRefs"] = list(dict.fromkeys([*group["quoteRefs"], donors[0]["quoteRefs"][0]]))
+    kept = []
+    for group in groups:
+        totals = group["counts"]
+        flagged = group.get("_unsplit") or group.get("_type_ambiguous") or group.get("_scope_uncertain")
+        if totals and all(c["kind"] == "TOTAL_HOUSING" for c in totals) and not group["scope"]["targetGroups"] and not group["prices"] and not flagged:
+            parts = [p for p in groups if related(group, p) and p["scope"]["targetGroups"]]
+            shares = [[c["value"] for c in p["counts"] if c["kind"] == "TOTAL_HOUSING" and not c.get("allocationPoolId")] for p in parts]
+            if parts and all(len(s) == 1 for s in shares) and sum(s[0] for s in shares) == sum(c["value"] for c in totals):
+                continue
+        kept.append(group)
     return kept
 
 

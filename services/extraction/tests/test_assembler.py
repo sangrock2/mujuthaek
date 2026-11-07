@@ -281,6 +281,35 @@ def test_broken_count_grouping_is_ungrouped_but_values_kept():
     assert {i["target"] for i in changed} == {"/notice/counts/0", "/supplyGroups/0/counts/0"}
 
 
+def test_recruitment_stage_written_as_count_target_is_cleared():
+    # 2026-11-07 23건 대조: 공고 수량 「OFFERED 280 [예비입주자]」「RESERVE 15 [예비 입주자]」 — 모집 단계는 수량 종류가 나타내므로
+    # 대상이 아닙니다(공고 전체 모집 수가 대상을 한정한 수로 보였음)
+    data = example("housing")
+    part = copy.deepcopy(ai_part(data))
+    base = part["notice"]["counts"][0]
+
+    def count(count_id, kind, value, groups):
+        made = {**copy.deepcopy(base), "id": count_id, "kind": kind, "value": value, "aggregationRole": "STANDALONE", "parentCountId": None}
+        made.update(aggregationComplete=False, scope={**base["scope"], "targetGroups": groups})
+        return made
+
+    def targets(counts):
+        part["notice"]["counts"] = counts
+        result = assemble([copy.deepcopy(part)], source_for("housing", data))
+        assert result.contract_errors == []
+        changed = [i["target"] for i in result.issues if i["code"] == "AI_OUTPUT_VALUE_CHANGED"]
+        return [c["scope"]["targetGroups"] for c in result.candidate["notice"]["counts"]], changed
+
+    staged = [count("c1", "OFFERED", 2, ["우선 입주자"]), count("c2", "RESERVE", 15, ["예비 입주자"]), count("c3", "OFFERED", 3, ["청년"])]
+    assert targets(staged) == ([[], [], ["청년"]], ["/notice/counts/0", "/notice/counts/1"])  # 신청 계층(청년)은 그대로
+    # 예비입주자만 모집하는 공고는 예비자 수가 OFFERED라 비웁니다
+    assert targets([count("c1", "TOTAL_HOUSING", 1650, []), count("c2", "OFFERED", 280, ["예비입주자"])])[0] == [[], []]
+    # 즉시·예비를 함께 뽑으며 예비자 수를 OFFERED로 적었으면(다른 OFFERED가 있음) 대상이 두 수를 가르므로 두고,
+    # 비우면 같은 종류의 대상 없는 수량과 겹칠 때도 둡니다
+    assert targets([count("c1", "OFFERED", 2, []), count("c2", "OFFERED", 15, ["예비입주자"])])[0] == [[], ["예비입주자"]]
+    assert targets([count("c1", "RESERVE", 15, []), count("c2", "RESERVE", 15, ["예비 입주자"])])[0] == [[], ["예비 입주자"]]
+
+
 def test_missing_field_pointing_nowhere_is_dropped():
     data = example("housing")
     part = copy.deepcopy(ai_part(data))
