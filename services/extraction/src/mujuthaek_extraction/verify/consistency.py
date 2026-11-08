@@ -1427,7 +1427,8 @@ def _check_definition_scope(candidate: dict[str, Any], find: Any) -> None:
 # 조건의 대상(scope.targetGroups)을 비우고 적용 대상 글(appliesTo)에만 계층 이름을 적어, 자목 「65세 이상 수급권자·차상위계층」의 나이 65세 이상,
 # 사목 「65세 이상 직계존속 부양」의 부모 나이, 나·마·바·아목만의 소득·자산·자동차 상한이 신청자 전체 조건으로 자동 게시됨 — 65세 미만은 모두
 # 「지원 불가」. 앞 실행은 같은 조건을 계층 대상으로 넣었음). 대상·공급 묶음·위치·공급 구분 어디에도 한정되지 않은 조건식 가운데
-# ① 같은 주체·기준에 경계가 여럿이면 더 좁은 쪽(모두 함께 적용되어 넓은 쪽은 뜻이 없어짐: 한쪽은 일부 계층의 기준으로 봄)
+# ① 서로 다른 조건 항목이 같은 주체·기준에 다른 경계를 걸면 더 좁은 쪽(모두 함께 적용되어 넓은 쪽은 뜻이 없어짐: 한쪽은 일부 계층의 기준으로 봄).
+#    한 항목 안의 경계 둘(「이상」을 「이하」로 뒤집어 상한이 둘이 된 나이 등)은 이 꼴이 아니라 보지 않습니다(방향 대조 OPERATOR_MISMATCH가 봄)
 # ② 부모·그 밖의 가족(자녀 등)의 나이
 # ③ 원문 글이나 근거 인용 하나가 목록의 목을 둘 이상 가리킴(「나목, 마목」 「‘나’목, ‘마’목의 경우에는」). 근거도 봅니다: 다시 확인한 실행에서
 #    담당이 같은 총자산·자동차 조건의 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어 원문 글로는 안 걸렸고, 근거에는 「자산기준이 적용되는 자격
@@ -1443,13 +1444,14 @@ BOUND_SIDES = {"GT": "low", "GTE": "low", "LT": "high", "LTE": "high"}
 def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
     quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
     flagged: dict[int, str] = {}
-    bounds: dict[tuple[str, str, str], list[tuple[float, int]]] = {}
+    bounds: dict[tuple[str, str, str], dict[int, float]] = {}  # (주체, 기준, low·high) → 항목 → 그 항목의 가장 좁은 경계
     for index, item in enumerate(candidate.get("eligibility") or []):
         if not _applies_to_everyone(item):
             continue
         expression = item["rule"].get("expression")
         for key, value in _top_bounds(expression):
-            bounds.setdefault(key, []).append((value, index))
+            kept = bounds.setdefault(key, {})
+            kept[index] = (max if key[2] == "low" else min)(kept.get(index, value), value)
         for _, atom in _atoms(expression, ""):
             if atom.get("attribute") == "AGE_YEARS" and atom.get("subject") in FAMILY_SUBJECTS:
                 flagged.setdefault(index, f"{FAMILY_SUBJECTS[atom['subject']]} 나이 기준이 대상 없이 신청자 전체에 걸립니다")
@@ -1459,12 +1461,12 @@ def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
                 items = ", ".join(f"{letter}목" for letter in letters[:4])
                 flagged.setdefault(index, f"원문이 목록의 일부 목({items})만 가리키는데 대상 없이 신청자 전체에 걸립니다")
                 break
-    for (_, attribute, side), values in bounds.items():
-        if len({value for value, _ in values}) < 2:
+    for (_, attribute, side), per_item in bounds.items():
+        if len(set(per_item.values())) < 2:
             continue
-        strict = max(value for value, _ in values) if side == "low" else min(value for value, _ in values)
-        shown = ", ".join(f"{value:g}" for value in sorted({value for value, _ in values}))
-        for value, index in values:
+        strict = max(per_item.values()) if side == "low" else min(per_item.values())
+        shown = ", ".join(f"{value:g}" for value in sorted(set(per_item.values())))
+        for index, value in per_item.items():
             if value == strict:
                 why = f"대상 없는 조건들이 같은 기준({_meaning(attribute)})에 서로 다른 경계({shown})를 걸어 더 좁은 {value:g}이(가) 신청자 전체에 걸립니다"
                 flagged.setdefault(index, why)

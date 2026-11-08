@@ -471,6 +471,8 @@ def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
     assert not is_note(found["/eligibility/1"].issue())  # 사람 확인(그 조건만 보류). 경계가 더 좁은 쪽만(넓은 쪽은 판정을 바꾸지 않음)
     assert flagged(adult, item(atom("AGE_YEARS", "GTE", 65), "65세 이상 수급권자")) == {}  # 계층 대상이면 그 계층에만
     assert flagged(adult, item({"kind": "ALL", "children": [atom("AGE_YEARS", "BETWEEN", [19, 39])]})) == {}  # 하한이 같고 상한은 하나
+    flipped = item({"kind": "ALL", "children": [atom("AGE_YEARS", "LTE", 19), atom("AGE_YEARS", "LTE", 39)]})
+    assert flagged(flipped) == {}  # 한 항목 안의 경계 둘(뒤집힌 연산자)은 방향 대조가 봄
     assert list(flagged(*(item(atom("INCOME_BENCHMARK_PERCENT", "LTE", value)) for value in (100, 70)))) == ["/eligibility/1"]  # 상한은 작은 쪽
     parents = item(atom("AGE_YEARS", "GTE", 65, subject="PARENTS"), original="사. 65세 이상의 직계존속을 부양하는 사람")
     assert "부모 나이" in flagged(parents)["/eligibility/0"].description
