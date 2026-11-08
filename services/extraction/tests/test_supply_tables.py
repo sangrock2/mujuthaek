@@ -1077,3 +1077,48 @@ def test_transcribed_picture_table_is_a_candidate_and_every_row_is_copied():
     part = st.build_part([table], mapping, "pdf-text")
     assert len(part["supplyGroups"]) == 3 and sum(len(g["prices"]) for g in part["supplyGroups"]) == 6
     assert all(q["text"] in text for q in part["quotes"])  # 인용은 판독 글의 표 줄 그대로
+
+
+def test_count_of_joined_targets_is_split_by_the_special_supply_table_of_each_target():
+    # 2026-11-09 23건 jbdc-16011: 본 공급표는 「기관추천‧국가유공자」 모집 수를 한 칸(59A 16·59B 14·59C 30)으로 적고, 대상마다 특별공급
+    # 세대수 표가 따로 있음(합계 행 59A 8·59B 7·59C 15씩). 정답표는 대상마다 나눈 값이라 4개를 놓침
+    from types import SimpleNamespace
+
+    def special(head, block_id):
+        return [
+            {"type": "text", "text": f"[표 12] 특별공급 안내\n{head}"},
+            {
+                "type": "table",
+                "id": block_id,
+                "columns": ["추천대상자", "해당 추천기관", "입주자저축", "계", "59A", "59B", "59C"],
+                "rows": [["장애인", "시청", "불필요", "10", "3", "2", "5"], ["합 계", "", "", "30", "8", "7", "15"]],
+            },
+        ]
+
+    blocks = special("■ 기관추천 특별공급 세대수(30)", "12-2") + special("■ 기관추천 국가유공자 특별공급 세대수(30)", "12-3")
+    blocks += [{"type": "table", "id": "12-4", "columns": ["구분", "59A", "59B"], "rows": [["합 계", "1", "1"]]}]  # 위에 특별공급 줄이 없음
+    specials = st.special_tables(SimpleNamespace(pdf_pages=[{"pages": [{"page": 12, "blocks": blocks}]}]))
+    assert [t.label for t in specials] == ["12-2", "12-3"]
+    rows = (
+        ("주택형", "공급대상", "모집 세대수"),
+        ("059.9288A", "기관추천‧국가유공자", "16"),
+        ("59B", "기관추천‧국가유공자", "14"),
+        ("59C", "기관추천‧국가유공자", "31"),  # 두 표 합계(15 + 15)와 다르면 나누지 않음
+    )
+    table = st.Table("4-2", 4, "공급 대상", rows[0], rows, tuple(tuple(range(3 * r, 3 * r + 3)) for r in range(len(rows))))
+    columns = [column(1, "HOUSING_TYPE"), column(2, "TARGET_GROUP"), column(3, "COUNT", ck="OFFERED")]
+    mapping = {"tables": [{"table": "4-2", "role": "SUPPLY", "rowUnit": "HOUSING_TYPE", "complex": None, "columns": columns}]}
+    part = st.build_part([table], mapping, "pdf-text", specials=specials)
+    counts = {g["housingTypeCode"]: [(c["scope"]["targetGroups"], c["value"]) for c in g["counts"]] for g in part["supplyGroups"]}
+    assert counts == {
+        "059.9288A": [(["기관추천"], 8), (["국가유공자"], 8)],
+        "59B": [(["기관추천"], 7), (["국가유공자"], 7)],
+        "59C": [(["기관추천‧국가유공자"], 31)],
+    }
+    texts = {q["ref"]: q["text"] for q in part["quotes"]}
+    merit = part["supplyGroups"][0]["counts"][1]
+    assert [texts[ref] for ref in merit["quoteRefs"]] == ["■ 기관추천 국가유공자 특별공급 세대수(30)", "| 합 계 |  |  | 30 | 8 | 7 | 15 |"]
+    assert len({c["id"] for g in part["supplyGroups"] for c in g["counts"]}) == 5  # 나눈 수도 ID가 겹치지 않음
+    # 대상마다 표가 하나로 정해지지 않으면(두 표 제목이 모두 두 이름을 담음) 나누지 않음
+    assert st._assign_tables(["기관추천", "국가유공자"], {"a": "기관추천국가유공자특별공급", "b": "기관추천·국가유공자특별공급"}) is None
+    assert st._assign_tables(["기관추천", "국가유공자"], {"a": "■기관추천특별공급", "b": "■기관추천국가유공자특별공급"}) == {"기관추천": "a", "국가유공자": "b"}

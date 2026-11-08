@@ -331,6 +331,41 @@ def candidates(material: ExtractionMaterial) -> list[Table]:
     return (found + image_tables(material))[:MAX_TABLES]
 
 
+# 주택형이 열인 특별공급 세대수 표: 표 위 가장 가까운 「특별공급」 줄이 그 표의 대상(「■ 기관추천 특별공급 세대수(30)」), 열 제목에 주택형 둘 이상,
+# 합계 행의 칸이 주택형마다 그 대상의 모집 수. 열 제목에 공급 단서가 없어 공급표 후보(candidates)가 아니고, 열 의미 호출에도 보내지 않습니다
+# (2026-11-09 jbdc-16011 [표 12-2]·[표 12-3]: 추천대상자 | 추천기관 | 입주자저축 | 계 | 59A | 59B | 59C, 합계 30 | 8 | 7 | 15)
+SPECIAL_SUPPLY = "특별공급"
+TYPE_TITLE = re.compile(r"^0*(\d{2,3})(?:\.\d+)?([A-Z]{1,2})$")  # 「59A」「059.9288A」 → (59, A)
+
+
+def _type_key(text: str | None) -> tuple[int, str] | None:
+    match = TYPE_TITLE.match("".join(str(text or "").split()).upper())
+    return (int(match[1]), match[2]) if match else None
+
+
+def special_tables(material: ExtractionMaterial) -> list[Table]:
+    """첨부 PDF의 특별공급 세대수 표(위 설명). 합친 대상 모집 수를 나눌 때만 씁니다(build_part specials)."""
+    found: list[Table] = []
+    many = len(material.pdf_pages) > 1
+    for number, document in enumerate(material.pdf_pages, start=1):
+        for page in document.get("pages") or []:
+            above: tuple[str, ...] = ()
+            for block in page.get("blocks") or []:
+                if block.get("type") == "text":
+                    above = tuple(line.strip() for line in reversed(block.get("text", "").split("\n")) if line.strip())[:ABOVE_LINES]
+                    continue
+                table_above, above = above, ()
+                columns = tuple(block.get("columns") or ())
+                if not any(SPECIAL_SUPPLY in line for line in table_above) or sum(1 for c in columns if _type_key(c)) < 2:
+                    continue
+                cells = block.get("cells")
+                rows = tuple(tuple(r) for r in block.get("rows") or ())
+                label = f"{number}:{block['id']}" if many else str(block["id"])
+                page_number = int(page.get("page") or 0)
+                found.append(Table(label, page_number, table_above[0], columns, rows, tuple(tuple(r) for r in cells) if cells else None, None, "", table_above))
+    return found
+
+
 IMAGE_BLOCK_HEAD = "=== 그림 판독 "  # image_reading.BLOCK_HEAD와 같음 (image_reading이 extract를 가져와 순환 import를 피함)
 IMAGE_LABEL = "그림"
 
@@ -666,9 +701,12 @@ def _scope(group_id: str, groups: list[str], description: str) -> dict[str, Any]
     }
 
 
-def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str, offered: set[str] | None = None) -> dict[str, Any] | None:
+def build_part(
+    tables: list[Table], mapping: dict[str, Any], document_id: str, offered: set[str] | None = None, specials: list[Table] | None = None
+) -> dict[str, Any] | None:
     """열 의미 → AI 출력과 같은 모양의 공급 조각(quotes·supplyGroups·coverage). 공급표가 하나도 없으면 None.
-    offered: 공급 규모 줄이 이름으로 적은 공급 호실 번호(offered_units). 수량 열 없는 호실 표가 그 호실을 담으면 그 호실만 모집 1입니다."""
+    offered: 공급 규모 줄이 이름으로 적은 공급 호실 번호(offered_units). 수량 열 없는 호실 표가 그 호실을 담으면 그 호실만 모집 1입니다.
+    specials: 주택형이 열인 특별공급 세대수 표(special_tables). 합친 대상 모집 수를 대상마다 나눌 때만 씁니다(_split_combined_targets)."""
     by_label = {t.label: t for t in tables}
     quotes: list[dict[str, Any]] = []
     quote_of: dict[str, str] = {}
@@ -1056,6 +1094,7 @@ def build_part(tables: list[Table], mapping: dict[str, Any], document_id: str, o
                 "정하지 못해 넣지 못했습니다. 원문의 가격을 확인해야 합니다",
             }
         )
+    _split_combined_targets(groups, specials or [], quote)
     for group in groups:
         _merge_payment_parts(group)
         for price in group["prices"]:
@@ -1424,6 +1463,83 @@ def _merge_payment_parts(group: dict[str, Any]) -> bool:
                 price["pricePlanId"] = wholes[0]
             moved = True
     return moved
+
+
+# 본 공급표가 대상 둘 이상을 한 칸으로 합친 모집 수(「기관추천‧국가유공자」 16)는 대상마다 특별공급 세대수 표가 있으면 대상마다 나눕니다.
+# 합친 이름의 대상마다 표가 하나로 정해지고, 주택형마다 그 표들의 합계 행 수를 더한 값이 합친 수와 같을 때만입니다(맞지 않으면 그대로).
+# 2026-11-09 23건 jbdc-16011: 본 표의 59A 16·59B 14·59C 30만 넣어, 기관추천·국가유공자로 나눈 정답표 값(8·7·15씩) 가운데 4개를 놓침
+TARGET_JOINER = re.compile(r"[‧·ㆍ・․,/]|및")
+
+
+def _special_totals(table: Table) -> tuple[dict[tuple[int, str], int], tuple[str, ...]] | None:
+    """주택형 열마다 합계 행의 수와 그 합계 행. 합계 행이 없거나 주택형 칸이 숫자(빈 칸 제외, 「-」는 0)가 아니면 None."""
+    keyed = {i: key for i, key in ((i, _type_key(title)) for i, title in enumerate(table.columns)) if key}
+    for row in table.rows:
+        first = next((cell for cell in row if cell.strip()), "")
+        if not SUBTOTAL.match("".join(first.split())):
+            continue
+        totals: dict[tuple[int, str], int] = {}
+        for i, key in keyed.items():
+            cell = row[i].strip() if i < len(row) else ""
+            number = 0 if cell in {"-", "−", "–"} else _number(cell) if cell else None
+            if number is None:
+                return None
+            totals[key] = int(number)
+        return totals, row
+    return None
+
+
+def _assign_tables(names: list[str], heads: dict[str, str]) -> dict[str, str] | None:
+    """대상 이름마다 표 하나: 제목에 그 이름 하나만 든 표를 먼저 정하고, 남은 이름은 아직 정하지 않은 표 가운데 그 이름이 든 것이 하나뿐일 때만
+    (「■ 기관추천 국가유공자 특별공급 세대수」처럼 둘 다 든 제목). 정해지지 않는 이름이 있으면 None."""
+    found = {label: [name for name in names if name in head] for label, head in heads.items()}
+    chosen: dict[str, str] = {}
+    for label, matched in found.items():
+        if len(matched) == 1:
+            if matched[0] in chosen:
+                return None  # 한 대상에 표가 둘
+            chosen[matched[0]] = label
+    for name in names:
+        if name not in chosen:
+            rest = [label for label, matched in found.items() if name in matched and label not in chosen.values()]
+            if len(rest) != 1:
+                return None
+            chosen[name] = rest[0]
+    return chosen
+
+
+def _split_combined_targets(groups: list[dict[str, Any]], specials: list[Table], quote: Any) -> None:
+    heads: dict[str, tuple[str, str, dict[tuple[int, str], int], tuple[str, ...]]] = {}
+    for table in specials:
+        head = next((line for line in table.above if SPECIAL_SUPPLY in line), None)
+        found = _special_totals(table)
+        if head and found:
+            heads[table.label] = ("".join(head.split()), head, *found)
+    if not heads:
+        return
+    for group in groups:
+        key = _type_key(group.get("housingTypeCode"))
+        if key is None:
+            continue
+        for count in list(group["counts"]):
+            targets = (count.get("scope") or {}).get("targetGroups") or []
+            # 여러 묶음이 함께 쓰는 물량(병합 칸)은 한 수라 나누지 않습니다
+            if count.get("kind") != "OFFERED" or len(targets) != 1 or not isinstance(count.get("value"), int) or count.get("allocationPoolId"):
+                continue
+            names = [name for name in TARGET_JOINER.split("".join(targets[0].split())) if name]
+            chosen = _assign_tables(names, {label: entry[0] for label, entry in heads.items()}) if len(names) >= 2 else None
+            values = [heads[chosen[name]][2].get(key) for name in names] if chosen else [None]
+            if None in values or sum(values) != count["value"]:
+                continue
+            split = []
+            for name, value in zip(names, values, strict=True):
+                _, head, _, row = heads[chosen[name]]
+                piece = {**count, "id": f"{count['id']}.{len(split) + 1}", "value": value}
+                piece["scope"] = _scope(group["id"], [name], count["scope"]["description"])
+                piece["quoteRefs"] = [quote(head), quote(_row_line(row))]
+                split.append(piece)
+            at = group["counts"].index(count)
+            group["counts"][at : at + 1] = split
 
 
 # 한 행이 같은 번호의 주택형 여럿을 함께 적은 표기(「19A/B/C」「26A·B」)
