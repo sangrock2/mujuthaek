@@ -784,17 +784,14 @@ def test_every_call_that_puts_documents_says_examples_after_a_kind_name_are_one_
     assert "예시마다 서류를 나누지 않습니다" not in system_prompt(RULES) + RULES.system_prompt()
 
 
-def test_section_notes_go_only_to_the_task_of_the_agent_that_needs_them():
-    # 2026-11-09 23건: 서류 담당만 모든 항목에 기본값 scope·null 칸을 적고(서류 넣기 출력 글자의 24%), 구조 호출은 월까지만 있는 공고일로
-    # 공고 범위를 PARTIAL로 적어 공고 전체를 보류, 자격은 자동차 미소유를 글로만, 일정은 선정 결과 발표를 OTHER로 넣음
+def test_section_rules_go_only_to_the_call_of_that_section():
+    # 2026-11-09 23건: 구조 호출은 월까지만 있는 공고일로 공고 범위를 PARTIAL로 적어 공고 전체를 보류, 자격은 자동차 미소유를 글로만,
+    # 일정은 선정 결과 발표를 OTHER로 넣음. 호출 지시에만 실어 공통 지시(담당들이 함께 쓰는 앞부분)는 그대로
     from mujuthaek_extraction.rules.housing_notice import RULES
     from mujuthaek_extraction.v2.agents.prompt import system_prompt
 
     workers = graph.workers(RULES)
-    documents_task = section.task(workers["documents"], {})
-    assert section.TASK_NOTES["documents"] in documents_task and "scope는 특정 대상" in documents_task
-    assert not any(section.TASK_NOTES["documents"] in section.task(spec, {}) for name, spec in workers.items() if name != "documents")
-    assert section.TASK_NOTES["documents"] not in system_prompt(RULES)  # 공통 지시(담당들이 함께 쓰는 앞부분)는 그대로
+    assert "announcedOn은 null" not in system_prompt(RULES)
     assert "announcedOn은 null" in workers["structure"].instructions and "PARTIAL로 두지 않습니다" in workers["structure"].instructions
     assert "CAR_ASSETS_KRW LTE 0" in workers["eligibility"].instructions
     assert "WINNER_ANNOUNCEMENT" in workers["schedules"].instructions and "시작과 끝을 모두" in workers["schedules"].instructions

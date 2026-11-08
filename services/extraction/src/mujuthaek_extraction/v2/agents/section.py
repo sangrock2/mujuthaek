@@ -79,15 +79,6 @@ LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "EVIDENCE_AMBIGUOUS",
     "EVIDENCE_QUOTE_TOO_SHORT",
 }
-# 담당 할 일(둘째 메시지)에 덧붙이는 도구 규칙 알림. 공통 지시(앞부분)는 그대로라 다른 담당의 캐시를 바꾸지 않습니다.
-# 2026-11-09 11/08 이후 대화 캐시: 서류 담당만 넣는 항목마다 scope를 적고(100%) 그중 63%가 기본값(공고 전체)이며 null 칸도 적어, 기본값 scope만으로
-# 서류 넣기 출력 글자의 24%(다른 담당은 공통 지시 6장대로 거의 적지 않음)
-TASK_NOTES = {
-    "documents": (
-        "넣는 서류에는 값이 있는 칸만 적습니다. scope는 특정 대상·공급 묶음·위치에만 내는 서류일 때만 적고(공고 전체면 적지 않음, 대상은 "
-        "appliesTo에도), 비어 있는 칸(null)은 적지 않습니다."
-    ),
-}
 
 
 def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -348,8 +339,6 @@ def shared_message(document: DocumentModel) -> HumanMessage:
 
 def task(spec: CallSpec, state: Any) -> str:
     lines = [f"# 이번 담당: {spec.name}", f"맡은 섹션: {', '.join(spec.sections)}", spec.instructions]
-    if spec.name in TASK_NOTES:
-        lines.append(TASK_NOTES[spec.name])
     if state.get("structure"):
         lines += ["# 구조 요약(위치·공급 id. 다른 섹션이 가리킬 때 이 id만 씀)", json.dumps(state["structure"], ensure_ascii=False)]
     return "\n".join(lines)
