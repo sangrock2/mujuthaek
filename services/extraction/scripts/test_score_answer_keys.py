@@ -79,3 +79,67 @@ def test_spelled_out_certificate_name_is_the_same_document(extracted, same):
     # 2026-11-09 23건 서류 놓침 3개(sh-310976·gndc 2건): 추출은 원문 이름 그대로, 정답표는 줄인 이름
     score = sk.compare({"documents": [{"name": "소득신고 사실 없음 사실증명서"}]}, {"documents": [{"name": extracted}]})
     assert (score.found["서류"] == 1) is same
+
+
+def _candidate(counts, targets, eligibility=(), evidence=()):
+    return {
+        "notice": {"title": "공고", "announcedOn": None, "targetGroups": targets, "counts": counts},
+        "locations": [],
+        "supplyGroups": [],
+        "schedules": [],
+        "eligibility": list(eligibility),
+        "selectionRules": [],
+        "requiredDocuments": [],
+        "guidance": [],
+        "evidence": list(evidence),
+    }
+
+
+def _count(kind, value, groups=()):
+    return {"kind": kind, "value": value, "scope": {"targetGroups": list(groups)}}
+
+
+def test_total_offered_counts_new_reserves_and_counts_covering_every_target():
+    # 2026-11-09 gndc 2건: 「모집인원 17명(우선 입주자 2명, 예비 입주자 15명)」 — 정답표 정책: 즉시 입주와 함께 뽑는 예비인원을 합친 수
+    assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 2), _count("RESERVE", 15)], []), "n")["totalOffered"] == 17
+    assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 280), _count("WAITLIST", 197)], []), "n")["totalOffered"] == 280  # 기존 대기자는 빼고
+    # umca-4439: 대상이 「청년」뿐인 공고의 「청년 50명」은 공고 전체 수
+    assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 50, ["청년"])], ["청년"]), "n")["totalOffered"] == 50
+    assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 30, ["청년"])], ["청년", "고령자"]), "n")["totalOffered"] is None
+
+
+@pytest.mark.parametrize(
+    ("key_group", "extracted_group", "same"),
+    [
+        ("바목 등록장애인(해당 중증장애인의 배우자 포함)", "장애인등록증이 교부된 자", True),  # 계층 낱말이 다른 말에 붙음(bmc-72)
+        ("바목 등록장애인", "장애인 신혼부부", False),  # 추출에 정답표에 없는 계층
+        ("연령 자격으로 신청", "① 19세 이상 39세 이하인 사람", True),  # 추출이 조건을 이름으로 적음(gbdc-a909) → 확인 못 함
+        ("청년", "65세 이상 고령자", False),  # 조건을 적었어도 다른 계층 이름이 있으면 다른 뜻
+        ("생애최초 특별공급 / 추첨공급 / 외벌이", "신혼부부", False),  # 「생애최초」도 계층 이름
+    ],
+)
+def test_target_group_names(key_group, extracted_group, same):
+    key = {"criterion": "AGE", "operator": "BETWEEN", "value": [19, 39], "targetGroup": key_group}
+    extracted = {"criterion": "AGE", "operator": "BETWEEN", "value": [19, 39], "targetGroup": extracted_group}
+    assert (sk._eligibility_fit(key, extracted) is not None) is same
+
+
+def test_income_amount_in_key_matches_percent_criterion_quoting_that_amount():
+    # 2026-11-09 sh-311005: 정답표는 가구원수별 금액, 추출은 「120% 이하」와 금액 표 줄을 근거로 인용
+    key = {"eligibility": [{"criterion": "INCOME_KRW", "operator": "LTE", "value": 4_576_000, "targetGroup": "1인 가구"}]}
+    item = {
+        "scope": {"targetGroups": []},
+        "originalText": "도시 근로자 가구원수별 가구당 월평균 소득의 120% 이하에 해당하는 자",
+        "category": "INCOME",
+        "rule": {"expression": {"kind": "ATOMIC", "attribute": "INCOME_BENCHMARK_PERCENT", "operator": "LTE", "value": 120}},
+        "evidenceIds": ["ev-1"],
+    }
+    quoted = sk.neutral_from_candidate(_candidate([], [], [item], [{"id": "ev-1", "quote": "| 4,576,000원이하 | 7,039,000원이하 |"}]), "n")
+    assert sk.compare(key, quoted).found["자격: INCOME_KRW"] == 1
+    unquoted = sk.neutral_from_candidate(_candidate([], [], [item], [{"id": "ev-1", "quote": "| 4,000,000원이하 |"}]), "n")
+    assert sk.compare(key, unquoted).found["자격: INCOME_KRW"] == 0  # 그 금액이 근거에 없으면 다른 기준
+
+
+def test_certificate_and_confirmation_endings_are_the_same_document():
+    score = sk.compare({"documents": [{"name": "차상위계층 증명서"}]}, {"documents": [{"name": "차상위계층 확인서"}]})
+    assert score.found["서류"] == 1

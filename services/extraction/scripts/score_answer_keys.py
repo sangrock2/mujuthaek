@@ -58,8 +58,9 @@ YEAR_DO = re.compile(r"(\d{4})\s*년도")
 SITUATION_EVIDENCE = re.compile(r"^(.+?)\s*증빙(?:\s*서류|\s*자료)?$")
 DOC_SUFFIX = re.compile(r"(?:서|증|본|부|내역|자료|원|표|카드|명단)$")  # 서류 이름의 끝(증명서·등록증·등본·등기부·조회내역·신청원·통지표 등)
 # 같은 증명서를 풀어 쓴 이름(2026-11-09 23건 서류 놓침 3개): 원문 「소득 신고한 사실이 없음을 확인하는 사실증명서」 = 정답표 「소득신고 사실
-# 없음 사실증명서」. 공백을 지운 뒤 「…한 사실」은 「… 사실」로, 「사실이 없음을 확인하는」은 「사실 없음」으로 봅니다
-SPELLED_OUT = ((re.compile(r"한사실"), "사실"), (re.compile(r"(?<=사실)[이가]?없음을(?:확인|증명)하는"), "없음"))
+# 없음 사실증명서」. 공백을 지운 뒤 「…한 사실」은 「… 사실」로, 「사실이 없음을 확인하는」은 「사실 없음」으로 봅니다.
+# 끝말 「확인서」와 「증명서」도 같은 서류로 봅니다(원문 「차상위계층 확인서」 = 정답표 「차상위계층 증명서」, gbdc-a909)
+SPELLED_OUT = ((re.compile(r"한사실"), "사실"), (re.compile(r"(?<=사실)[이가]?없음을(?:확인|증명)하는"), "없음"), (re.compile(r"확인서"), "증명서"))
 
 
 # ---------- 추출 결과 → 중립 형식 ----------
@@ -88,8 +89,17 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
     notice = candidate["notice"]
     locations = {loc["id"]: loc for loc in candidate["locations"]}
     # 예비입주자 모집 공고는 모집 수를 RESERVE로 적습니다. 정답표 지시문은 그 수를 offeredCount에 적게 해 같은 값으로 봅니다.
-    notice_counts = [c for c in notice.get("counts") or [] if not c["scope"]["targetGroups"]]
-    total = [c["value"] for c in notice_counts if c["kind"] == "OFFERED"] or [c["value"] for c in notice_counts if c["kind"] in ("RESERVE", "WAITLIST")]
+    # 공고의 대상 계층을 모두 덮는 수(대상이 「청년」뿐인 공고의 「청년 50명」)도 공고 전체 수입니다(2026-11-09 umca-4439)
+    every = set(notice.get("targetGroups") or [])
+    notice_counts = [c for c in notice.get("counts") or [] if not c["scope"]["targetGroups"] or every and every <= set(c["scope"]["targetGroups"])]
+    offered = [c["value"] for c in notice_counts if c["kind"] == "OFFERED"]
+    reserve = [c["value"] for c in notice_counts if c["kind"] == "RESERVE"]
+    if len(offered) == 1 and len(reserve) == 1 and all(isinstance(v, int) for v in (*offered, *reserve)):
+        # 즉시 입주자와 함께 뽑는 새 예비자(RESERVE)도 모집 수입니다. 정답표 채점 정책: 「거북이집 5명·17명은 즉시 입주와 공동 예비인원을
+        # 합친 원문 수치」, 기존 대기자(WAITLIST)는 넣지 않음(2026-11-09 gndc 2건: 「모집인원 17명(우선 입주자 2명, 예비 입주자 15명)」)
+        total = [offered[0] + reserve[0]]
+    else:
+        total = offered or [c["value"] for c in notice_counts if c["kind"] in ("RESERVE", "WAITLIST")]
     supply = []
     for group in candidate["supplyGroups"]:
         counts = {c["kind"]: c["value"] for c in group["counts"]}
@@ -136,8 +146,10 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
         for kind in s["kinds"]
     ]
     eligibility = []
+    quote_of = {e["id"]: e.get("quote") or "" for e in candidate.get("evidence") or []}
     for item in candidate["eligibility"]:
         groups = ", ".join(item["scope"]["targetGroups"]) or None
+        quotes = " ".join(quote_of.get(i, "") for i in item.get("evidenceIds") or [])
         atoms = [(atom, None) for atom in _atoms(item["rule"]["expression"])]
         for exception in item.get("exceptions") or []:
             # 예외의 기준값은 그 예외가 붙는 경우(「2023.3.28. 이후 출생 자녀 1인」「맞벌이」)를 condition에 남깁니다.
@@ -152,6 +164,7 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
                     "operator": atom.get("operator"),
                     "value": atom.get("value"),
                     "text": item.get("originalText"),
+                    "quotes": quotes,  # 근거 인용 글(가구원수별 금액 표 줄 등). 비율 기준과 금액 기준을 맞출 때만 봅니다
                     "category": item.get("category"),
                     "condition": condition,
                 }
@@ -288,6 +301,7 @@ def _words(part: str) -> set[str]:
 POPULATION = (
     "청년", "대학생", "취업준비생", "고령자", "노인", "신혼부부", "한부모", "신생아", "다자녀", "장애인", "국가유공자", "수급자",
     "차상위", "북한이탈", "탈북", "주거급여", "노부모", "주거약자", "예술인", "중소기업", "산업단지", "아동", "철거민", "제대군인", "일반",
+    "생애최초",  # 2026-11-09 jbdc-16011: 「생애최초 특별공급 / 추첨공급 / 외벌이」가 조건만 적은 이름으로 보여 「신혼부부」 기준과 짝지어졌음
 )  # fmt: skip
 
 
@@ -350,7 +364,17 @@ def _groups_overlap(expected: Any, actual: Any) -> bool:
                 return True
             if _group_words(left) & _group_words(right):
                 return True
+            # 계층 낱말이 다른 말에 붙어 낱말로는 안 겹치는 같은 계층(정답표 「바목 등록장애인」 ↔ 추출 「장애인등록증이 교부된 자」,
+            # 2026-11-09 bmc-72): 추출 쪽 계층 낱말이 모두 정답표 쪽에도 있으면 같은 계층입니다
+            terms = _population_terms(b)
+            if terms and terms <= _population_terms(a):
+                return True
     return False
+
+
+def _population_terms(text: str) -> set[str]:
+    """이름 속 계층 낱말(POPULATION). 「일반」은 공급 단계 이름(「일반공급」)에도 흔해 빼고 봅니다."""
+    return {term for term in POPULATION if term in text} - {"일반"}
 
 
 def _complex_marks(text: str) -> set[str]:
@@ -540,6 +564,10 @@ def _eligibility_fit(e: dict[str, Any], a: dict[str, Any], criterion: str | None
                 unchecked.append("대상 계층(순위·목 표시로만 적음)")  # 정답표 「나목·마목」 ↔ 추출 「국가유공자 등, 북한이탈주민」
             elif _same_target_by_source(e, a):
                 unchecked.append("대상 계층(다른 이름, 같은 원문)")  # 정답표 「청년」 ↔ 추출 「3순위 19세 이상 39세 이하인 사람」
+            elif group and QUALIFIER.search(group) and not _names_population(group):
+                # 추출이 계층 대신 조건을 이름으로 적음: 정답표 「연령 자격으로 신청」 ↔ 추출 「① 19세 이상 39세 이하인 사람」(2026-11-09 gbdc-a909).
+                # 계층이 없는 추출 기준처럼 견줄 수 없어 확인 못 함으로 셉니다(「우선공급」처럼 조건 낱말도 없는 이름은 그대로 다른 뜻)
+                unchecked.append("대상 계층(추출이 조건으로 적음)")
             else:
                 return None
     return tuple(unchecked)
@@ -577,6 +605,13 @@ def _score_numeric_eligibility(score: Score, expected: list[dict[str, Any]], act
                 percent = re.compile(rf"(?<![\d.]){wanted[0]:g}\s*(?:%|퍼센트)")
                 fit = _eligibility_fit(e, a, "INCOME_KRW")
                 if fit is None or not percent.search(str(a.get("text") or "")):
+                    continue
+            elif e["criterion"] == "INCOME_KRW" and len(wanted) == 1:
+                # 반대 방향: 정답표는 금액(「1인 가구 4,576,000원 이하」), 추출은 비율(「120% 이하」)로 적은 같은 기준. 그 금액이 추출 기준의
+                # 원문이나 근거 인용에 있어야 합니다(2026-11-09 sh-311005 표 줄 「4,576,000원이하 | 7,039,000원이하 …」, gndc-1239 「100%(3,018,496원)」)
+                amount = re.compile(rf"(?<![\d,]){round(wanted[0]):,}\s*원")
+                fit = _eligibility_fit(e, a, "INCOME_PERCENT")
+                if fit is None or not amount.search(f"{a.get('text') or ''} {a.get('quotes') or ''}"):
                     continue
             else:
                 continue
