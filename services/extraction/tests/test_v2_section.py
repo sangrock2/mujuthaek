@@ -21,6 +21,7 @@ from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2 import graph
 from mujuthaek_extraction.v2.agents import section
+from mujuthaek_extraction.v2.agents.cut import CutCallMiddleware, complete_items
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.contract import NOTICE_SCOPE
@@ -357,8 +358,8 @@ def test_finish_ends_without_another_model_call_unless_verification_finds_a_new_
     # 넣기와 끝내기를 한 차례에: 검증에 문제가 없으면 모델을 다시 부르지 않음
     draft, said = agent_run([AIMessage(content="", tool_calls=[add, call("finish", summary="일정 1개를 넣었어요.")]), AIMessage(content="불리면 안 됨")], {})
     assert len(said) == 1 and draft.finished == "일정 1개를 넣었어요." and len(draft.items["schedules"]) == 1
-    # 새 문제가 나오면 끝내기를 거두고 알림 → 고친 뒤 다시 끝내기: 남은 문제가 앞서 알린 것(「다시」)뿐이면 끝
-    issue = {"code": "VALUE_NOT_IN_QUOTE", "target": "/schedules/0/startsAt", "item": "apply", "description": "값이 인용에 없어요."}
+    # 새 문제가 나오면 끝내기를 거두고 알림 → 고친 뒤 다시 끝내기: 남은 문제가 앞서 알린 확인할 것뿐이면 끝(고칠 것은 아래 시험)
+    issue = {"code": "EXCEPTION_SUSPECTED", "target": "/schedules/0/startsAt", "item": "apply", "description": "기준값 뒤에 다른 기준값이 있어요."}
     turns = [
         AIMessage(content="", tool_calls=[add, call("finish", summary="다 넣었어요.")]),
         AIMessage(
@@ -368,6 +369,54 @@ def test_finish_ends_without_another_model_call_unless_verification_finds_a_new_
     ]
     draft, said = agent_run(turns, {1: [issue], 2: [issue]})
     assert len(said) == 2 and draft.finished == "고쳤어요."
+
+
+def test_finishing_while_a_fix_shown_only_once_is_left_is_sent_back_once_marked_again():
+    # 2026-11-08 최종 비교 bmc-106: 거절된 조건 3개의 고치기가 모두 실패한 차례에 finish도 불러, 담당은 실패를 못 보고 끝나 28값이 빠짐
+    # (23건 중 5개 담당이 같은 꼴). 한 번만 알린 고칠 것이 남았으면 「다시」로 한 번 더 알리고, 그 뒤에도 남으면 끝냄
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    kept, later = {**schedule, "id": "kept", "evidence": ["p1.2"]}, {**schedule, "id": "later"}
+
+    def agent_run(*turns, check=None):
+        draft = SectionDraft(("schedules",))
+        context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+        context.check = check or (lambda: section._not_added(draft))
+        agent = create_agent(
+            ToolCallingFake(messages=iter([*turns, AIMessage(content="불리면 안 됨")])),
+            tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+            middleware=[VerifyMiddleware()],
+            context_schema=SectionContext,
+        )
+        result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+        reports = [m.content for m in result["messages"] if m.type == "human" and m.content.startswith("# 검증 결과")]
+        return draft, reports, [m for m in result["messages"] if m.type == "ai"]
+
+    add = AIMessage(content="", tool_calls=[call("add_schedules", items=[kept, later])])
+    failed = AIMessage(
+        content="", tool_calls=[call("update_item", section="schedules", item_id="later", changes={"evidence": ["p9.9"]}), call("finish", summary="고쳤어요.")]
+    )
+    fixed = AIMessage(
+        content="",
+        tool_calls=[call("update_item", section="schedules", item_id="later", changes={"evidence": ["p1.2"]}), call("finish", summary="고쳐 넣었어요.")],
+    )
+    # 고치기가 실패한 차례의 끝내기는 거두고 「다시」로 알림 → 다른 방법으로 고쳐 넣고 끝냄
+    draft, reports, said = agent_run(add, failed, fixed)
+    assert len(said) == 3 and len(reports) == 2 and '"다시": true' in reports[1] and '"item": "later"' in reports[1]
+    assert [row["id"] for row in draft.items["schedules"]] == ["kept", "later"] and draft.finished == "고쳐 넣었어요."
+    # 「다시」로 알린 뒤에도 그대로 두고 끝내면 끝(한 번만 돌려보냄)
+    draft, reports, said = agent_run(add, failed, AIMessage(content="", tool_calls=[call("finish", summary="원문상 그대로 둬요.")]))
+    assert len(said) == 3 and len(reports) == 2 and draft.finished == "원문상 그대로 둬요." and ("schedules", "later") in draft.rejected
+    # 확인할 것(의심 경고)만 남았거나, 담당이 PARTIAL로 적은 섹션의 범위 미완료면 돌려보내지 않음
+    partial = AIMessage(
+        content="",
+        tool_calls=[call("add_schedules", items=[kept]), call("set_coverage", section="schedules", status="PARTIAL", reason="표 끝 행을 못 읽었어요.")],
+    )
+    for issue in (
+        {"code": "EXCEPTION_SUSPECTED", "target": "/schedules/0", "item": "kept", "description": "기준값 뒤에 다른 기준값이 있어요."},
+        {"code": "CONTRACT_INCOMPLETE_EXTRACTION", "target": "/quality/coverage/schedules", "description": "범위 미완료"},
+    ):
+        draft, reports, said = agent_run(partial, AIMessage(content="", tool_calls=[call("finish", summary="끝")]), check=lambda issue=issue: [issue])
+        assert len(said) == 2 and len(reports) == 1 and draft.finished == "끝"
 
 
 def test_verification_separates_defects_to_fix_from_warnings_to_check():
@@ -515,6 +564,100 @@ def test_an_item_refused_when_added_is_fixed_by_changing_only_the_wrong_fields()
     assert draft.rejected == {} and draft.pending == {}
 
 
+def test_a_fix_can_name_the_place_inside_the_item_the_way_the_verification_reports_it():
+    # 2026-11-08 최종 비교 bmc-106: 거절된 조건을 고치며 검증 결과가 알린 위치(/exceptions/2/originalText)를 changes 열쇠로 적었는데, 칸 이름으로만
+    # 읽어 엉뚱한 칸이 생기고 그대로 거절됨(저장된 실행들에서 이렇게 고친 9번이 모두 실패)
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    exception = {**income["exceptions"][0], "id": "two", "originalText": "자녀 2명 이상 20%p", "evidence": ["p1.2"]}  # 원문 그대로가 아니라 거절
+    refused = {**income, "id": "refused", "evidence": ["p1.1"], "exceptions": [exception]}
+
+    def fix(changes):
+        return AIMessage(content="", tool_calls=[call("update_item", section="eligibility", item_id="refused", changes=changes)])
+
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[refused])]),
+        fix({"exceptions/3/originalText": "2명 이상 20%p"}),  # 없는 위치
+        fix({"/exceptions/0/originalText": "2명 이상 20%p"}),
+        fix({"exceptions/0/id": "two-children", "description": "고침"}),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    added, lost, fixed, changed = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert added["failed"][0]["id"] == "refused"
+    assert lost["error"] == "BAD_PATH" and "/exceptions/3" in lost["message"] and "아무것도 바꾸지 않았습니다" in lost["message"]
+    assert fixed == {"ok": "eligibility/refused 고쳐 넣음"} and changed == {"ok": "eligibility/refused 고침"}
+    [row] = draft.items["eligibility"]
+    assert row["exceptions"][0]["originalText"] == "2명 이상 20%p" and row["exceptions"][0]["id"] == "two-children" and row["description"] == "고침"
+    assert not any("/" in key for key in row)  # 위치 열쇠가 칸으로 남지 않음
+
+
+def cut_answer(name, arguments, call_id="cut-1"):
+    """출력 한도에서 잘린 Responses API 답의 모양: 잘린 인자는 실행할 수 없는 호출(invalid_tool_calls)로만 오고, 답 내용에 호출 블록이 남음."""
+    return AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_1", "summary": []},
+            {"type": "function_call", "name": name, "arguments": arguments, "call_id": call_id, "id": "fc_1", "status": "incomplete"},
+        ],
+        invalid_tool_calls=[{"type": "invalid_tool_call", "id": call_id, "name": name, "args": arguments, "error": "Unterminated string"}],
+        response_metadata={"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
+    )
+
+
+def test_an_add_call_cut_off_at_the_output_limit_keeps_the_items_that_came_whole_and_the_agent_adds_the_rest():
+    # 2026-11-08 최종 비교 dcco-24804: 서류 54개를 넣기 호출 하나에 담다 출력 한도(21,000토큰)에서 잘려, 실행할 호출이 없으니 첫 차례에서 끝나 서류 0개
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
+    rows = [{**schedule, "id": item_id, "evidence": ["p1.2"]} for item_id in ("first", "second", "third")]
+    whole = json.dumps({"items": rows}, ensure_ascii=False)
+    arguments = whole[: whole.index('"third"') + 20]  # 셋째 항목 가운데에서 잘림
+    assert complete_items(arguments) == rows[:2] and complete_items(whole[:12]) == [] and complete_items('{"item": {"id": "a"') is None
+    turns = [
+        cut_answer("add_schedules", arguments),
+        AIMessage(content="", tool_calls=[call("add_schedules", items=rows[2:]), call("finish", summary="나머지를 넣었어요.")]),
+        AIMessage(content="불리면 안 됨"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    context.check = list
+    agent = create_agent(
+        ToolCallingFake(messages=iter(turns)),
+        tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+        middleware=[VerifyMiddleware(), CutCallMiddleware()],
+        context_schema=SectionContext,
+    )
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    assert [row["id"] for row in draft.items["schedules"]] == ["first", "second", "third"] and draft.finished == "나머지를 넣었어요."
+    first = next(m for m in result["messages"] if m.type == "ai")
+    assert first.invalid_tool_calls == [] and first.tool_calls[0]["args"] == {"items": rows[:2]}
+    block = next(b for b in first.content if b.get("type") == "function_call")  # 다음 요청에 다시 가는 호출도 살린 항목만
+    assert json.loads(block["arguments"]) == {"items": rows[:2]} and block["status"] == "completed"
+    answer = json.loads(next(m.content for m in result["messages"] if m.type == "tool"))
+    assert answer["added"] == ["first", "second"] and "앞 항목 2개(마지막 second)" in answer["cut"] and "이어서 넣습니다" in answer["cut"]
+
+
+def test_an_agent_cut_off_without_an_add_call_to_keep_sends_its_section_to_review(monkeypatch):
+    # 넣기가 아닌 호출이 잘리면 살릴 것이 없어 실행할 호출 없이 끝남: 끝내기 전에 멈춘 담당처럼 섹션을 사람 확인으로
+    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
+    recorded = answers()
+    monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
+    rows = [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": ["p1.1"]} for row in ai_part(example("housing"))["eligibility"]]
+    cut = cut_answer("update_item", '{"section": "eligibility", "item_id": "age", "changes": {"description": "고')
+
+    def chat(name, **kwargs):
+        if name == "eligibility":
+            return ToolCallingFake(messages=iter([AIMessage(content="", tool_calls=[call("add_eligibility", items=rows)]), cut]))
+        return ToolCallingFake(messages=iter([AIMessage(content="끝")]))
+
+    outcome = run(raw_event(), NoticeModels(RecordedModel({}, "local"), None, Budget("gpt-6-luna", 0.5), {"primary": "local"}, chat=chat))
+    traces = {t["agent"]: t for t in outcome.usage["v2"]["traces"]}
+    assert traces["eligibility"]["stopped"].startswith("출력 한도(") and traces["schedules"]["stopped"] is None
+    coverage = outcome.candidate["quality"]["coverage"]["eligibility"]
+    assert coverage["status"] == "PARTIAL" and "끝내기 전에 멈췄어요" in coverage["reason"] and outcome.candidate["eligibility"]
+
+
 def test_changing_a_rule_status_clears_the_field_the_new_status_must_leave_empty():
     # 2026-11-07 3건 표본: 조건을 「글로 남김」으로 바꾸며 조건식을 지우지 않아(칸마다 합치므로 앞 값이 남음) 거절 5번, 고치는 차례가 늘어남
     document = parse(TEXT)
@@ -653,6 +796,8 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
     scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
+    everyone = verify_report(draft, [{**issue, "code": "SCOPE_SUBGROUP_SUSPECTED"}])  # 계층 조건을 대상 없이 넣음(2026-11-08 bmc-106)
+    assert "## 확인할 것 1개" in everyone and "- SCOPE_SUBGROUP_SUSPECTED:" in everyone and "계층마다 대상을 따로" in everyone
 
 
 def test_tiers_split_into_separate_conditions_must_be_fixed_into_one_condition_with_exceptions():

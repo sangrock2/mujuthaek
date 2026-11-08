@@ -20,6 +20,7 @@ from typing import Any
 
 from mujuthaek_extraction.assemble.quotes import normalize
 from mujuthaek_extraction.assemble.values import to_krw
+from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.intake.pdf_reader import image_pages
 from mujuthaek_extraction.verify.exceptions import AMOUNT
 from mujuthaek_extraction.verify.model import Finding, SourceBundle
@@ -882,6 +883,8 @@ DOCUMENT_WORD = re.compile(
 )
 HEADING_LOOKBACK = 3  # 표 위로 볼 글 줄 수(쪽 표시·빈 줄 제외)
 DOCUMENT_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(한 행은 다른 표·글로 넣은 서류일 때가 많음)
+ROW_EXCERPT_CHARS = 60  # 빠진 행마다 보여 줄 글자 수
+ROW_EXCERPT_LEAD = 25  # 서류 낱말이 뒤에 있으면 그 앞 몇 글자부터 보여 줄지(서류 이름의 앞부분)
 OMITTED_ROWS = re.compile(r"(?:서류 표 행|첨부 증빙) (\d+)개")
 # 서류 칸 안에 「- 상황 : 서류」로 나열된 첨부 증빙(2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행의 비고 칸 「- 비상장주식 : 증권사 조회내역,
 # 주식보관증 …」「- 장기카드대출 : 신용카드사가 발급한 증빙서류」를 V1은 모두 상황마다 서류로 나눴는데, V2 서류 담당은 bmc-71·gh-808에서 상위 서류
@@ -974,6 +977,19 @@ def _unhandled_attachments(documents: list[dict[str, Any]], rows: list[str]) -> 
     return missed
 
 
+def _row_excerpt(row: str) -> str:
+    """빠진 행을 알릴 때 보여 줄 부분(60자): 서류 낱말이 앞 60자 안에 없으면 처음 나오는 곳 조금 앞부터.
+    2026-11-08 최종 비교 jbdc-16011: 원문 변환에서 소득세 납부 입증 서류 표(<표9>, 재직증명서 등 서류 8개)가 앞 표의 마지막 칸 하나에 합쳐졌는데,
+    행 앞 60자 「※ 직인날인이 없거나 직인 날인된 서류를…」 주의 문구만 보여 V2 서류 담당이 서류 행으로 보지 않고 넘김(앞 실행들은 8개를 넣음)."""
+    text = " ".join(c for c in _cells(row) if c)
+    found = DOCUMENT_WORD.search(text)
+    if found is None or found.end() <= ROW_EXCERPT_CHARS:
+        return text[:ROW_EXCERPT_CHARS]
+    start = max(found.start() - ROW_EXCERPT_LEAD, 0)
+    start = text.rfind(" ", 0, start) + 1 or start  # 낱말 가운데서 시작하지 않게
+    return "…" + text[start : start + ROW_EXCERPT_CHARS]
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -989,7 +1005,7 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
         plain = normalize(row)
         if any(q in plain or plain in q for q in cited) or any(n in plain for n in names):
             continue
-        missed.append(" ".join(c for c in _cells(row) if c)[:60])
+        missed.append(_row_excerpt(row))
     parts = []
     attachments = _unhandled_attachments(documents, rows)
     if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)
@@ -1298,6 +1314,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_notice_document(candidate, find)
     _check_income_tiers(candidate, find)
     _check_definition_scope(candidate, find)
+    _check_subgroup_scope(candidate, find)
     return findings
 
 
@@ -1404,3 +1421,86 @@ def _check_definition_scope(candidate: dict[str, Any], find: Any) -> None:
                 )
                 find("V7", DEFINITION_SCOPE, f"/eligibility/{index}", description)
                 break
+
+
+# 일부 계층의 기준을 대상 없이 넣음(2026-11-08 V2 유료 확인 bmc-106: 1순위 자격은 가~자목 계층 중 하나에 해당하면 되는데, 자격 담당이 계층
+# 조건의 대상(scope.targetGroups)을 비우고 적용 대상 글(appliesTo)에만 계층 이름을 적어, 자목 「65세 이상 수급권자·차상위계층」의 나이 65세 이상,
+# 사목 「65세 이상 직계존속 부양」의 부모 나이, 나·마·바·아목만의 소득·자산·자동차 상한이 신청자 전체 조건으로 자동 게시됨 — 65세 미만은 모두
+# 「지원 불가」. 앞 실행은 같은 조건을 계층 대상으로 넣었음). 대상·공급 묶음·위치·공급 구분 어디에도 한정되지 않은 조건식 가운데
+# ① 서로 다른 조건 항목이 같은 주체·기준에 다른 경계를 걸면 더 좁은 쪽(모두 함께 적용되어 넓은 쪽은 뜻이 없어짐: 한쪽은 일부 계층의 기준으로 봄).
+#    한 항목 안의 경계 둘(「이상」을 「이하」로 뒤집어 상한이 둘이 된 나이 등)은 이 꼴이 아니라 보지 않습니다(방향 대조 OPERATOR_MISMATCH가 봄)
+# ② 부모·그 밖의 가족(자녀 등)의 나이
+# ③ 원문 글이나 근거 인용 하나가 목록의 목을 둘 이상 가리킴(「나목, 마목」 「‘나’목, ‘마’목의 경우에는」). 근거도 봅니다: 다시 확인한 실행에서
+#    담당이 같은 총자산·자동차 조건의 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어 원문 글로는 안 걸렸고, 근거에는 「자산기준이 적용되는 자격
+#    - 나목(국가유공자등), 마목(북한이탈주민) …」이 그대로 있었음
+# 을 사람 확인으로 보냅니다. 저장된 V1·V2 결과 전체(대상 없는 조건식 1,746개)에서 걸린 것은 이 공고의 이 조건들뿐이었음(적용 대상 글이나
+# 「~의 경우에는」 같은 한정 표현으로 보면 40개 넘게 걸리고 대부분 신청자 전체의 기준이라 쓰지 않음)
+SUBGROUP_SCOPE = "SCOPE_SUBGROUP_SUSPECTED"
+FAMILY_SUBJECTS = {"PARENTS": "부모", "OTHER": "가족"}
+LIST_ITEM_REFERENCE = re.compile(r"(?<![가-힣])[‘'「“\"]?([가나다라마바사아자차카타파하])[’'」”\"]?\s?목(?!적)")
+BOUND_SIDES = {"GT": "low", "GTE": "low", "LT": "high", "LTE": "high"}
+
+
+def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
+    quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
+    flagged: dict[int, str] = {}
+    bounds: dict[tuple[str, str, str], dict[int, float]] = {}  # (주체, 기준, low·high) → 항목 → 그 항목의 가장 좁은 경계
+    for index, item in enumerate(candidate.get("eligibility") or []):
+        if not _applies_to_everyone(item):
+            continue
+        expression = item["rule"].get("expression")
+        for key, value in _top_bounds(expression):
+            kept = bounds.setdefault(key, {})
+            kept[index] = (max if key[2] == "low" else min)(kept.get(index, value), value)
+        for _, atom in _atoms(expression, ""):
+            if atom.get("attribute") == "AGE_YEARS" and atom.get("subject") in FAMILY_SUBJECTS:
+                flagged.setdefault(index, f"{FAMILY_SUBJECTS[atom['subject']]} 나이 기준이 대상 없이 신청자 전체에 걸립니다")
+        for text in (item.get("originalText") or "", *(quotes.get(i, "") for i in item.get("evidenceIds") or [])):
+            letters = list(dict.fromkeys(LIST_ITEM_REFERENCE.findall(text)))
+            if len(letters) >= 2:
+                items = ", ".join(f"{letter}목" for letter in letters[:4])
+                flagged.setdefault(index, f"원문이 목록의 일부 목({items})만 가리키는데 대상 없이 신청자 전체에 걸립니다")
+                break
+    for (_, attribute, side), per_item in bounds.items():
+        if len(set(per_item.values())) < 2:
+            continue
+        strict = max(per_item.values()) if side == "low" else min(per_item.values())
+        shown = ", ".join(f"{value:g}" for value in sorted(set(per_item.values())))
+        for index, value in per_item.items():
+            if value == strict:
+                why = f"대상 없는 조건들이 같은 기준({_meaning(attribute)})에 서로 다른 경계({shown})를 걸어 더 좁은 {value:g}이(가) 신청자 전체에 걸립니다"
+                flagged.setdefault(index, why)
+    for index, why in sorted(flagged.items()):
+        find("V7", SUBGROUP_SCOPE, f"/eligibility/{index}", f"{why}. 일부 계층(자격 목·공급유형·순위)의 기준이면 그 대상에만 적용해야 합니다.")
+
+
+def _applies_to_everyone(item: dict[str, Any]) -> bool:
+    """대상·공급 묶음·위치·공급 구분 어디에도 한정되지 않은 조건식 항목(공고의 모든 신청자에게 함께 적용)."""
+    scope = item.get("scope") or {}
+    limited = scope.get("targetGroups") or scope.get("supplyGroupIds") or scope.get("locationIds") or scope.get("supplyCategory") not in (None, "ALL")
+    return (item.get("rule") or {}).get("status") == "STRUCTURED" and not limited
+
+
+def _top_bounds(expression: dict[str, Any] | None) -> list[tuple[tuple[str, str, str], float]]:
+    """조건식 맨 위(원자 하나 또는 ALL의 원자들)의 숫자 경계 ((주체, 기준, low·high), 값). ANY·NOT 안의 경계는 함께 적용되는 경계가 아니라 뺍니다."""
+    if not isinstance(expression, dict):
+        return []
+    kind = expression.get("kind")
+    atoms = [expression] if kind == "ATOMIC" else [c for c in expression.get("children") or [] if c.get("kind") == "ATOMIC"] if kind == "ALL" else []
+    found = []
+    for atom in atoms:
+        subject, attribute, value, operator = atom.get("subject"), atom.get("attribute"), atom.get("value"), atom.get("operator")
+        if operator == "BETWEEN" and isinstance(value, list) and len(value) == 2 and all(map(_number, value)):
+            found += [((subject, attribute, "low"), float(value[0])), ((subject, attribute, "high"), float(value[1]))]
+        elif operator in BOUND_SIDES and _number(value):
+            found.append(((subject, attribute, BOUND_SIDES[operator]), float(value)))
+    return found
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _meaning(attribute: str) -> str:
+    """속성 사전의 뜻(「만 나이」 「총자산」). 사전에 없으면 코드 그대로."""
+    return next((spec["meaning"] for spec in tools().ATTRIBUTE_DICTIONARY["attributes"] if spec["code"] == attribute), attribute)

@@ -451,6 +451,45 @@ def test_condition_made_from_one_definition_entry_and_put_on_a_wider_target_is_s
     assert flagged(item("주거약자용 주택 신청자", original="고령자(주택 소유와 무관)")) == []  # 정의에 조건식 값이 없음
 
 
+def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
+    # 2026-11-08 V2 유료 확인 bmc-106: 1순위 자격(가~자목 중 하나)의 계층 조건을 대상 없이 넣어 나이 65세 이상·부모 나이·나·마·바·아목만의
+    # 소득 상한이 신청자 전체 조건으로 게시됨(65세 미만은 모두 「지원 불가」)
+    def atom(attribute, operator, value, subject="APPLICANT"):
+        return {"kind": "ATOMIC", "subject": subject, "attribute": attribute, "operator": operator, "value": value}
+
+    def item(expression, *groups, original="원문"):
+        rule = {"status": "STRUCTURED", "expression": expression}
+        return {"category": "OTHER", "scope": scope(*groups), "evidenceIds": [], "originalText": original, "rule": rule}
+
+    def flagged(*items):
+        found = check_consistency(candidate(eligibility=list(items)), SourceBundle(texts={"pdf-text": TABLE}))
+        return {f.target: f for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"}
+
+    adult, senior = item(atom("AGE_YEARS", "GTE", 19)), item(atom("AGE_YEARS", "GTE", 65), original="자. 65세 이상인 사람으로서 수급권자")
+    found = flagged(adult, senior)
+    assert list(found) == ["/eligibility/1"] and "만 나이" in found["/eligibility/1"].description and "19, 65" in found["/eligibility/1"].description
+    assert not is_note(found["/eligibility/1"].issue())  # 사람 확인(그 조건만 보류). 경계가 더 좁은 쪽만(넓은 쪽은 판정을 바꾸지 않음)
+    assert flagged(adult, item(atom("AGE_YEARS", "GTE", 65), "65세 이상 수급권자")) == {}  # 계층 대상이면 그 계층에만
+    assert flagged(adult, item({"kind": "ALL", "children": [atom("AGE_YEARS", "BETWEEN", [19, 39])]})) == {}  # 하한이 같고 상한은 하나
+    flipped = item({"kind": "ALL", "children": [atom("AGE_YEARS", "LTE", 19), atom("AGE_YEARS", "LTE", 39)]})
+    assert flagged(flipped) == {}  # 한 항목 안의 경계 둘(뒤집힌 연산자)은 방향 대조가 봄
+    assert list(flagged(*(item(atom("INCOME_BENCHMARK_PERCENT", "LTE", value)) for value in (100, 70)))) == ["/eligibility/1"]  # 상한은 작은 쪽
+    parents = item(atom("AGE_YEARS", "GTE", 65, subject="PARENTS"), original="사. 65세 이상의 직계존속을 부양하는 사람")
+    assert "부모 나이" in flagged(parents)["/eligibility/0"].description
+    listed = item(atom("INCOME_BENCHMARK_PERCENT", "LTE", 70), original="※ 위 자격 중 ‘나’목, ‘마’목, ‘바’목, ‘아’목의 경우에는 월평균소득 70% 이하")
+    assert "나목, 마목, 바목, 아목" in flagged(listed)["/eligibility/0"].description
+    one = item(atom("INCOME_BENCHMARK_PERCENT", "LTE", 70), original="「공공주택 특별법 시행규칙」 별표3 사목에 따라 다음 각 목의 요건을 갖추고 목적에 맞게")
+    assert flagged(one) == {}  # 목 하나·「각 목」·「목적」은 목록의 일부 계층을 가리키는 것이 아님
+    # 다시 확인한 실행: 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어도 근거 인용이 일부 목을 가리키면 걸림
+    line = "1. 자산기준(총자산/자동차)이 적용되는 자격 - 나목(국가유공자등), 마목(북한이탈주민), 바목(장애인)"
+    text = TABLE + "\n" + line
+    start = text.index(line)
+    quoted = {"id": "ev-assets", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": start, "end": start + len(line)}, "quote": line}
+    assets = {**item(atom("TOTAL_ASSETS_KRW", "LTE", 245_000_000), original="총자산가액 기준 24,500만원 이하"), "evidenceIds": ["ev-assets"]}
+    found = check_consistency(candidate(text=text, eligibility=[assets], evidence=[quoted]), SourceBundle(texts={"pdf-text": text}))
+    assert [f.target for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"] == ["/eligibility/0"]
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [
@@ -572,6 +611,20 @@ def test_attached_evidence_listed_in_a_cited_document_row_is_checked_too():
     both = text + "\n" + "\n".join(DOCUMENT_TABLE.split("\n")[3:6])
     finding = document_omission(both, ["가상 자산 보유 사실 확인서"])
     assert omitted_document_rows(finding.description) == 3 + 3 and "서류 표 행 3개" in finding.description
+
+
+def test_a_missed_row_whose_documents_come_after_a_long_note_shows_the_documents():
+    # 2026-11-08 최종 비교 jbdc-16011: 원문 변환에서 서류 표(<표9>, 재직증명서 등 8개)가 앞 표의 마지막 칸 하나에 합쳐졌는데, 행 앞 60자
+    # 「※ 직인날인이 없거나…」 주의 문구만 보여 V2 서류 담당이 서류 행으로 보지 않고 넘김
+    merged = (
+        "| ※ 직인 날인이 없거나 직인 날인된 서류를 팩스로 받은 경우에도 정당한 서류로 인정받지 않으니 유의하시기 바랍니다. "
+        "<표9> 소득세 납부 입증 서류 해당여부 서류구분 ① 가상 근로증명서 근로자 ② 가상 보험확인서 |"
+    )
+    lines = DOCUMENT_TABLE.split("\n")
+    finding = document_omission(TABLE + "\n" + "\n".join([*lines[:4], merged, lines[5]]), ["가상 신청서"])
+    assert omitted_document_rows(finding.description) == 2
+    assert "…" in finding.description and "① 가상 근로증명서" in finding.description and "※ 직인" not in finding.description
+    assert "「신혼 · 가상 혼인관계증명서 행정복지센터」" in finding.description  # 서류 낱말이 앞에 있는 행은 그대로 앞부분
 
 
 def test_document_omission_is_a_note_that_is_still_rechecked():
