@@ -250,6 +250,8 @@ def test_amount_must_match_its_written_unit():
     row = "| 1명 | 37,900 | 4,996 |"
     assert _krw_found([(row, place_of(table, table.index(row)))], 379_000_000)  # 같은 표 위 단위 표시
     assert not _krw_found([(row, None)], 379_000_000)  # 단위 근거 없음
+    # 2026-11-09 유료 확인 gh-809: 「자동차가액이 4,542」 다음 줄 「만원 이하」를 담당이 검증할 수 없다며 조건식을 비움. 이어 인용하면 한 금액으로 읽음
+    assert _krw_found([("총 자산 중 자동차가액이 4,542\n만원 이하 일 것", None)], 45_420_000)
 
 
 def test_price_unit_must_come_from_the_same_column_or_table():

@@ -116,14 +116,23 @@ def _fence(text: str, label: str) -> tuple[str, str]:
         number += 1
 
 
-def attribute_lines() -> str:
-    lines = []
-    for spec in tools().ATTRIBUTE_DICTIONARY["attributes"]:
-        extra = f", 형식 {spec['pattern']}" if "pattern" in spec else ""
-        extra += f", 값 {'/'.join(spec['enum'])}" if "enum" in spec else ""
-        extra += ", benchmark 필수" if spec.get("benchmarkRequired") else ""
-        lines.append(f"- {spec['code']}: {spec['meaning']} (단위 {spec['unit']}, 값 {spec['valueType']}, 연산자 {'/'.join(spec['operators'])}{extra})")
-    return "\n".join(lines)
+# 공통 지시(system prompt)의 속성 목록에 넣지 않고, 그 속성을 쓰는 호출의 지시에만 적는 속성. 공통 지시는 모든 호출의 앞부분이라
+# 바꾸면 구조 호출·다른 담당의 캐시까지 모두 바뀝니다(2026-11-09 막내 자녀 나이: 자격 호출 지시 CHILD_AGE_NOTE에 적음)
+CALL_ONLY_ATTRIBUTES = frozenset({"YOUNGEST_CHILD_AGE_YEARS"})
+
+
+def attribute_line(spec: dict[str, Any]) -> str:
+    extra = f", 형식 {spec['pattern']}" if "pattern" in spec else ""
+    extra += f", 값 {'/'.join(spec['enum'])}" if "enum" in spec else ""
+    extra += ", benchmark 필수" if spec.get("benchmarkRequired") else ""
+    return f"- {spec['code']}: {spec['meaning']} (단위 {spec['unit']}, 값 {spec['valueType']}, 연산자 {'/'.join(spec['operators'])}{extra})"
+
+
+def attribute_lines(codes: frozenset[str] | None = None) -> str:
+    """속성 사전의 줄들. codes를 주면 그 속성만(호출 지시용), 없으면 CALL_ONLY_ATTRIBUTES를 뺀 전부(공통 지시용)."""
+    specs = tools().ATTRIBUTE_DICTIONARY["attributes"]
+    chosen = [s for s in specs if (s["code"] in codes if codes is not None else s["code"] not in CALL_ONLY_ATTRIBUTES)]
+    return "\n".join(attribute_line(spec) for spec in chosen)
 
 
 def document_ids(material: ExtractionMaterial) -> list[str]:

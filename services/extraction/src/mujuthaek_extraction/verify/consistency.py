@@ -296,7 +296,7 @@ def _atoms(expression: dict[str, Any] | None, path: str):
 # 순서가 정해진 일정 종류. 앞 종류의 가장 이른 시작이 뒤 종류의 가장 이른 시작보다 늦으면 의심합니다(빠진 종류는 건너뛰고 모든 쌍).
 ORDER = ["ANNOUNCEMENT", "APPLICATION", "WINNER_ANNOUNCEMENT", "CONTRACT", "MOVE_IN"]
 # (속성, 최솟값, 최댓값) — 공공 주거 공고에서 나올 수 없는 값
-ATOM_RANGES = {"AGE_YEARS": (0, 120), "INCOME_BENCHMARK_PERCENT": (10, 400), "MARRIAGE_MONTHS": (0, 600)}
+ATOM_RANGES = {"AGE_YEARS": (0, 120), "YOUNGEST_CHILD_AGE_YEARS": (0, 18), "INCOME_BENCHMARK_PERCENT": (10, 400), "MARRIAGE_MONTHS": (0, 600)}
 AREA_RANGE = (5.0, 400.0)
 MAX_AMOUNT = 5_000_000_000  # 50억
 MAX_MONTHLY = 10_000_000  # 월 1천만원
@@ -1065,6 +1065,56 @@ def _unlisted_forms(documents: list[dict[str, Any]], text: str) -> list[str]:
     return missed
 
 
+# 글 속에서 내라고 한 서류(「신청 시 희망주택목록을 함께 제출」「입주대기 취소 신청서 제출 후 신청 가능」「입주신청확인서제출」). 표·별지 서식이
+# 아니라 위 검사들이 보지 못함(2026-11-09 23건 남은 서류 놓침 gbdc-a909·jbdc-15611·sh-310976: V2 서류 담당이 넣지 않음).
+# 서류 이름 끝말 바로 뒤의 「제출」만 보고, 「받아서 제출」처럼 동사는 서류가 아닙니다. 「제출하더라도」「제출 전에 …」「제출 후 … 수정 불가」 같은
+# 주의 문장, 소명·이의신청 글, 절차 표의 단계 행(「8단계 | 청약신청서 제출」)은 뺍니다. 저장 결과 102개 실행(23건)에서 걸린 것은 실제로 내는 서류뿐
+SUBMITTED = re.compile(
+    r"([가-힣A-Za-z0-9·ㆍ]+(?:서|목록|명단|사본|등본|초본))\s*(?:을|를)?\s*(?:함께\s*|반드시\s*|별도로\s*|추가로\s*|각각\s*)?제출"
+    r"(?!\s*(?:하더라도|하지\s*않|할\s*필요|불필요|않아도|여부|전))"
+)
+SUBMITTED_VERB = re.compile(r"(?:아|어|해|여|와|워|라|려|에|로|면|져|쳐|켜)서$")  # 「받아서」「작성하여서」
+SUBMITTED_GENERIC = re.compile(r"^(?:서류|관련서류|구비서류|제출서류|증빙서류|서류일체|각종서류|증명서류|확인서류|첨부서류|신청서류)$")
+SENTENCE_END = re.compile(r"\n|다\.|\.\s")
+SUBMITTED_CAUTION = re.compile(r"^\s*후\S{0,3}\s.*?(?:수정|취소|변경|삭제|불가)|소명|이의\s*신청")  # 「제출 후 … 수정 불가」, 소명 절차
+# 이름이 짧으면(「신청서」「동의서」) 앞 낱말까지 이름으로 봅니다(「입주대기 취소 신청서」). 조사로 끝나거나 가리키는 말(「이 동의서」)은 이름이 아님
+SUBMITTED_SHORT = 3
+LEAD_PARTICLE = re.compile(r"(?:의|에|를|을|가|는|은|와|과|로|도|만|고|며|면|서|여|해|한|된|른|던|할|운|및|등)$")
+LEAD_POINTER = {"그", "저", "동", "각", "해당", "위", "아래", "본", "추후", "다음", "기타"}
+
+
+def _submitted_name(text: str, match: re.Match[str]) -> str | None:
+    name = match[1].strip("()")
+    if SUBMITTED_VERB.search(name) or SUBMITTED_GENERIC.match(name):
+        return None
+    if len(name) <= SUBMITTED_SHORT:
+        lead: list[str] = []
+        for word in reversed(text[max(0, match.start(1) - 40) : match.start(1)].split()[-2:]):
+            if len(word) < 2 or word in LEAD_POINTER or LEAD_PARTICLE.search(word) or not re.fullmatch(r"[가-힣A-Za-z0-9·ㆍ]+", word):
+                break
+            lead.insert(0, word)
+        name = " ".join([*lead, name])
+    return name
+
+
+def _unlisted_submissions(documents: list[dict[str, Any]], text: str) -> list[str]:
+    """글 속에서 내라고 한 서류 가운데, 이름이 겹치는(한쪽이 다른 쪽을 품는) 서류가 목록에 없는 것."""
+    names = [n for n in (normalize(NAME_NOTE.sub("", str(d.get("name") or ""))) for d in documents) if len(n) >= 2]
+    found: list[str] = []
+    for match in SUBMITTED.finditer(text):
+        end = text.find("\n", match.end())
+        line = text[text.rfind("\n", 0, match.start()) + 1 : end if end >= 0 else len(text)]
+        rest = SENTENCE_END.split(text[match.end() : match.end() + 80], maxsplit=1)[0]  # 그 문장 끝까지(다음 줄의 「신청불가」는 보지 않음)
+        if (_row_line(line) and _step_row(line)) or SUBMITTED_CAUTION.search(rest):
+            continue
+        name = _submitted_name(text, match)
+        form = normalize(name or "")
+        if len(form) >= 3 and not any(form in n or n in form for n in names) and name not in found:
+            found.append(name)
+    # 「신청서」와 「입주신청서」가 함께 걸리면 긴 이름만
+    return [name for name in found if not any(normalize(name) in normalize(other) and name != other for other in found)]
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -1085,6 +1135,10 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
     forms = _unlisted_forms(documents, "\n".join(sources.texts.values()))
     if forms:  # 별지 서식은 원문이 이름으로 정해 둔 서류라 하나만 빠져도 알립니다
         parts.append(f"원문이 별지 서식으로 든 서류 {len(forms)}개가 서류 목록에 없습니다: {', '.join(f'「{form}」' for form in forms[:3])}")
+    submitted = [name for name in _unlisted_submissions(documents, "\n".join(sources.texts.values())) if name not in " ".join(forms)]
+    if submitted:  # 글로 내라고 한 서류도 원문이 이름을 적은 서류라 하나만 빠져도 알립니다
+        shown = ", ".join(f"「{name}」" for name in submitted[:3])
+        parts.append(f"원문 글에서 내라고 한 서류 {len(submitted)}개가 서류 목록에 없습니다: {shown}{' …' if len(submitted) > 3 else ''}")
     attachments = _unhandled_attachments(documents, rows)
     if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)
         shown = ", ".join(f"「{item}」" for item in attachments[:2])
@@ -1113,6 +1167,15 @@ STEP_TO_DATE_CHARS = 20  # 단계 낱말 끝에서 날짜 시작까지(「계약
 REFERENCE_DATE = re.compile(r"^\D{0,4}(?:기준|현재|이전|당시)")
 SCHEDULE_EXCERPT_CHARS = 50
 STEP_BEFORE_NOTICE_DAYS = 31
+# 연도 없이 적은 날짜(「서류심사 (7.10. ~ 7.14.)」): 일 뒤에 마침표가 있거나 요일 괄호·물결표가 오는 「월.일」만(면적 「36.29㎡」·배수 「2.5배」는 아님).
+# 공고일의 연도로 보고, 공고일보다 한 달 넘게 앞서면 다음 해로 봅니다(2026-11-09 23건 gndc-1239 서류심사를 V1·V2 모두 넣지 않음)
+YEARLESS_DATE = re.compile(r"(?<![\d.])(\d{1,2})\s*[./]\s*(\d{1,2})(?:\s*\.(?!\d)|(?=\s*[(~∼〜]))")
+# 순서도·표가 글로 풀린 일정: 단계 낱말이 둘 이상인 머리 줄 아래(빈 줄 빼고 이만큼 안)에 날짜만 이어 적은 줄(2026-11-09 23건 umca-4439:
+# 「입주자격 조사 소명 심사 확정명단 발표」 다음 「2026. 7. 10. 2026. 7. 22. ~ 24. 2026. 7. 27. ~ 2026. 8. ~ 2026. 9.」의 조사·소명 단계를 V2가 넣지 않음)
+TIMELINE_LOOKBACK = 4
+# 날짜만 적은 줄에 남아도 되는 말(요일·시각·「예정」「이후」「말」 등). 날짜·숫자·기호를 지운 뒤 이 말을 빼고 남은 글자가 이만큼 이하면 날짜 줄입니다
+TIMELINE_FILLER = re.compile(r"[월화수목금토일]|예정|이후|부터|까지|경|말|초|중|순")
+TIMELINE_REST_CHARS = 2
 
 
 def _schedule_dates(candidate: dict[str, Any]) -> set[str]:
@@ -1146,29 +1209,88 @@ def _notice_day(candidate: dict[str, Any], known: set[str]) -> date | None:
     return min(days) if days else None
 
 
+def _date_only(line: str, dates: list[re.Match[str]]) -> bool:
+    """날짜만 이어 적은 줄인지(풀린 순서도의 날짜 줄): 날짜를 지우고 숫자·기호·요일·「예정」 같은 말을 빼면 거의 남지 않습니다."""
+    rest = line
+    for match in reversed(dates):
+        rest = rest[: match.start()] + rest[match.end() :]
+    rest = TIMELINE_FILLER.sub("", re.sub(r"[\d\s.,~∼〜()\[\]:/|\-]", "", rest))
+    return len(rest) <= TIMELINE_REST_CHARS
+
+
 def _check_schedule_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     if not candidate.get("schedules"):
         return  # 일정이 하나도 없으면 섹션 누락 검사가 봅니다
     known = _schedule_dates(candidate)
     notice_day = _notice_day(candidate, known)
     missed: list[str] = []
-    for line in "\n".join(sources.texts.values()).split("\n"):
+    flagged: set[str] = set()  # 알린 날짜(같은 날짜를 여러 규칙이 보더라도 한 번만)
+
+    def excerpt(line: str, start: int, end: int) -> str:
+        start = max(line.rfind(" ", 0, start), line.rfind("|", 0, start)) + 1  # 단계 낱말이 든 낱말 처음부터(「서류심사」)
+        return " ".join(line[start:end].split())[:SCHEDULE_EXCERPT_CHARS]
+
+    def check(year: int, month: int, day: int | None, shown: str) -> None:
+        if not 1 <= month <= 12 or (day is not None and not 1 <= day <= 31):
+            return
+        wanted = f"{year:04d}-{month:02d}" + (f"-{day:02d}" if day else "")
+        if wanted in flagged or any(value.startswith(wanted) for value in known):
+            return
+        when = _first_day(wanted)
+        if notice_day and when and (notice_day - when).days > STEP_BEFORE_NOTICE_DAYS:
+            return
+        flagged.add(wanted)
+        missed.append(shown)
+
+    lines = "\n".join(sources.texts.values()).split("\n")
+    for line in lines:
+        dated = [m.span() for m in SCHEDULE_DATE.finditer(line)]
         for step in SCHEDULE_STEP.finditer(line):
             date_match = SCHEDULE_DATE.search(line, step.end(), step.end() + STEP_TO_DATE_CHARS + 12)
             if date_match is None or date_match.start() - step.end() > STEP_TO_DATE_CHARS:
+                short = YEARLESS_DATE.search(line, step.end(), step.end() + STEP_TO_DATE_CHARS + 8)
+                if notice_day is None or short is None or short.start() - step.end() > STEP_TO_DATE_CHARS or any(a <= short.start() < b for a, b in dated):
+                    continue
+                month, day = int(short[1]), int(short[2])
+                year = notice_day.year
+                if 1 <= month <= 12 and (notice_day - date(year, month, 1)).days > STEP_BEFORE_NOTICE_DAYS:
+                    year += 1  # 12월 공고의 「1.5.」는 다음 해
+                check(year, month, day, excerpt(line, step.start(), short.end() + 8))
                 continue
-            year, month, day = int(date_match[1]), int(date_match[2]), int(date_match[3]) if date_match[3] else None
-            if not 1 <= month <= 12 or (day is not None and not 1 <= day <= 31) or REFERENCE_DATE.search(line[date_match.end() :]):
+            if REFERENCE_DATE.search(line[date_match.end() :]):
                 continue
-            wanted = f"{year:04d}-{month:02d}" + (f"-{day:02d}" if day else "")
-            if any(value.startswith(wanted) for value in known):
-                continue
-            when = _first_day(wanted)
-            if notice_day and when and (notice_day - when).days > STEP_BEFORE_NOTICE_DAYS:
-                continue
-            shown = " ".join(line[step.start() : date_match.end() + 8].split())[:SCHEDULE_EXCERPT_CHARS]
-            if shown not in missed:
-                missed.append(shown)
+            shown = excerpt(line, step.start(), date_match.end() + 8)
+            check(int(date_match[1]), int(date_match[2]), int(date_match[3]) if date_match[3] else None, shown)
+    # 일정 표: 단계 낱말이 든 칸이 둘 이상이고 날짜는 없는 머리 행 바로 아래 행의 날짜(2026-11-09 유료 확인 gh-809: 「| 신청접수 | | 적격여부 검수 |
+    # | 당첨자 발표 | | 계약체결 |」 아래 「2026.07.27(월) ~ 2026.08.17(월)」을 V2가 넣지 않음. 그 행에 다른 글도 있어 날짜 줄 규칙은 못 봄).
+    # 칸 이름을 보여 줄 수 있어 날짜 줄 규칙보다 먼저 봅니다
+    for index, line in enumerate(lines):
+        if not _row_line(line) or SCHEDULE_DATE.search(line):
+            continue
+        heads = _cells(line)
+        if sum(1 for cell in heads if SCHEDULE_STEP.search(cell)) < 2:
+            continue
+        row = next((text for text in lines[index + 1 : index + 3] if _row_line(text)), None)
+        for column, cell in enumerate(_cells(row) if row else []):
+            head = heads[column] if column < len(heads) and heads[column] else " ".join(line.split())[:30]
+            for match in SCHEDULE_DATE.finditer(cell):
+                check(int(match[1]), int(match[2]), int(match[3]) if match[3] else None, f"{head} … {' '.join(match[0].split())}")
+    for index, line in enumerate(lines):
+        dates = list(SCHEDULE_DATE.finditer(line))
+        if len(dates) < 2 or not _date_only(line, dates):
+            continue
+        above = []  # 바로 위 글 줄들(가까운 줄부터, 빈 줄 빼고)
+        for text in reversed(lines[:index]):
+            if len(above) == TIMELINE_LOOKBACK:
+                break
+            if text.strip():
+                above.append(text)
+        header = next((text for text in above if len(SCHEDULE_STEP.findall(text)) >= 2 and not SCHEDULE_DATE.search(text)), None)
+        if header is None:
+            continue
+        head = " ".join(header.split())[:30]
+        for match in dates:
+            check(int(match[1]), int(match[2]), int(match[3]) if match[3] else None, f"{head} … {' '.join(match[0].split())}")
     if missed:
         shown = ", ".join(f"「{item}」" for item in missed[:3])
         find(

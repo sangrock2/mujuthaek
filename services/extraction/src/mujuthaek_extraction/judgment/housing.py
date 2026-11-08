@@ -81,6 +81,15 @@ def _atom(ctx: Context, item: dict[str, Any], node: dict[str, Any], quote: str |
             "youngestMaxAge": youngest,
             "includeUnborn": "태아" in text,
         }
+    if attribute == "YOUNGEST_CHILD_AGE_YEARS" and span and span[0] is None and span[1] is not None:
+        # 「6세 이하 자녀를 둔」(2026-11-09 새 속성): 그 나이 이하의 자녀가 있어야 함 = 자녀 1명 이상·막내 나이 상한. 태아 포함은 원문 글로
+        text = f"{item.get('originalText') or ''} {quote or ''}"
+        return {
+            **base_fields(ctx.new_id(item["id"]), "CHILDREN", quote),
+            "minCount": 1,
+            "youngestMaxAge": as_int(span[1]),
+            "includeUnborn": "태아" in text,
+        }
     if attribute in ("SAVINGS_ACCOUNT_EXISTS", "SAVINGS_MONTHS", "SAVINGS_PAYMENT_COUNT", "SAVINGS_BALANCE_KRW"):
         if attribute == "SAVINGS_ACCOUNT_EXISTS" and not (op == "EQ" and value is True):
             return None

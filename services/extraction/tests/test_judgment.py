@@ -553,6 +553,13 @@ def test_child_count_with_an_age_limit_is_asked_whole():
     assert (kept["kind"], kept["inReview"]) == ("ASK", False) and "6세 이하 자녀" in kept["question"]
 
 
+def test_youngest_child_age_attribute_is_a_child_question_not_a_review():
+    # 2026-11-09 새 속성: 「6세 이하 자녀를 둔 한부모가족」의 자녀 나이를 담을 속성이 없어 조건식 없이 글로 남았음(정답표 자녀 나이 8개를 V1·V2 모두 놓침)
+    young = item("young", "CHILDREN", "6세 이하 자녀(태아 포함)를 둔 한부모가족", atom("YOUNGEST_CHILD_AGE_YEARS", "LTE", 6, unit="YEAR"))
+    [made] = build_judgment(candidate([young]))["common"]
+    assert (made["kind"], made["inReview"]) == ("ASK", False) and "6세 이하 자녀" in made["question"]
+
+
 def test_age_of_another_family_member_is_not_the_applicant_age():
     # 실측 2026-10-21: 「65세 이상 직계존속 부양자」가 신청자 65세 이상이 됨
     parent = item("parent", "AGE", "65세 이상 직계존속(배우자의 직계존속 포함)을 부양하는 자", atom("AGE_YEARS", "GTE", 65, subject="APPLICANT", unit="YEAR"))

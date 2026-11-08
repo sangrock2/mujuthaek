@@ -36,6 +36,7 @@ ATTRIBUTES = {
     "TOTAL_ASSETS": "TOTAL_ASSETS_KRW",
     "CAR_ASSETS": "CAR_ASSETS_KRW",
     "CHILDREN": "CHILD_COUNT",
+    "CHILD_AGE": "YOUNGEST_CHILD_AGE_YEARS",  # 정답표의 자녀 나이 행(_child_age_rows)
     "HOMELESS": "HOMELESS",
 }
 CRITERION_OF = {v: k for k, v in ATTRIBUTES.items()} | {
@@ -980,8 +981,22 @@ def sums(score: Score) -> tuple[int, int]:
 def _load_key(folder: Path, notice: str) -> dict[str, Any] | None:
     for path in (folder / notice / "key.json", folder / f"{notice}.json"):
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            return _child_age_rows(json.loads(path.read_text(encoding="utf-8")))
     return None
+
+
+# 정답표는 자녀 나이(「6세 이하 자녀를 둔 한부모가족」)도 AGE로 적습니다. 상한이 이 나이 이하면 신청자 나이일 수 없어, 원문·대상에 「자녀」가 있는
+# 그런 행은 추출의 막내 자녀 나이(YOUNGEST_CHILD_AGE_YEARS)와 견주는 CHILD_AGE로 봅니다(2026-11-09 새 속성. 정답표 23건에 8행)
+CHILD_AGE_MAX = 12
+
+
+def _child_age_rows(key: dict[str, Any]) -> dict[str, Any]:
+    for e in key.get("eligibility") or []:
+        values = _values(e.get("value"))
+        child = "자녀" in f"{e.get('text') or ''} {e.get('targetGroup') or ''}"
+        if e.get("criterion") == "AGE" and _operator(e.get("operator")) in ("LTE", "LT") and values and max(values) <= CHILD_AGE_MAX and child:
+            e["criterion"] = "CHILD_AGE"
+    return key
 
 
 def _load_verified(path: Path) -> dict[str, dict[str, set[str]]]:

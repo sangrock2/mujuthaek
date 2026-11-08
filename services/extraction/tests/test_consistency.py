@@ -897,6 +897,33 @@ def test_forms_named_as_attached_sheets_in_prose_must_be_in_the_document_list():
     assert document_omission(text, ["입주신청서", "개인정보 동의서(별지 2호)", "자기소개서"]) is None
 
 
+def test_documents_asked_for_in_prose_must_be_in_the_document_list():
+    # 2026-11-09 23건 남은 서류 놓침: gbdc-a909 「신청 시 희망주택목록을 함께⏎제출」, jbdc-15611 「입주대기 취소 신청서 제출 후 신청 가능」,
+    # sh-310976 「• 입주신청확인서제출」을 V2 서류 담당이 넣지 않음
+    asked = [
+        "해당 모집단위 내 주택을 사전 열람하여 신청 시 희망주택목록을 함께",
+        "제출해야 하며, 순번에 따라 배정합니다.",
+        "다만 현재 입주대기자는 입주대기 취소 신청서 제출 후 신청 가능합니다.",
+        "※ 외국인은 신청불가 합니다.",  # 다음 문장의 「불가」는 앞 문장의 제출과 상관없음
+        "선정된예비입주자는정해진일정까지아래절차이행 • 입주신청확인서제출 • 입주신청확인금입금",
+    ]
+    not_asked = [
+        "공고문을 해당 지자체(시·군·자치구)로부터 받아서 제출",  # 「받아서」는 서류가 아님
+        "하는 자가 이 동의서 제출을 2회 거부하면",  # 이미 넣은 「동의서」
+        "추후 청약신청납입확인서를 제출하더라도 인정하지 않습니다.",
+        "✅ 신청서 제출 전에 신청자격기준을 확인하시기 바랍니다.",
+        "▫ 청약신청서 제출 후 신청당일 마감시간 전까지만 온라인 신청내용 취소 및 삭제 후 재신청 가능",
+        "| 8단계 | 청약신청서 제출 |",  # 절차 표의 단계
+        "자료를 수정한 후 동 기관의 확인서를 제출하여 소명",
+    ]
+    text = TABLE + "\n" + "\n".join([*asked, *not_asked])
+    finding = document_omission(text, ["개인정보 수집·이용 동의서"])
+    assert finding is not None and "글에서 내라고 한 서류 3개" in finding.description
+    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):
+        assert f"「{name}」" in finding.description
+    assert document_omission(text, ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]) is None
+
+
 def schedule_item(kind, start, end=None):
     return {
         "kinds": [kind],
@@ -936,6 +963,41 @@ def test_dated_steps_written_as_numbered_lines_must_be_in_the_schedules():
     assert "단계 2개" in finding.description and "계약체결: 2027. 1. 20." in finding.description and "입주기간: 2027. 2~4월" in finding.description
     complete = [*listed, schedule_item("CONTRACT", "2027-01-20", "2027-01-22"), schedule_item("MOVE_IN", "2027-02", "2027-04")]
     assert omission(complete) is None
+
+
+def test_dated_steps_in_unrolled_timelines_tables_and_yearless_dates_must_be_in_the_schedules():
+    # 2026-11-09 23건 남은 일정 놓침: umca-4439 순서도가 풀려 단계 이름 줄과 날짜 줄이 따로(입주자격 조사·소명 심사), gndc-1239 연도 없는
+    # 「서류심사 (7.10. ~ 7.14.)」, gh-809 일정 표의 「적격여부 검수」 칸(단계 낱말이 아닌 칸도 같은 표라 봄)
+    timeline = ["입주자격 조사 소명 심사 확정명단 발표", "(개별통보)", "2026. 7. 10. 2026. 7. 22. ~ 24. 2026. 7. 27. ~ 2026. 8. ~ 2026. 9."]
+    yearless = ["| 서류심사 (7.30. ~ 7.31.) | - 서류검토 및 적격여부판단 |"]
+    table = [
+        "| 신청접수 |  | 적격여부 검수 |  | 당첨자 발표 |",
+        "| 2026.07.22.(수) ~ 2026.07.24.(금) |  | 2026.08.03(월) ~ 2026.08.17(월) |  | 2026.09.15.(화) 이후 |",
+    ]
+    noise = [
+        "전용 36.29㎡, 접수 인원은 공급 호수의 2.5배수",  # 면적·배수는 연도 없는 날짜가 아님
+        "1985.11.07 ~ 2007.11.06 출생자",  # 날짜 줄이 아니고 공고일보다 한참 앞섬
+    ]
+    listed = [
+        schedule_item("ANNOUNCEMENT", "2026-07-10"),
+        schedule_item("APPLICATION", "2026-07-22", "2026-07-24"),
+        schedule_item("WINNER_ANNOUNCEMENT", "2026-09"),
+    ]
+
+    def omission(lines):
+        text = TABLE + "\n".join(["", *lines])
+        found = [
+            f
+            for f in check_consistency(candidate(text=text, schedules=listed), SourceBundle(texts={"pdf-text": text}))
+            if f.code == "SCHEDULE_OMISSION_SUSPECTED"
+        ]
+        return found[0].description if found else ""
+
+    assert "단계 2개" in omission(timeline) and "입주자격 조사 소명 심사 확정명단 발표 … 2026. 7. 27" in omission(timeline)  # 7.10·7.22·9월은 있음
+    assert "단계 1개" in omission(yearless) and "서류심사 (7.30." in omission(yearless)
+    assert "단계 3개" in omission(table) and "적격여부 검수 … 2026.08.03" in omission(table)  # 칸 이름으로 보여 줌
+    assert omission(noise) == ""
+    assert "단계 6개" in omission(timeline + yearless + table + noise)  # 표 행이 날짜만 있는 줄이어도 같은 날짜는 한 번만
 
 
 def unit_group(label, value=1, kind="HOUSING_UNIT"):

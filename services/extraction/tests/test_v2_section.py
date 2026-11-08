@@ -795,6 +795,10 @@ def test_section_rules_go_only_to_the_call_of_that_section():
     assert "announcedOn은 null" in workers["structure"].instructions and "PARTIAL로 두지 않습니다" in workers["structure"].instructions
     assert "CAR_ASSETS_KRW LTE 0" in workers["eligibility"].instructions
     assert "WINNER_ANNOUNCEMENT" in workers["schedules"].instructions and "시작과 끝을 모두" in workers["schedules"].instructions
+    # 새 속성(막내 자녀 나이)은 사전에 있어도 공통 지시의 속성 목록에 넣지 않고 자격 호출 지시에만(공통 지시가 바뀌면 모든 호출의 캐시가 바뀜)
+    assert "YOUNGEST_CHILD_AGE_YEARS" not in system_prompt(RULES) and "YOUNGEST_CHILD_AGE_YEARS" not in RULES.system_prompt()
+    assert "YOUNGEST_CHILD_AGE_YEARS" in workers["eligibility"].instructions and "「4,542」 다음 줄" in workers["eligibility"].instructions
+    assert "YOUNGEST_CHILD_AGE_YEARS" not in workers["documents"].instructions + workers["schedules"].instructions
 
 
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():

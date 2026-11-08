@@ -54,7 +54,9 @@ v30(2026-10-29): v29 + 순위·계층·소득 구간마다 기준이 달라도 �
   (판정 틀도 소득 구간 대상군을 대상마다 「구간 중 하나」로 접어요, judgment/frame.py _fold_income_tiers)
   v30 호출 지시(2026-11-08~09, 지시 파일은 그대로 — 구조 호출·다른 담당이 같은 파일을 읽음): 서류 종류 이름 뒤 괄호에 든 예시는
   서류 하나·이름에서 증명 내용을 빼지 않음(DOCUMENT_NOTES), 월까지만 있는 공고일은 빠진 칸(범위 PARTIAL 아님), 자동차 미소유는
-  CAR_ASSETS_KRW ≤ 0, 선정 결과 발표는 WINNER_ANNOUNCEMENT·기간 일정은 시작과 끝·번호 붙은 글 줄의 날짜 단계도 일정.
+  CAR_ASSETS_KRW ≤ 0, 선정 결과 발표는 WINNER_ANNOUNCEMENT·기간 일정은 시작과 끝·번호 붙은 글 줄의 날짜 단계도 일정,
+  줄바꿈으로 갈라진 금액도 한 금액(SPLIT_AMOUNT_NOTE), 「6세 이하 자녀를 둔」은 새 속성 YOUNGEST_CHILD_AGE_YEARS(CHILD_AGE_NOTE,
+  공통 지시 속성 목록 밖).
 v19(2026-10-18): v18 + 선착순 공고의 접수 일정은 먼저 오는 서류 제출로,
     소득은 비율과 금액표가 함께면 비율로(19-6), 기본·금회 완화 조건은 적용하는 쪽만 STRUCTURED(19-7).
 v18(2026-10-18): v17 + 짧게 적힌 서류(신분증·인감도장·기타서류 등) 빠짐없이, 순위·계층 정의 속 나이(65세 이상)도 AGE 조건으로(19-5).
@@ -73,7 +75,7 @@ v11(2026-10-17): 구조 방식 — 표 아래 열 제목 줄·행마다 읽기 �
 from dataclasses import replace
 from pathlib import Path
 
-from mujuthaek_extraction.rules.base import CallSpec, FieldRules
+from mujuthaek_extraction.rules.base import CallSpec, FieldRules, attribute_lines
 
 # 원문이 길어 자격·선정·서류를 나눠 호출할 때 덧붙이는 지시
 SPLIT_NOTE = (
@@ -96,6 +98,23 @@ DOCUMENT_EXAMPLES_NOTE = (
 # V2 서류 담당이 「소득신고 사실증명서」로 적어 신고한 사실의 증명서로 읽힘)
 DOCUMENT_NAME_NOTE = "서류 이름은 원문 이름대로 적고, 무엇을 증명하는지 붙은 말(「소득신고 사실 없음」「무주택」「미혼」)을 빼거나 줄여 뜻을 바꾸지 않습니다."
 DOCUMENT_NOTES = f"{DOCUMENT_EXAMPLES_NOTE} {DOCUMENT_NAME_NOTE}"
+
+# 자격을 넣는 호출마다 덧붙이는 지시.
+# 막내 자녀 나이: 「6세 이하 자녀를 둔 한부모가족」의 자녀 나이를 담을 속성이 없어 조건식 없이 글로 남겼음(2026-11-09 23건: 정답표 자녀 나이 8개를
+# V1·V2 모두 놓침). 판정 틀의 막내 나이(CHILDREN youngestMaxAge)로 옮깁니다. 공통 지시의 속성 목록에는 없어(rules.base.CALL_ONLY_ATTRIBUTES) 여기에 적습니다.
+# 줄바꿈으로 갈라진 금액: 2026-11-09 유료 확인 gh-809 자격 담당이 「자동차가액이 4,542」 다음 줄 「만원 이하」를 인용 검증할 수 없다며 조건식을 비움
+# (인용 대조는 공백·줄바꿈을 지우고 견주고, 금액 읽기도 숫자와 단위 사이 줄바꿈을 받음)
+CHILD_AGE_NOTE = (
+    "공통 지시의 속성 사전에 더해 다음 속성도 씁니다.\n"
+    + attribute_lines(frozenset({"YOUNGEST_CHILD_AGE_YEARS"}))
+    + "\n「6세 이하 자녀를 둔」「만 7세 미만 자녀가 있는」처럼 그 나이 이하의 자녀가 있어야 하는 요건은 YOUNGEST_CHILD_AGE_YEARS(주체 HOUSEHOLD) "
+    "LTE 6·LT 7 조건식입니다. 자녀가 있어야 한다는 뜻이 들어 있어 CHILD_COUNT GTE 1을 따로 넣지 않고, 태아 포함은 원문 글에 둡니다. "
+    "「6세 이하 자녀 2명 이상」처럼 그 나이 자녀의 수를 세는 요건은 이 속성으로 적지 않습니다."
+)
+SPLIT_AMOUNT_NOTE = (
+    "원문에서 금액의 숫자와 단위가 줄바꿈으로 갈라져 있어도(「4,542」 다음 줄 「만원 이하」) 한 금액입니다. 두 줄을 이어 인용하면 "
+    "공백·줄바꿈과 상관없이 검증되므로 조건식을 비우지 않습니다."
+)
 
 # 호출별 출력 한도 근거: 저장된 실제 유료 응답(gpt-6-luna, 정상 종료 END) 중 최대 출력 토큰 (2026-10-20 집계, 시도 446건:
 # eval/live-v10~v40·extract-v*·paid-v6·pipeline*·live-perf). 반복으로 폭주해 한도까지 간 응답은 빼고 셉니다.
@@ -280,7 +299,7 @@ _ELIGIBILITY = CallSpec(
         "다른 곳의 가산·완화 표(그 조건의 예외), 공급 유형별·계층별로 다른 소득·자산 기준(유형마다 따로).\n"
         # 2026-11-09 23건: 대학생 「자동차가액 산출대상 자동차를 소유하고 있지 않을 것」 4건을 조건식 없이 글로 남겨 보류됨(정답표는 모두 자동차가액 0)
         "「자동차가액 산출대상 자동차를 소유하고 있지 않을 것」처럼 자동차가 없어야 하는 기준은 CAR_ASSETS_KRW LTE 0 조건식입니다"
-        "(같은 줄의 총자산 기준은 따로 조건).\n" + SPLIT_NOTE
+        "(같은 줄의 총자산 기준은 따로 조건). " + SPLIT_AMOUNT_NOTE + "\n" + CHILD_AGE_NOTE + "\n" + SPLIT_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["eligibility"],
@@ -339,7 +358,12 @@ _CONDITIONS = CallSpec(  # 나눠 부르지 않을 때(large_text_chars 설정)�
     sections=("eligibility", "selectionRules", "requiredDocuments"),
     instructions=(
         "신청 자격(eligibility), 선정 방식(selectionRules), 제출 서류(requiredDocuments)를 추출합니다. 공통 지시 2장의 「자격」「선정」「서류」 "
-        "절을 모두 따릅니다. 대상군별 조건은 scope.targetGroups로 구분하고, 공고 기본 정보·위치·공급 조건·일정은 다시 추출하지 않습니다.\n" + DOCUMENT_NOTES
+        "절을 모두 따릅니다. 대상군별 조건은 scope.targetGroups로 구분하고, 공고 기본 정보·위치·공급 조건·일정은 다시 추출하지 않습니다.\n"
+        + DOCUMENT_NOTES
+        + "\n"
+        + SPLIT_AMOUNT_NOTE
+        + "\n"
+        + CHILD_AGE_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["conditions"],

@@ -143,3 +143,25 @@ def test_income_amount_in_key_matches_percent_criterion_quoting_that_amount():
 def test_certificate_and_confirmation_endings_are_the_same_document():
     score = sk.compare({"documents": [{"name": "차상위계층 증명서"}]}, {"documents": [{"name": "차상위계층 확인서"}]})
     assert score.found["서류"] == 1
+
+
+def test_child_age_rows_of_the_key_match_the_youngest_child_age_attribute():
+    # 2026-11-09 새 속성: 정답표는 「6세 이하 자녀를 둔 한부모가족」을 AGE ≤ 6으로 적음(신청자 나이일 수 없는 상한)
+    key = sk._child_age_rows(
+        {
+            "eligibility": [
+                {"criterion": "AGE", "operator": "LTE", "value": 6, "targetGroup": "한부모가족", "text": "6세 이하 자녀를 둔 한부모가족"},
+                {"criterion": "AGE", "operator": "BETWEEN", "value": [19, 39], "targetGroup": "청년", "text": "19세 이상 39세 이하"},
+            ]
+        }
+    )
+    assert [e["criterion"] for e in key["eligibility"]] == ["CHILD_AGE", "AGE"]
+    item = {
+        "scope": {"targetGroups": ["한부모가족"]},
+        "originalText": "6세 이하 자녀를 둔 한부모가족",
+        "category": "CHILDREN",
+        "rule": {"expression": {"kind": "ATOMIC", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": "LTE", "value": 6}},
+        "evidenceIds": [],
+    }
+    score = sk.compare(key, sk.neutral_from_candidate(_candidate([], [], [item]), "n"))
+    assert (score.found["자격: CHILD_AGE"], score.total["자격: CHILD_AGE"]) == (1, 1)

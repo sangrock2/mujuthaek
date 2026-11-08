@@ -297,7 +297,7 @@ class NoticeContractTest(unittest.TestCase):
 
     def test_attribute_dictionary_matches_schema_enums(self):
         self.assertEqual([], contract.dictionary_errors())
-        self.assertEqual(22, len(contract.ATTRIBUTES))
+        self.assertEqual(23, len(contract.ATTRIBUTES))
 
     def test_between_range_order_is_checked(self):
         atom = self.notice["eligibility"][0]["rule"]["expression"]["children"][0]
