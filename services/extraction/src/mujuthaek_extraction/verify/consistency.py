@@ -395,6 +395,35 @@ def _check_consistency(candidate: dict[str, Any], find) -> None:
                 find("V7", "COUNT_TOTAL_SUSPECTED", "/supplyGroups", f"주택형별 모집 수 합({summed})이 공고 전체 모집 수({total['value']})와 다릅니다.")
 
 
+# 호실마다 한 묶음인 공급(HOUSING_UNIT)에서 모집 1로 센 서로 다른 호실이 공고 전체 모집 수보다 많으면, 이번 모집이 아닌 호실까지 센 것입니다.
+# 어느 호실이 이번 모집인지 정할 수 없어 그 묶음들의 수량을 모두 보류합니다(틀린 값보다 누락). 같은 호실이 표 두 개에 나와 묶음이 겹쳐도
+# 호실 이름으로 셉니다. 2026-11-09 23건 sh-311005: 「모집 세대수 원룸1세대추가모집」인데 수량 열 없는 층별 구성표·임대료표의 호실 24행을
+# 모두 모집 1로 셈(대상 「1인 가구」가 붙어 위 합계 검사는 건너뜀) — 공고 보류가 풀리면 틀린 모집 1이 16개 게시됨. 저장 결과 전체에서
+# 걸린 것은 이 공고와 V1·옛 V2가 틀리게 게시한 gndc 두 공고(호실 7곳 대 모집 2, 4곳 대 1)뿐
+UNIT_COUNTS = "UNIT_COUNTS_EXCEED_TOTAL"
+
+
+def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
+    totals = [c for c in candidate["notice"]["counts"] if c["kind"] == "OFFERED" and not c["scope"]["targetGroups"] and isinstance(c["value"], int)]
+    if len(totals) != 1:
+        return
+    units = [
+        (g, str(group.get("unitLabel")))
+        for g, group in enumerate(candidate["supplyGroups"])
+        if group.get("itemKind") == "HOUSING_UNIT" and any(c["kind"] == "OFFERED" and c["value"] == 1 for c in group["counts"])
+    ]
+    distinct = {label for _, label in units}
+    if len(distinct) <= totals[0]["value"]:
+        return
+    for g, _ in units:
+        find(
+            "V7",
+            UNIT_COUNTS,
+            f"/supplyGroups/{g}/counts",
+            f"호실 {len(distinct)}곳을 모집 1로 셌는데 공고 전체 모집 수는 {totals[0]['value']}입니다. 어느 호실이 이번 모집인지 원문 확인이 필요합니다",
+        )
+
+
 # ---- V8 누락 탐지 ----
 
 SECTION_HEADINGS = {
@@ -469,7 +498,12 @@ def _check_omissions(candidate: dict[str, Any], sources: SourceBundle, find) -> 
             applied = any(o is not e and o.get("category") == e.get("category") and o["rule"]["status"] == "STRUCTURED" for o in items)
             if applied and NOT_APPLIED.search(e["rule"].get("reason") or ""):
                 continue
-            cited = " ".join([e.get("originalText") or "", *(quotes.get(i, "") for i in e.get("evidenceIds") or [])])
+            # 원문이 그 기준을 적용하지 않는다고 적은 조건(「자산기준 : 배제」)은 일부러 조건식 없이 둔 것입니다. 근거로 붙은 옆 행의 기준값으로
+            # 걸지 않습니다(조건 원문 글에 기준값이 없을 때만). 2026-11-09 23건 jbdc-15611: 옆 행의 「345백만원 이하」로 보류됨
+            original = e.get("originalText") or ""
+            if WAIVED.search(original) and not value.search(original):
+                continue
+            cited = " ".join([original, *(quotes.get(i, "") for i in e.get("evidenceIds") or [])])
             found = value.search(cited)
             if found:
                 find("V8", "CRITERION_NOT_STRUCTURED", f"/eligibility/{index}", f"기준값 「{found[0]}」이 적힌 조건을 조건식 없이 글로만 남겼습니다.")
@@ -559,6 +593,19 @@ def _evidence_ids(node: Any) -> set[str]:
     return set()
 
 
+IMAGE_QUOTE_MIN_CHARS = 6  # 그림 밖 원문에서도 찾는 근거 글의 최소 길이(띄어쓰기 뺀 글자 수)
+
+
+def _outside(text: str, ranges: list[tuple[int, int]]) -> list[str]:
+    """글에서 주어진 구간(그림 판독 묶음)을 뺀 나머지 조각들. 조각끼리 잇지 않아 앞뒤 글이 붙어 새 글이 생기지 않습니다."""
+    kept, at = [], 0
+    for start, end in sorted(ranges):
+        kept.append(text[at:start])
+        at = max(at, end)
+    kept.append(text[at:])
+    return kept
+
+
 def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
     """그림 판독 글자(AI가 옮긴 글자, image_reading)를 근거로 한 값: 판정에 쓰는 자격·공고 정보는 사람 확인, 그 밖은 표시만.
     판독 글자는 원문 그림과 맞춰 본 사람이 없어서 근거 확인(V2)이 통과해도 판독 오류를 걸러 내지 못합니다."""
@@ -574,6 +621,14 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
         for e in candidate.get("evidence") or []
         if e["locator"]["kind"] == "TEXT_RANGE" and any(a <= e["locator"]["start"] < b for a, b in ranges.get(e["sourceId"], []))
     }
+    # 그림 판독 글자를 근거로 했어도 같은 글이 그림 밖 원문 글자나 수집기가 읽은 게시글 제목(원본 참조 sourceTitle)에도 있으면 판독에 기대지
+    # 않은 값입니다(띄어쓰기를 빼고 비교, 짧은 글은 우연히 겹칠 수 있어 그대로 그림 근거). 2026-11-09 23건 sh-311005: 표지 그림의
+    # 「에어스페이스 신림3호점」을 공고 제목 근거로 써 공고 전체(찾은 값 138개)가 검수로 감. 첨부 PDF가 있으면 원문은 PDF 글자뿐이고
+    # PDF 글자층에는 「신림3호점 … 에어스페이스」 순서로만 있음. 게시글 제목 「[토지지원 사회주택]에어스페이스 신림3호점_어울리 입주자 모집 공고」에 있음
+    outside = [normalize(piece) for source_id, text in sources.texts.items() for piece in _outside(text, ranges.get(source_id, []))]
+    outside += [normalize(str(ref.get("sourceTitle") or "")) for ref in candidate.get("sourceReferences") or [] if isinstance(ref, dict)]
+    quotes = {e["id"]: normalize(e.get("quote") or "") for e in candidate.get("evidence") or []}
+    from_image = {i for i in from_image if len(quotes.get(i, "")) < IMAGE_QUOTE_MIN_CHARS or not any(quotes[i] in text for text in outside)}
     if not from_image:
         return
     _check_disputed_reading(candidate, sources, from_image, find)
@@ -691,6 +746,7 @@ def _limit_columns(lines: list[str], top: int) -> set[int]:
 
 
 NOT_APPLIED = re.compile(r"(?:이번|금회)\s*모집에(?:는|서는)?\s*적용하지\s*않")
+WAIVED = re.compile(r"배제|미적용|적용\s*(?:하지\s*않|안\s*함|제외|없음)|불문")
 
 
 PAGE_MARK = re.compile(r"^\s*(?:---.*---|-\s*\d+\s*-|\[표 [^\]]+\])\s*$")
@@ -990,6 +1046,25 @@ def _row_excerpt(row: str) -> str:
     return "…" + text[start : start + ROW_EXCERPT_CHARS]
 
 
+# 원문이 별지 서식으로 이름을 정해 둔 서류(「입주 신청서(별지 1호)」「자기소개서(별지 제3호 서식)」). 표가 아니라 글 속에 있으면 서류 표 행 검사가
+# 보지 못함(2026-11-09 23건 sh-311005: 「입주 신청서(별지 1호), 개인 정보 동의서(별지 2호), 자기소개서(별지 3호) 작성 후 …」를 V2 서류 담당이
+# 넣지 않음, V1은 넣음). 이름이 서·증·표로 끝나는 것만 봅니다
+FORM_NAME = re.compile(r"([가-힣][가-힣A-Za-z0-9·ㆍ ]{0,24}?[서증표])\s*[(\[]\s*별지\s*(?:제\s*)?\d+\s*호(?:\s*서식)?\s*[)\]]")
+
+
+def _unlisted_forms(documents: list[dict[str, Any]], text: str) -> list[str]:
+    """별지 서식으로 든 서류 가운데, 이름이 겹치는(한쪽이 다른 쪽을 품는) 서류가 목록에 없는 것."""
+    names = [n for n in (normalize(NAME_NOTE.sub("", str(d.get("name") or ""))) for d in documents) if len(n) >= 2]
+    missed = []
+    for match in FORM_NAME.finditer(text):
+        name = " ".join(match[1].split()[-3:])  # 서식 이름은 길어야 세 낱말: 앞 문장 글(「서류를 작성하여 …」)까지 잡지 않게
+        form = normalize(name)
+        shown = f"{name}{match[0][len(match[1]) :]}".strip()
+        if len(form) >= 3 and not any(form in n or n in form for n in names) and shown not in missed:
+            missed.append(shown)
+    return missed
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -1007,6 +1082,9 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
             continue
         missed.append(_row_excerpt(row))
     parts = []
+    forms = _unlisted_forms(documents, "\n".join(sources.texts.values()))
+    if forms:  # 별지 서식은 원문이 이름으로 정해 둔 서류라 하나만 빠져도 알립니다
+        parts.append(f"원문이 별지 서식으로 든 서류 {len(forms)}개가 서류 목록에 없습니다: {', '.join(f'「{form}」' for form in forms[:3])}")
     attachments = _unhandled_attachments(documents, rows)
     if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)
         shown = ", ".join(f"「{item}」" for item in attachments[:2])
@@ -1018,6 +1096,87 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
         parts.append(f"원문 서류 표 행 {len(missed)}개를 근거로 쓴 서류가 없습니다(빠진 서류 의심): {shown}{' …' if len(missed) > 3 else ''}")
     if parts:
         find("V8", DOCUMENT_OMISSION, "/quality/coverage/requiredDocuments", " ".join(parts))
+
+
+# ---- V8 일정 누락 (2026-11-09) ----
+# 일정 단계 낱말 바로 뒤에 날짜가 적힌 글(「나. 계약체결: 2027. 1. 20.(수) ~ …」「라. 입주기간: 2027. 2~4월 중」)인데 그 날짜로 시작하거나 끝나는
+# 일정이 없으면 빠진 일정 의심입니다. 2026-11-09 23건: V2 일정 담당이 sh-311087의 번호 붙은 글 줄로 적힌 계약체결·입주기간을 넣지 않음(V1은 넣음).
+# 빠진 값이지 틀린 값이 아니라 메모로 두고(verifier.NOTE_CODES), V2 일정 담당에게는 「확인할 것」으로 알립니다.
+# 임대차 계약기간은 단계가 아니라 빼고, 날짜 바로 뒤가 「기준·현재·이전·당시」면 기준일이라 뺍니다. 「입주자·입주민」은 사람이고, 공고일보다
+# 한 달 넘게 앞선 날짜는 이번 모집의 단계가 아닙니다(같은 날 저장 결과: 단지 표의 「입주월 … 2012. 8.」, 「입주자격 … 임대개시일(2022년 9월)」)
+SCHEDULE_OMISSION = "SCHEDULE_OMISSION_SUSPECTED"
+SCHEDULE_STEP = re.compile(
+    r"계약\s*체결|계약(?!\s*(?:기간|금\s*반환))|입주(?!\s*(?:자|민))\s*(?:기간|지정|예정|시기|가능)?|발표|통보|접수|서류\s*제출|제출|열람|공개|조사|심사|소명|교육|추첨|게시"
+)
+SCHEDULE_DATE = re.compile(r"(?<!\d)(20\d{2})\s*(?:[.\-/]|년)\s*(\d{1,2})(?:\s*(?:[.\-/]|월)\s*(\d{1,2})(?!\d))?")
+STEP_TO_DATE_CHARS = 20  # 단계 낱말 끝에서 날짜 시작까지(「계약체결: 2027. 1. 20.」「입주기간 : 2027. 2~4월」)
+REFERENCE_DATE = re.compile(r"^\D{0,4}(?:기준|현재|이전|당시)")
+SCHEDULE_EXCERPT_CHARS = 50
+STEP_BEFORE_NOTICE_DAYS = 31
+
+
+def _schedule_dates(candidate: dict[str, Any]) -> set[str]:
+    """추출 일정의 시작·끝 날짜(「2027-01-20」「2027-02」)와 공고일."""
+    found = {str((candidate.get("notice") or {}).get("announcedOn") or "")}
+    for schedule in candidate.get("schedules") or []:
+        for key in ("startsAt", "endsAt"):
+            found.add(str((schedule.get(key) or {}).get("value") or "")[:10])
+    return {value for value in found if value}
+
+
+def _first_day(value: str) -> date | None:
+    """「2026-10-08」「2026-10」(월 정밀도는 그달 1일)을 날짜로. 읽지 못하면 None."""
+    try:
+        return date.fromisoformat(value if len(value) == 10 else f"{value[:7]}-01")
+    except ValueError:
+        return None
+
+
+def _notice_day(candidate: dict[str, Any], known: set[str]) -> date | None:
+    """공고일: 공고 정보의 공고일, 없으면 공고(ANNOUNCEMENT) 일정의 시작, 그것도 없으면 가장 이른 일정 날짜."""
+    announced = _first_day(str((candidate.get("notice") or {}).get("announcedOn") or ""))
+    if announced:
+        return announced
+    for schedule in candidate.get("schedules") or []:
+        if "ANNOUNCEMENT" in (schedule.get("kinds") or []):
+            start = _first_day(str((schedule.get("startsAt") or {}).get("value") or "")[:10])
+            if start:
+                return start
+    days = [day for day in map(_first_day, known) if day]
+    return min(days) if days else None
+
+
+def _check_schedule_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
+    if not candidate.get("schedules"):
+        return  # 일정이 하나도 없으면 섹션 누락 검사가 봅니다
+    known = _schedule_dates(candidate)
+    notice_day = _notice_day(candidate, known)
+    missed: list[str] = []
+    for line in "\n".join(sources.texts.values()).split("\n"):
+        for step in SCHEDULE_STEP.finditer(line):
+            date_match = SCHEDULE_DATE.search(line, step.end(), step.end() + STEP_TO_DATE_CHARS + 12)
+            if date_match is None or date_match.start() - step.end() > STEP_TO_DATE_CHARS:
+                continue
+            year, month, day = int(date_match[1]), int(date_match[2]), int(date_match[3]) if date_match[3] else None
+            if not 1 <= month <= 12 or (day is not None and not 1 <= day <= 31) or REFERENCE_DATE.search(line[date_match.end() :]):
+                continue
+            wanted = f"{year:04d}-{month:02d}" + (f"-{day:02d}" if day else "")
+            if any(value.startswith(wanted) for value in known):
+                continue
+            when = _first_day(wanted)
+            if notice_day and when and (notice_day - when).days > STEP_BEFORE_NOTICE_DAYS:
+                continue
+            shown = " ".join(line[step.start() : date_match.end() + 8].split())[:SCHEDULE_EXCERPT_CHARS]
+            if shown not in missed:
+                missed.append(shown)
+    if missed:
+        shown = ", ".join(f"「{item}」" for item in missed[:3])
+        find(
+            "V8",
+            SCHEDULE_OMISSION,
+            "/quality/coverage/schedules",
+            f"원문에 날짜가 적힌 단계 {len(missed)}개가 일정에 없습니다(빠진 일정 의심): {shown}{' …' if len(missed) > 3 else ''}",
+        )
 
 
 # ---- V8 자격 기준표 행 누락 (2026-11-07) ----
@@ -1305,9 +1464,11 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_unattached_prices(candidate, find)
     _check_price_scope(candidate, found, find)
     _check_consistency(candidate, find)
+    _check_unit_counts(candidate, find)
     _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
+    _check_schedule_rows(candidate, sources, find)
     _check_criteria_rows(candidate, sources, find)
     _check_image_content(candidate, sources, find)
     _check_image_evidence(candidate, sources, find)

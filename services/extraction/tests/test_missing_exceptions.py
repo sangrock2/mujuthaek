@@ -138,3 +138,25 @@ def test_lower_bound_of_a_stage_band_in_eligibility_is_held():
     trigger = condition(percent(100), [{"when": {"status": "STRUCTURED", "expression": percent(100, "GT")}, "effectExpression": percent(90)}])
     age = condition(atom("AGE_YEARS", 19, unit="YEAR") | {"operator": "GTE"})
     assert not [f for f in check([condition(percent(100)), trigger, age], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
+
+
+def test_bracket_headers_payment_shares_and_rent_tier_rows_are_not_missing_tiers():
+    # 2026-11-09 23건: 임대조건 소득 구간 머리 칸(「1구간 (~130%)」), 계약금·잔금 비율, 소득 구간별 임대료표(「130%초과 150%이하 … 140% 적용」)를
+    # 소득 기준의 빠진 예외로 의심해 조건을 보류함
+    income = condition(atom("INCOME_BENCHMARK_PERCENT", 150, unit="PERCENT"))
+    assert check([income], "기준 중위소득의 150% | 가구 원수 | 1구간 (~130%) | 2구간 (~170%)") == []
+    hundred = condition(atom("INCOME_BENCHMARK_PERCENT", 100, unit="PERCENT"))
+    assert check([hundred], "월평균소득의 100%) | 표준임대조건 › 임대보증금(원) › 계약금(20%) | 표준임대조건 › 잔금(80%)") == []
+    assert check([income], "130%초과 150%이하 19,882,000 3,976,400 147,200 140% 적용") == []
+    # 기준값 뒤에 바로 붙은 가산 기준은 그대로 의심합니다
+    [finding] = check([income], "월평균소득 150% 이하(맞벌이 180%)")
+    assert "180%" in finding.description
+
+
+def test_values_used_by_selection_rules_are_not_missing_tiers():
+    # 2026-11-09 jbdc-16011: 가점표 「가구 소득 … 80% 이하인 경우 : 1점」(가점 규칙은 글로만 남김)이 소득 100% 조건의 빠진 예외로 의심됨
+    text = "월평균소득의 100% 이하인 자 | 가구 소득 월평균 소득의 80% 이하인 경우 : 1점"
+    income = condition(atom("INCOME_BENCHMARK_PERCENT", 100, unit="PERCENT"))
+    assert check([income], text)
+    scoring = {"kind": "SCORING", "originalText": "가구 소득 월평균 소득의 80% 이하인 경우 : 1점", "rule": {"status": "UNSTRUCTURED", "expression": None}}
+    assert check_missing_exceptions({"eligibility": [income], "selectionRules": [scoring]}, SourceBundle(texts={"text": text})) == []

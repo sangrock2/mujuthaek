@@ -772,16 +772,32 @@ def test_agent_instructions_leave_out_the_location_and_supply_sections_the_agent
 def test_every_call_that_puts_documents_says_examples_after_a_kind_name_are_one_document():
     # 2026-11-08 jbdc-16011: 「부양가족임을 확인할 수 있는 서류 (주민등록표등본, 가족관계증명서 등)」를 V2 서류 담당이 네 실행 모두 예시 둘로 나눠 넣음.
     # 서류 담당의 할 일(둘째 메시지)에만 실어, 같은 공고의 담당들이 함께 쓰는 앞부분(지시)과 구조 호출은 그대로
-    from mujuthaek_extraction.rules.housing_notice import DOCUMENT_EXAMPLES_NOTE, RULES
+    from mujuthaek_extraction.rules.housing_notice import DOCUMENT_EXAMPLES_NOTE, DOCUMENT_NAME_NOTE, RULES
     from mujuthaek_extraction.v2.agents.prompt import system_prompt
 
     calls = [*every_call(RULES), *(call for _, split in RULES.runaway_splits for call in split)]
     documents = [call for call in calls if "requiredDocuments" in call.sections]
     assert {call.name for call in documents} == {"conditions", "documents", "documents-submit", "documents-visit"}
-    assert all(DOCUMENT_EXAMPLES_NOTE in call.instructions for call in documents)
+    assert all(DOCUMENT_EXAMPLES_NOTE in call.instructions and DOCUMENT_NAME_NOTE in call.instructions for call in documents)
     assert not any(DOCUMENT_EXAMPLES_NOTE in call.instructions for call in calls if call not in documents)
     assert DOCUMENT_EXAMPLES_NOTE in section.task(graph.workers(RULES)["documents"], {})
     assert "예시마다 서류를 나누지 않습니다" not in system_prompt(RULES) + RULES.system_prompt()
+
+
+def test_section_notes_go_only_to_the_task_of_the_agent_that_needs_them():
+    # 2026-11-09 23건: 서류 담당만 모든 항목에 기본값 scope·null 칸을 적고(서류 넣기 출력 글자의 24%), 구조 호출은 월까지만 있는 공고일로
+    # 공고 범위를 PARTIAL로 적어 공고 전체를 보류, 자격은 자동차 미소유를 글로만, 일정은 선정 결과 발표를 OTHER로 넣음
+    from mujuthaek_extraction.rules.housing_notice import RULES
+    from mujuthaek_extraction.v2.agents.prompt import system_prompt
+
+    workers = graph.workers(RULES)
+    documents_task = section.task(workers["documents"], {})
+    assert section.TASK_NOTES["documents"] in documents_task and "scope는 특정 대상" in documents_task
+    assert not any(section.TASK_NOTES["documents"] in section.task(spec, {}) for name, spec in workers.items() if name != "documents")
+    assert section.TASK_NOTES["documents"] not in system_prompt(RULES)  # 공통 지시(담당들이 함께 쓰는 앞부분)는 그대로
+    assert "announcedOn은 null" in workers["structure"].instructions and "PARTIAL로 두지 않습니다" in workers["structure"].instructions
+    assert "CAR_ASSETS_KRW EQ 0" in workers["eligibility"].instructions
+    assert "WINNER_ANNOUNCEMENT" in workers["schedules"].instructions and "시작과 끝을 모두" in workers["schedules"].instructions
 
 
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
@@ -813,6 +829,10 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
     everyone = verify_report(draft, [{**issue, "code": "SCOPE_SUBGROUP_SUSPECTED"}])  # 계층 조건을 대상 없이 넣음(2026-11-08 bmc-106)
     assert "## 확인할 것 1개" in everyone and "- SCOPE_SUBGROUP_SUSPECTED:" in everyone and "계층마다 대상을 따로" in everyone
+    assert "CAR_ASSETS_KRW EQ 0" in shown  # 자동차 미소유 기준(2026-11-09 23건: 대학생 4건을 글로만 남김)
+    dated = {"code": "SCHEDULE_OMISSION_SUSPECTED", "target": "/quality/coverage/schedules", "description": "날짜가 적힌 단계 1개"}
+    steps = verify_report(SectionDraft(("schedules",), items={"schedules": []}), [dated])  # 번호 붙은 글 줄의 계약·입주(2026-11-09 sh-311087)
+    assert "## 확인할 것 1개" in steps and "일정표 밖" in steps
 
 
 def test_tiers_split_into_separate_conditions_must_be_fixed_into_one_condition_with_exceptions():
