@@ -7,6 +7,8 @@
   python scripts/score_answer_keys.py --keys <정답표 폴더> --outcomes <추출 폴더>
   # 정답표끼리 비교: 기준 정답표 ↔ 다른 정답표(<공고>/key.json 또는 <공고>.json)
   python scripts/score_answer_keys.py --keys <폴더 A> --other-keys <폴더 B>
+  # 원문 확인 목록(정답표에 없지만 원문과 대조해 맞다고 확인한 자동 게시 값)도 함께
+  python scripts/score_answer_keys.py --keys <정답표 폴더> --outcomes <추출 폴더> --verified <원문 확인 목록.json>
 
 항목마다 "정답표에 있는 것 중 몇 개를 찾았나(재현율)"를 셉니다. 가격·서류는 "찾은 것 중 몇 개가 정답표에 있나(정밀도)"도 셉니다.
 값이 같아도 뜻이 바뀐 것은 맞음으로 세지 않습니다: 자격 기준은 방향(이하·이상 …)과 대상 계층, 가격은 단지까지 봅니다.
@@ -426,6 +428,8 @@ class Score:
         self.misses: dict[str, list[str]] = {}
         # 칸이 없어 보지 못한 차원: 섹션 → {차원: 수}. 맞음으로 센 것 중 그 차원을 확인하지 못한 수입니다
         self.unchecked: dict[str, Counter[str]] = {}
+        # 정답표에 없지만 사람이 원문과 대조해 맞다고 확인한 값(원문 확인 목록): 섹션 → 수. 맞음으로 셉니다
+        self.verified: Counter[str] = Counter()
 
     def check(self, section: str, ok: bool, label: str, unchecked: tuple[str, ...] = ()) -> None:
         self.total[section] += 1
@@ -436,6 +440,16 @@ class Score:
         else:
             self.misses.setdefault(section, []).append(label)
 
+    def verify(self, section: str, labels: set[str]) -> None:
+        """놓친 것 중 원문 확인 목록에 이름표가 글자 그대로 있는 것을 맞음으로 옮깁니다.
+        값·대상·단지가 하나라도 바뀌면 이름표가 달라져 다시 후보로 남습니다."""
+        misses = self.misses.get(section, [])
+        kept = [label for label in misses if label not in labels]
+        self.found[section] += len(misses) - len(kept)
+        self.verified[section] += len(misses) - len(kept)
+        if misses:
+            self.misses[section] = kept
+
     def merge(self, other: Score, prefix: str = "") -> None:
         self.found.update(other.found)
         self.total.update(other.total)
@@ -443,6 +457,7 @@ class Score:
             self.misses.setdefault(section, []).extend(f"{prefix}{label}" for label in labels)
         for section, dims in other.unchecked.items():
             self.unchecked.setdefault(section, Counter()).update(dims)
+        self.verified.update(other.verified)
 
 
 def _text_tokens(text: Any) -> list[str]:
@@ -814,6 +829,26 @@ def auto_published(candidate: dict[str, Any], status: str | None) -> dict[str, A
     return kept
 
 
+# 정답표가 나이 기준을 행으로 두지 않고 대상 이름에만 적은 경우(「자목 65세 이상 수급권자 또는 차상위계층」)의 나이·방향과 그 나이의 주인.
+# 나이 바로 뒤에 가족이 오면(「65세 이상 직계존속」) 그 가족의 나이이고, 없으면 신청자의 나이입니다
+NAME_AGE = re.compile(r"(?:만\s*)?(\d{1,3})\s*세\s*(이상|초과|이하|미만)\s*(?:인|의)?\s*(직계존속|부모|자녀)?")
+NAME_AGE_SUBJECT = {"직계존속": "PARENTS", "부모": "PARENTS", "자녀": "CHILDREN"}
+
+
+def _age_in_group_name(expected: dict[str, Any], a: dict[str, Any]) -> bool:
+    """추출 나이 기준이 정답표 대상 이름 속 나이와 같은지. 나이·방향과 나이의 주인(신청자·부모·자녀)이 같고 대상이 겹쳐야 합니다.
+    2026-11-08: 정답표가 「65세 이상 수급권자」를 대상 이름으로만 적어, 원문과 같은 「65세 이상」이 틀린 값 후보로 세어졌음."""
+    values, operator = _values(a.get("value")), _operator(a.get("operator"))
+    if a.get("criterion") != "AGE" or len(values) != 1 or operator is None:
+        return False
+    for name in {e["targetGroup"] for e in expected.get("eligibility") or [] if e.get("targetGroup")}:
+        for number, word, owner in NAME_AGE.findall(name):
+            same = (float(number), OPERATOR_ALIASES[word]) == (values[0], operator)
+            if same and NAME_AGE_SUBJECT.get(owner, "APPLICANT") == a.get("subject") and _groups_overlap(name, a.get("targetGroup")):
+                return True
+    return False
+
+
 def wrong_values(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
     """자동 게시 값 중 정답표에 없는 값(가격·모집 수·자격 기준값·접수 일정). found=정답표에 있음, total=게시한 값."""
     score = Score()
@@ -846,6 +881,8 @@ def wrong_values(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
         if a.get("criterion") in ATTRIBUTES and a["criterion"] in covered and _values(a.get("value")):
             fits = [_eligibility_fit(e, a) for e in expected_rules if any(_close(w, v, 0.001) for w in _values(e.get("value")) for v in _values(a["value"]))]
             fits = [f for f in fits if f is not None]
+            if not fits and _age_in_group_name(expected, a):
+                fits = [("나이(정답표가 대상 이름에만 적음)",)]
             label = f"{a.get('targetGroup') or '모두'} {a['criterion']} {a.get('operator') or ''} {a.get('value')}"
             score.check("자동 게시: 자격 기준값", bool(fits), label, min(fits, key=len) if fits else ())
     starts = {(s.get("kind"), str(s.get("start") or "")[:10]) for s in expected.get("schedules") or [] if s.get("start")}
@@ -864,6 +901,7 @@ def published_view(outcome: dict[str, Any], notice: str) -> dict[str, Any] | Non
     neutral["rules"] = [
         {
             "criterion": CRITERION_OF.get(atom.get("attribute"), "OTHER"),
+            "subject": atom.get("subject"),  # 나이의 주인(신청자·부모·자녀): 정답표가 대상 이름에만 적은 나이와 견줄 때 봅니다
             "operator": atom.get("operator"),
             "value": atom.get("value"),
             "targetGroup": ", ".join(item["scope"]["targetGroups"]) or None,
@@ -875,12 +913,15 @@ def published_view(outcome: dict[str, Any], notice: str) -> dict[str, Any] | Non
     return neutral
 
 
-def score_outcome(expected: dict[str, Any], outcome: dict[str, Any], notice: str) -> tuple[Score, Score, Score]:
+def score_outcome(expected: dict[str, Any], outcome: dict[str, Any], notice: str, verified: dict[str, set[str]] | None = None) -> tuple[Score, Score, Score]:
     """추출 결과 하나 채점: (재현율, 검수 없이 쓰이는 정답 값, 자동 게시 값 중 정답표에 없는 값). 후보가 있는 결과만.
-    main과 LangSmith 평가 실험(langsmith_eval.py)이 같은 기준으로 씁니다."""
+    main과 LangSmith 평가 실험(langsmith_eval.py)이 같은 기준으로 씁니다.
+    verified: 이 공고의 원문 확인 목록(섹션 → 이름표). 정답표에 없는 값 중 원문과 대조해 맞다고 확인한 것은 맞음으로 셉니다."""
     view = published_view(outcome, notice)
     # 검수 없이 쓰이는 정답 값(보류 밖). 재현율과의 차이가 사람 확인으로 가는 값
     released, published = (compare(expected, view), wrong_values(expected, view)) if view is not None else (Score(), Score())
+    for section, labels in (verified or {}).items():
+        published.verify(section, labels)
     return compare(expected, neutral_from_candidate(outcome["candidate"], notice)), released, published
 
 
@@ -899,6 +940,17 @@ def _load_key(folder: Path, notice: str) -> dict[str, Any] | None:
     return None
 
 
+def _load_verified(path: Path) -> dict[str, dict[str, set[str]]]:
+    """원문 확인 목록({"values": [{notice, section, label, source, reason, checked}]}) → 공고 → 섹션 → 이름표.
+    정답표는 고치지 않고 따로 둡니다(재현율은 그대로, 자동 게시 값 중 정답표에 없는 값에만 씀). 원문·이유가 없는 항목은 받지 않습니다."""
+    verified: dict[str, dict[str, set[str]]] = {}
+    for entry in json.loads(path.read_text(encoding="utf-8"))["values"]:
+        if not (entry.get("source") and entry.get("reason")):
+            raise ValueError(f"원문 확인 목록에 원문(source)·이유(reason)가 없는 항목: {entry}")
+        verified.setdefault(entry["notice"], {}).setdefault(entry["section"], set()).add(entry["label"])
+    return verified
+
+
 def _print_unchecked(score: Score, section: str, indent: str) -> None:
     """칸이 없어 값만 보고 맞음으로 센 수를 차원마다 한 줄로 알립니다(조용히 맞음으로 넘기지 않게)."""
     dims = score.unchecked.get(section)
@@ -914,7 +966,9 @@ def main() -> None:
     group.add_argument("--outcomes", type=Path)
     group.add_argument("--other-keys", type=Path)
     parser.add_argument("--misses", type=int, default=5, help="항목마다 보여 줄 놓친 것 수")
+    parser.add_argument("--verified", type=Path, help="원문 확인 목록(JSON): 정답표에 없지만 원문과 대조해 맞다고 확인한 자동 게시 값")
     args = parser.parse_args()
+    verified = _load_verified(args.verified) if args.verified else {}
 
     overall, published, released = Score(), Score(), Score()
     for folder in sorted(p for p in args.keys.iterdir() if p.is_dir()):
@@ -932,7 +986,7 @@ def main() -> None:
                 print(f"## {notice}: 후보 없음 ({outcome.get('status')})")
                 continue
             status = outcome.get("status")
-            score, notice_released, notice_published = score_outcome(expected, outcome, notice)
+            score, notice_released, notice_published = score_outcome(expected, outcome, notice, verified.get(notice))
             published.merge(notice_published, f"{notice}: ")
             released.merge(notice_released)
         else:
@@ -969,6 +1023,8 @@ def main() -> None:
             print(f"  {section:<28} {wrong:>5}/{published.total[section]:<5} {wrong / published.total[section]:6.1%}")
             for label in published.misses.get(section, []):
                 print(f"      - {label}")
+            if published.verified[section]:
+                print(f"      (정답표에 없지만 원문 확인 목록에 있어 맞음으로 셈) {published.verified[section]}")
             _print_unchecked(published, section, "      ")
 
 
