@@ -31,6 +31,7 @@ from langgraph.errors import GraphBubbleUp
 from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.assemble import ai_output
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, document_ids
+from mujuthaek_extraction.v2.agents.cut import CutCallMiddleware, cut_off
 from mujuthaek_extraction.v2.agents.prompt import system_prompt
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware, issue_key
 from mujuthaek_extraction.v2.contract import to_part
@@ -53,6 +54,10 @@ TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
 # 대화 기록에 남길 검증 결과 길이. 앞 800자만 남기면 담당이 어떤 경고를 받고 끝냈는지 알 수 없었음(2026-11-07 유료 확인 jbdc-16011:
 # 기준표 메모를 몇 번째 차례에 받았는지 모름). 경고 20개(설명 220자씩)·안내·고치는 법이 다 들어가는 길이
 VERIFY_TRACE_CHARS = 8000
+DESCRIPTION_CHARS = 220  # 담당에게 보내는 문제 설명 길이
+# 섹션 전체 문제(빠진 대상·서류 표 행 등)는 섹션마다 하나라 길게: 빠진 행을 3개까지 적는 설명이 220자에서 잘려 셋째 행이 보이지 않았음
+# (2026-11-08 최종 비교 bmc-106: 「원문 자격 기준표에서 조건이 하나도 없는 대상」의 기준값 행 인용이 중간에 끊김)
+SECTION_DESCRIPTION_CHARS = 400
 PRIME = "prime"
 PRIME_OUTPUT_TOKENS = 512
 # 메모로 내려가도 담당에게 알리는 것: 값이 빠지거나 근거를 찾지 못함·빠진 항목 의심. 위치는 정했고 값도 남는 메모(근거가 짧거나 여러 곳)와
@@ -89,7 +94,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     calls = MODEL_CALLS.get(spec.name, MAX_MODEL_CALLS)
     limit = ModelCallLimitMiddleware(run_limit=calls, exit_behavior="end")
     model = chat(spec.name, max_output_tokens=spec.max_output_tokens)  # V1 섹션 호출과 같은 출력 한도(첫 차례에 다 넣음)
-    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware()])
+    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware(), CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
     try:
@@ -109,10 +114,14 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         context.usage.append({"agent": spec.name, "stopped": stopped})
         log.exception("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name})
     messages = last.get("messages") or []
-    limited = bool(messages) and isinstance(messages[-1], AIMessage) and str(messages[-1].content).startswith(CALL_LIMIT_MESSAGE)
-    if stopped is None and limited and not draft.finished:  # 마지막 호출에서 끝내기까지 불렀으면 상한에 닿았어도 끝낸 것
-        stopped = f"모델 호출 상한({calls}번)"
-        context.usage.append({"agent": spec.name, "stopped": stopped})
+    final = messages[-1] if messages and isinstance(messages[-1], AIMessage) else None
+    if stopped is None and final is not None and not draft.finished:  # 마지막 호출에서 끝내기까지 불렀으면 상한에 닿았어도 끝낸 것
+        if str(final.content).startswith(CALL_LIMIT_MESSAGE):
+            stopped = f"모델 호출 상한({calls}번)"
+        elif cut_off(final):  # 넣기가 아닌 호출·글이 잘려 실행할 호출 없이 끝남(넣기는 CutCallMiddleware가 살림)
+            stopped = f"출력 한도({spec.max_output_tokens}토큰)에서 잘림"
+        if stopped is not None:
+            context.usage.append({"agent": spec.name, "stopped": stopped})
     if stopped is not None and not draft.finished:
         _mark_unfinished(draft, spec.sections, stopped)
     resolver: dict[str, Any] = {}
@@ -205,7 +214,7 @@ def _resolve_item(
     context.check = lambda: _issues(spec, trial, state, rt, documents)
     limit = ModelCallLimitMiddleware(run_limit=RESOLVER_CALLS, exit_behavior="end")
     model = chat(RESOLVER, max_output_tokens=min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS))
-    agent = _agent(model, RESOLVER, state, documents, [limit, VerifyMiddleware()])
+    agent = _agent(model, RESOLVER, state, documents, [limit, VerifyMiddleware(), CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
     try:
@@ -215,6 +224,9 @@ def _resolve_item(
     except Exception as error:  # 해결 담당이 멈추면 그 항목은 담당 초안 그대로
         stopped = f"{type(error).__name__}: {error}"[:300]
         log.warning("해결 담당이 멈췄습니다", extra={"agent": spec.name, "error": stopped})
+    final = (last.get("messages") or [None])[-1]
+    if stopped is None and cut_off(final) and not trial.finished:  # 고치다 잘려 끝남: 고친 것을 쓰지 않음
+        stopped = f"출력 한도({min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS)}토큰)에서 잘림"
     after = before if stopped else _issues(spec, trial, state, rt, documents)
     adopted = stopped is None and _settled(draft, trial, {targets[0]["item"]}, before, after)
     record = {"targets": len(targets), "after": len(after), "adopted": adopted, "stopped": stopped, "turns": _trace(last.get("messages") or [])}
@@ -371,7 +383,10 @@ def _issues(spec: CallSpec, draft: SectionDraft, state: Any, rt: pipeline.Runtim
     notes = [n for n in quality.get("notes") or [] if isinstance(n, dict) and n.get("code") in LOST_VALUE_NOTES]
     for issue in [*quality["reviewIssues"], *notes]:
         if any(_belongs(issue["target"], section) for section in spec.sections):
-            found.append({"code": issue["code"], "target": issue["target"], **_item_of(candidate, issue["target"]), "description": issue["description"][:220]})
+            chars = SECTION_DESCRIPTION_CHARS if issue["target"].startswith("/quality/coverage/") else DESCRIPTION_CHARS
+            found.append(
+                {"code": issue["code"], "target": issue["target"], **_item_of(candidate, issue["target"]), "description": issue["description"][:chars]}
+            )
     # 계약 검사 오류: 마지막 계약 정리(quarantine)가 그 조건식을 내리거나 항목을 빼므로 담당이 고칠 수 있을 때 알립니다
     # (2026-11-07 23건 재조립 sh-310976: 담당이 넣은 「도시근로자 월평균소득 70% 이하」 조건식이 기준 연도·버전이 비어
     #  INCOMPLETE_INCOME_BENCHMARK로 원문만 남음 — 검토 이슈가 아니라 계약 오류라 담당은 받지 못했음)

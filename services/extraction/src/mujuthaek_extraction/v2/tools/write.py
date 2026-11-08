@@ -128,7 +128,9 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
     if index is None:
         return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
     # 고치며 넣은 예외의 비운 원문 글도 넣을 때처럼 근거로 채웁니다(2026-11-07 dudc-8934: 가산 행 예외는 넣은 조건을 고치며 더함)
-    merged = _merge(draft.items[section][index], changes if isinstance(changes, dict) else {})
+    merged, lost = _apply(draft.items[section][index], changes)
+    if lost:
+        return _bad_path(lost)
     merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
     problems = _problems(context, section, merged, adding=False)
     if problems:
@@ -202,7 +204,9 @@ WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, finish)  
 def _patch_pending(context: SectionContext, section: str, item_id: str, changes: Any) -> str:
     """넣을 때 거절된 항목을 바꿀 칸만 고쳐, 맞으면 넣습니다. 아직 틀리면 고친 채로 남겨 두고 이유를 돌려줍니다."""
     draft = context.draft
-    merged = _merge(draft.pending[(section, item_id)], changes if isinstance(changes, dict) else {})
+    merged, lost = _apply(draft.pending[(section, item_id)], changes)
+    if lost:
+        return _bad_path(lost)
     merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
     problems = _problems(context, section, merged, adding=True)
     with draft._lock:
@@ -296,6 +300,52 @@ def _no_own_evidence(item: dict[str, Any]) -> str:
     nested = [ref for ref in dict.fromkeys(e if isinstance(e, str) else str(e.get("id") or "") for e in evidence_entries(item)) if ref]
     cited = f"(하위 칸에 붙인 근거: {', '.join(nested[:5])})" if nested else ""
     return f"/evidence: 항목 자체의 evidence 칸이 비었습니다. 조건식·예외 같은 하위 칸의 evidence와 따로, 항목 전체의 근거 id를 1개 이상 넣습니다{cited}."
+
+
+def _apply(base: dict[str, Any], changes: Any) -> tuple[dict[str, Any], str | None]:
+    """고칠 칸(changes)을 항목에 씁니다. 칸 이름 열쇠는 _merge로 합치고, 「exceptions/2/originalText」처럼 항목 안 위치를 적은 열쇠는 그 위치만 바꿉니다.
+    따라갈 수 없는 위치가 있으면 아무것도 바꾸지 않고 그 위치를 돌려줍니다.
+    2026-11-08 최종 비교 bmc-106: 거절된 소득·자산·자동차 조건을 고치며 검증 결과가 알린 위치(/exceptions/2/originalText)를 열쇠로 적었는데,
+    칸 이름으로만 읽어 엉뚱한 칸이 생기고 그대로 거절됨(저장된 실행들에서 이렇게 고친 9번이 모두 실패)."""
+    changes = changes if isinstance(changes, dict) else {}
+    merged = copy.deepcopy(_merge(base, {key: value for key, value in changes.items() if "/" not in key}))
+    for key, value in changes.items():
+        if "/" in key:
+            lost = _set(merged, [token for token in key.split("/") if token], value)
+            if lost:
+                return base, lost
+    return merged, None
+
+
+def _set(item: dict[str, Any], tokens: list[str], value: Any) -> str | None:
+    """항목 안 위치(토큰들)의 값을 바꿉니다. 객체 칸은 _merge처럼 합치고, 목록 순번은 그 원소를 합치며 목록 길이와 같은 순번이나 「-」는
+    끝에 더합니다. 따라갈 수 없으면 그 위치를 돌려줍니다."""
+    node: Any = item
+    for depth, token in enumerate(tokens[:-1]):
+        node = node.get(token) if isinstance(node, dict) else node[int(token)] if _index(node, token) else None
+        if not isinstance(node, dict | list):
+            return "/" + "/".join(tokens[: depth + 1])
+    last = tokens[-1] if tokens else ""
+    if isinstance(node, dict) and last:
+        node.update(_merge(node, {last: value}))
+        return None
+    if isinstance(node, list) and (last == "-" or (last.isdigit() and int(last) == len(node))):
+        node.append(copy.deepcopy(value))
+        return None
+    if isinstance(node, list) and _index(node, last):
+        node[int(last)] = _merge(node[int(last)], value)
+        return None
+    return "/" + "/".join(tokens)
+
+
+def _index(node: Any, token: str) -> bool:
+    return isinstance(node, list) and token.isdigit() and int(token) < len(node)
+
+
+def _bad_path(where: str) -> str:
+    return _error(
+        "BAD_PATH", f"고칠 위치 {where}가 항목에 없습니다. 아무것도 바꾸지 않았습니다. 칸 이름이나 항목 안 위치(예: exceptions/0/originalText)를 적습니다."
+    )
 
 
 def _merge(base: Any, patch: Any) -> Any:

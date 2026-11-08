@@ -882,6 +882,8 @@ DOCUMENT_WORD = re.compile(
 )
 HEADING_LOOKBACK = 3  # 표 위로 볼 글 줄 수(쪽 표시·빈 줄 제외)
 DOCUMENT_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(한 행은 다른 표·글로 넣은 서류일 때가 많음)
+ROW_EXCERPT_CHARS = 60  # 빠진 행마다 보여 줄 글자 수
+ROW_EXCERPT_LEAD = 25  # 서류 낱말이 뒤에 있으면 그 앞 몇 글자부터 보여 줄지(서류 이름의 앞부분)
 OMITTED_ROWS = re.compile(r"(?:서류 표 행|첨부 증빙) (\d+)개")
 # 서류 칸 안에 「- 상황 : 서류」로 나열된 첨부 증빙(2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행의 비고 칸 「- 비상장주식 : 증권사 조회내역,
 # 주식보관증 …」「- 장기카드대출 : 신용카드사가 발급한 증빙서류」를 V1은 모두 상황마다 서류로 나눴는데, V2 서류 담당은 bmc-71·gh-808에서 상위 서류
@@ -974,6 +976,19 @@ def _unhandled_attachments(documents: list[dict[str, Any]], rows: list[str]) -> 
     return missed
 
 
+def _row_excerpt(row: str) -> str:
+    """빠진 행을 알릴 때 보여 줄 부분(60자): 서류 낱말이 앞 60자 안에 없으면 처음 나오는 곳 조금 앞부터.
+    2026-11-08 최종 비교 jbdc-16011: 원문 변환에서 소득세 납부 입증 서류 표(<표9>, 재직증명서 등 서류 8개)가 앞 표의 마지막 칸 하나에 합쳐졌는데,
+    행 앞 60자 「※ 직인날인이 없거나 직인 날인된 서류를…」 주의 문구만 보여 V2 서류 담당이 서류 행으로 보지 않고 넘김(앞 실행들은 8개를 넣음)."""
+    text = " ".join(c for c in _cells(row) if c)
+    found = DOCUMENT_WORD.search(text)
+    if found is None or found.end() <= ROW_EXCERPT_CHARS:
+        return text[:ROW_EXCERPT_CHARS]
+    start = max(found.start() - ROW_EXCERPT_LEAD, 0)
+    start = text.rfind(" ", 0, start) + 1 or start  # 낱말 가운데서 시작하지 않게
+    return "…" + text[start : start + ROW_EXCERPT_CHARS]
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -989,7 +1004,7 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
         plain = normalize(row)
         if any(q in plain or plain in q for q in cited) or any(n in plain for n in names):
             continue
-        missed.append(" ".join(c for c in _cells(row) if c)[:60])
+        missed.append(_row_excerpt(row))
     parts = []
     attachments = _unhandled_attachments(documents, rows)
     if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)

@@ -574,6 +574,20 @@ def test_attached_evidence_listed_in_a_cited_document_row_is_checked_too():
     assert omitted_document_rows(finding.description) == 3 + 3 and "서류 표 행 3개" in finding.description
 
 
+def test_a_missed_row_whose_documents_come_after_a_long_note_shows_the_documents():
+    # 2026-11-08 최종 비교 jbdc-16011: 원문 변환에서 서류 표(<표9>, 재직증명서 등 8개)가 앞 표의 마지막 칸 하나에 합쳐졌는데, 행 앞 60자
+    # 「※ 직인날인이 없거나…」 주의 문구만 보여 V2 서류 담당이 서류 행으로 보지 않고 넘김
+    merged = (
+        "| ※ 직인 날인이 없거나 직인 날인된 서류를 팩스로 받은 경우에도 정당한 서류로 인정받지 않으니 유의하시기 바랍니다. "
+        "<표9> 소득세 납부 입증 서류 해당여부 서류구분 ① 가상 근로증명서 근로자 ② 가상 보험확인서 |"
+    )
+    lines = DOCUMENT_TABLE.split("\n")
+    finding = document_omission(TABLE + "\n" + "\n".join([*lines[:4], merged, lines[5]]), ["가상 신청서"])
+    assert omitted_document_rows(finding.description) == 2
+    assert "…" in finding.description and "① 가상 근로증명서" in finding.description and "※ 직인" not in finding.description
+    assert "「신혼 · 가상 혼인관계증명서 행정복지센터」" in finding.description  # 서류 낱말이 앞에 있는 행은 그대로 앞부분
+
+
 def test_document_omission_is_a_note_that_is_still_rechecked():
     issue = {"code": "DOCUMENT_OMISSION_SUSPECTED", "target": "/quality/coverage/requiredDocuments", "description": "서류 표 행 3개"}
     assert is_note(issue)

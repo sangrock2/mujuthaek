@@ -14,8 +14,8 @@
 「확인할 것」(의심 경고)만 원문상 맞으면 그대로 두고 「다시」면 더 고치지 않습니다.
 
 끝내기(finish): 담당이 마지막 고치기와 같은 차례에 finish를 부르면, 그 차례 도구가 실행된 뒤 새 문제(앞서 알리지 않은 것)가 없으면 모델을 다시
-부르지 않고 끝냅니다. 새 문제가 있으면 끝내기를 거두고 알립니다. 「끝났어요」만 답하는 마지막 차례가 없어집니다(2026-11-06 네 번째 실행:
-그 차례가 담당마다 하나씩 들고, 캐시를 못 읽으면 앞부분 6만 토큰을 다시 씀).
+부르지 않고 끝냅니다. 새 문제가 있거나, 한 번만 알린 「고칠 것」이 남았으면 끝내기를 거두고 알립니다(「다시」로 한 번 더 알린 뒤에는 끝냄).
+「끝났어요」만 답하는 마지막 차례가 없어집니다(2026-11-06 네 번째 실행: 그 차례가 담당마다 하나씩 들고, 캐시를 못 읽으면 앞부분 6만 토큰을 다시 씀).
 """
 
 from __future__ import annotations
@@ -113,7 +113,9 @@ class VerifyMiddleware(AgentMiddleware):
     def __init__(self) -> None:
         super().__init__()
         self.seen = 0  # 마지막으로 알린 초안 판(SectionDraft.version)
+        self.issues: list[dict[str, Any]] = []  # 그 판의 검증 결과
         self.reported: set[tuple[str, str, str]] = set()  # 앞서 알린 문제(코드·위치·항목)
+        self.repeated: set[tuple[str, str, str]] = set()  # 「다시」로 한 번 더 알린 문제
 
     @hook_config(can_jump_to=["end"])
     def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
@@ -121,15 +123,23 @@ class VerifyMiddleware(AgentMiddleware):
         draft = getattr(context, "draft", None)
         if draft is None or context.check is None:
             return None
-        if draft.version == self.seen:
-            return {"jump_to": "end"} if draft.finished else None
-        self.seen = draft.version
-        issues = context.check()
+        changed = draft.version != self.seen
+        if not changed and not draft.finished:
+            return None  # 초안이 그대로인 차례(실패한 고치기만) 뒤에는 다시 알리지 않음
+        if changed:
+            self.seen = draft.version
+            self.issues = context.check()
+        issues = self.issues
         fresh = [issue for issue in issues if issue_key(issue) not in self.reported]
-        if draft.finished and not fresh:
-            return {"jump_to": "end"}  # 끝내기를 불렀고 새 문제가 없음: 모델을 다시 부르지 않음
-        draft.finished = None  # 새 문제가 있으면 끝내기를 거두고 알림
+        # 한 번만 알린 고칠 것이 남은 채 끝내기: 같은 차례에 부른 고치기가 실패해도 담당은 그 결과를 못 보고 끝남(2026-11-08 최종 비교
+        # bmc-106: 거절된 소득·자산·자동차 조건 3개의 고치기가 모두 실패한 차례에 finish도 불러 28값이 빠짐, 23건 중 5개 담당이 같은 꼴).
+        # 「다시」로 한 번 더 알리고 끝내기를 거둡니다. 「다시」로 알린 뒤에도 남으면 끝냄(고칠 것 안내대로 두 번 고쳐 보고 둠)
+        unsettled = [issue for issue in issues if must_fix(issue) and issue_key(issue) not in self.repeated and not _chosen(issue, draft)]
+        if draft.finished and not fresh and not unsettled:
+            return {"jump_to": "end"}  # 끝내기를 불렀고 새 문제·다시 알릴 고칠 것이 없음: 모델을 다시 부르지 않음
+        draft.finished = None  # 새 문제가 있거나 고칠 것이 남았으면 끝내기를 거두고 알림
         marked = [{**issue, "다시": True} if issue_key(issue) in self.reported else issue for issue in issues]
+        self.repeated |= {issue_key(issue) for issue in issues if issue_key(issue) in self.reported}
         self.reported |= {issue_key(issue) for issue in issues}
         return {"messages": [HumanMessage(report(draft, marked))]}
 
@@ -158,6 +168,14 @@ def report(draft: Any, issues: list[dict[str, Any]]) -> str:
 
 def must_fix(issue: dict[str, Any]) -> bool:
     return str(issue.get("code") or "").startswith(MUST_FIX)
+
+
+def _chosen(issue: dict[str, Any], draft: Any) -> bool:
+    """담당이 set_coverage(PARTIAL)로 직접 적은 섹션의 「범위 미완료」 계약 오류: 담당이 고른 상태라 끝내기를 돌려보내지 않음."""
+    target = str(issue.get("target") or "")
+    section = target.rsplit("/", 1)[-1]
+    partial = (draft.coverage.get(section) or {}).get("status") == "PARTIAL"
+    return issue.get("code") == "CONTRACT_INCOMPLETE_EXTRACTION" and target.startswith("/quality/coverage/") and partial
 
 
 def issue_key(issue: dict[str, Any]) -> tuple[str, str, str]:
