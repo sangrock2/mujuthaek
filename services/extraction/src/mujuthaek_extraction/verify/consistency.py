@@ -1429,9 +1429,11 @@ def _check_definition_scope(candidate: dict[str, Any], find: Any) -> None:
 # 「지원 불가」. 앞 실행은 같은 조건을 계층 대상으로 넣었음). 대상·공급 묶음·위치·공급 구분 어디에도 한정되지 않은 조건식 가운데
 # ① 같은 주체·기준에 경계가 여럿이면 더 좁은 쪽(모두 함께 적용되어 넓은 쪽은 뜻이 없어짐: 한쪽은 일부 계층의 기준으로 봄)
 # ② 부모·그 밖의 가족(자녀 등)의 나이
-# ③ 원문 글이 목록의 목을 둘 이상 가리킴(「나목, 마목」 「‘나’목, ‘마’목의 경우에는」)
-# 을 사람 확인으로 보냅니다. 저장된 V1·V2 결과 전체에서 걸린 것은 이 공고의 이 5개뿐이었음(적용 대상 글이나 「~의 경우에는」 같은 한정 표현으로
-# 보면 40개 넘게 걸리고 대부분 신청자 전체의 기준이라 쓰지 않음)
+# ③ 원문 글이나 근거 인용 하나가 목록의 목을 둘 이상 가리킴(「나목, 마목」 「‘나’목, ‘마’목의 경우에는」). 근거도 봅니다: 다시 확인한 실행에서
+#    담당이 같은 총자산·자동차 조건의 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어 원문 글로는 안 걸렸고, 근거에는 「자산기준이 적용되는 자격
+#    - 나목(국가유공자등), 마목(북한이탈주민) …」이 그대로 있었음
+# 을 사람 확인으로 보냅니다. 저장된 V1·V2 결과 전체(대상 없는 조건식 1,746개)에서 걸린 것은 이 공고의 이 조건들뿐이었음(적용 대상 글이나
+# 「~의 경우에는」 같은 한정 표현으로 보면 40개 넘게 걸리고 대부분 신청자 전체의 기준이라 쓰지 않음)
 SUBGROUP_SCOPE = "SCOPE_SUBGROUP_SUSPECTED"
 FAMILY_SUBJECTS = {"PARENTS": "부모", "OTHER": "가족"}
 LIST_ITEM_REFERENCE = re.compile(r"(?<![가-힣])[‘'「“\"]?([가나다라마바사아자차카타파하])[’'」”\"]?\s?목(?!적)")
@@ -1439,6 +1441,7 @@ BOUND_SIDES = {"GT": "low", "GTE": "low", "LT": "high", "LTE": "high"}
 
 
 def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
+    quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
     flagged: dict[int, str] = {}
     bounds: dict[tuple[str, str, str], list[tuple[float, int]]] = {}
     for index, item in enumerate(candidate.get("eligibility") or []):
@@ -1450,10 +1453,12 @@ def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
         for _, atom in _atoms(expression, ""):
             if atom.get("attribute") == "AGE_YEARS" and atom.get("subject") in FAMILY_SUBJECTS:
                 flagged.setdefault(index, f"{FAMILY_SUBJECTS[atom['subject']]} 나이 기준이 대상 없이 신청자 전체에 걸립니다")
-        letters = list(dict.fromkeys(LIST_ITEM_REFERENCE.findall(item.get("originalText") or "")))
-        if len(letters) >= 2:
-            items = ", ".join(f"{letter}목" for letter in letters[:4])
-            flagged.setdefault(index, f"원문이 목록의 일부 목({items})만 가리키는데 대상 없이 신청자 전체에 걸립니다")
+        for text in (item.get("originalText") or "", *(quotes.get(i, "") for i in item.get("evidenceIds") or [])):
+            letters = list(dict.fromkeys(LIST_ITEM_REFERENCE.findall(text)))
+            if len(letters) >= 2:
+                items = ", ".join(f"{letter}목" for letter in letters[:4])
+                flagged.setdefault(index, f"원문이 목록의 일부 목({items})만 가리키는데 대상 없이 신청자 전체에 걸립니다")
+                break
     for (_, attribute, side), values in bounds.items():
         if len({value for value, _ in values}) < 2:
             continue

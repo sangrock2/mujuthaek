@@ -478,6 +478,14 @@ def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
     assert "나목, 마목, 바목, 아목" in flagged(listed)["/eligibility/0"].description
     one = item(atom("INCOME_BENCHMARK_PERCENT", "LTE", 70), original="「공공주택 특별법 시행규칙」 별표3 사목에 따라 다음 각 목의 요건을 갖추고 목적에 맞게")
     assert flagged(one) == {}  # 목 하나·「각 목」·「목적」은 목록의 일부 계층을 가리키는 것이 아님
+    # 다시 확인한 실행: 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어도 근거 인용이 일부 목을 가리키면 걸림
+    line = "1. 자산기준(총자산/자동차)이 적용되는 자격 - 나목(국가유공자등), 마목(북한이탈주민), 바목(장애인)"
+    text = TABLE + "\n" + line
+    start = text.index(line)
+    quoted = {"id": "ev-assets", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": start, "end": start + len(line)}, "quote": line}
+    assets = {**item(atom("TOTAL_ASSETS_KRW", "LTE", 245_000_000), original="총자산가액 기준 24,500만원 이하"), "evidenceIds": ["ev-assets"]}
+    found = check_consistency(candidate(text=text, eligibility=[assets], evidence=[quoted]), SourceBundle(texts={"pdf-text": text}))
+    assert [f.target for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"] == ["/eligibility/0"]
 
 
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
