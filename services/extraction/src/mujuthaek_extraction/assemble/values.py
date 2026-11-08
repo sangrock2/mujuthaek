@@ -69,6 +69,18 @@ def _small(text: str) -> Decimal | None:
     return total
 
 
+def point_readings(source_amount: str | None, source_unit: str | None) -> tuple[int, ...]:
+    """마침표 뒤 숫자가 세 자리라 모호한 금액(「18,400.000」)의 두 읽기: 마침표를 자릿수 쉼표로 본 값과, 소수점으로 본 값(그 1/1000,
+    원 단위로 떨어질 때만). 모호한 금액이 아니면 빈 튜플. 어느 읽기인지는 부른 쪽이 다른 근거(같은 요금안의 합)로 정합니다."""
+    compact = "".join(unicodedata.normalize("NFKC", source_amount or "").split())
+    if not POINT_OR_COMMA.search(compact):
+        return ()
+    comma = to_krw(compact.replace(".", ","), source_unit).amount_krw
+    if comma is None:
+        return ()
+    return (comma, comma // 1000) if compact.count(".") == 1 and comma % 1000 == 0 else (comma,)
+
+
 def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     """원문 금액과 단위를 원 단위 정수로 환산합니다. 모호하거나 읽을 수 없으면 금액 대신 검수 사유를 담아 돌려줍니다."""
     if source_amount is None or not _clean(source_amount):

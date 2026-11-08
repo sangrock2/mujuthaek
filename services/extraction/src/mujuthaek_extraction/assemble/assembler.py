@@ -37,7 +37,7 @@ from mujuthaek_extraction.assemble.quotes import (
 )
 from mujuthaek_extraction.assemble.regions import RegionCodeTable
 from mujuthaek_extraction.assemble.slips import fix_format_slips
-from mujuthaek_extraction.assemble.values import range_krw, to_krw
+from mujuthaek_extraction.assemble.values import point_readings, range_krw, to_krw
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 
@@ -66,6 +66,38 @@ STAGE_TARGET = re.compile(r"^(?:(?P<reserve>예비\s*입주자|예비자)|(?P<fi
 STAGE_BAND_ATTRIBUTES = {"INCOME_BENCHMARK_PERCENT", "MONTHLY_INCOME_KRW"}
 STAGE_INCLUDED = re.compile(r"낙\s*첨\s*자")
 STAGE_LINES = 2  # 구간 문장 줄 아래로 「낙첨자를 포함」을 찾을 줄 수
+
+# 마침표 뒤 세 자리라 모호한 금액(「18,400.000」)은 같은 요금안(가격안·대상)의 보증금(분양가)·계약금·잔금이 하나씩이고 그 가운데 이 금액만
+# 모를 때, 「보증금 = 계약금 + 잔금」을 맞추는 읽기가 하나뿐이면 그 값으로 읽습니다(표시 메모 AMOUNT_READ_BY_PARTS). 계산으로 정해지지 않으면
+# 예전처럼 비우고 검수로 넘깁니다. 2026-11-09 23건: jbdc-16011 계약금 칸 「18,400.000」(합계 92,000,000 · 잔금 73,600,000) 24개를 V1은
+# 18,400원으로 게시(틀린 값), V2는 비워 두 쪽 다 놓침
+PARTS_WHOLES = ("DEPOSIT", "SALE_PRICE")
+AMOUNT_BY_PARTS = "AMOUNT_READ_BY_PARTS"
+
+
+def _read_by_parts(prices: list[dict[str, Any]], index: int, readings: tuple[int, ...]) -> int | None:
+    price = prices[index]
+
+    def plan_key(item: dict[str, Any]) -> tuple[Any, tuple[str, ...]]:
+        return item.get("pricePlanId"), tuple(sorted((item.get("scope") or {}).get("targetGroups") or []))
+
+    kinds: dict[str, list[dict[str, Any]]] = {}
+    for item in prices:
+        if plan_key(item) == plan_key(price):
+            kinds.setdefault(item.get("kind"), []).append(item)
+    wholes = [kind for kind in PARTS_WHOLES if kind in kinds]
+    if len(wholes) != 1 or "OTHER" in kinds or any(len(kinds.get(kind, [])) != 1 for kind in (wholes[0], "CONTRACT_PAYMENT", "BALANCE")):
+        return None
+    if price.get("kind") not in (wholes[0], "CONTRACT_PAYMENT", "BALANCE"):
+        return None
+    fits = []
+    for reading in readings:
+        whole, contract, balance = (
+            reading if kinds[kind][0] is price else kinds[kind][0].get("amountKrw") for kind in (wholes[0], "CONTRACT_PAYMENT", "BALANCE")
+        )
+        if None not in (whole, contract, balance) and whole == contract + balance:
+            fits.append(reading)
+    return fits[0] if len(fits) == 1 else None
 
 
 def _band(expression: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -726,16 +758,34 @@ class _Assembler:
 
     def compute_values(self) -> None:
         """가격에 원 단위 금액(또는 금액 범위)을, 위치에 법정동코드를 붙입니다. 계산하지 못한 칸은 누락 사유로 남깁니다."""
-        for g, group in enumerate(self.sections.get("supplyGroups", [])):
+        groups = self.sections.get("supplyGroups", [])
+        ambiguous: list[tuple[int, int, tuple[int, ...], str | None]] = []
+        for g, group in enumerate(groups):
             for p, price in enumerate(group["prices"]):
                 result = to_krw(price.get("sourceAmount"), price.get("sourceUnit"))
                 price["amountKrw"] = result.amount_krw
                 span = None if result.amount_krw is not None else range_krw(price.get("sourceAmount"), price.get("sourceUnit"))
+                readings = () if result.amount_krw is not None or span else point_readings(price.get("sourceAmount"), price.get("sourceUnit"))
                 if span is not None:  # 원문이 「1,200만~1,500만」처럼 범위로만 적은 금액(계약 amountRangeKrw)
                     price["amountRangeKrw"] = {"min": span[0], "max": span[1]}
+                elif readings:  # 같은 요금안의 다른 금액을 모두 계산한 뒤 정합니다
+                    ambiguous.append((g, p, readings, result.reason))
                 elif result.amount_krw is None:
                     target = f"/supplyGroups/{g}/prices/{p}/amountKrw"
                     self.computed_missing.append({"target": target, "reason": "NEEDS_REVIEW", "description": result.reason})
+        for g, p, readings, reason in ambiguous:
+            prices = groups[g]["prices"]
+            chosen = _read_by_parts(prices, p, readings)
+            if chosen is None:
+                self.computed_missing.append({"target": f"/supplyGroups/{g}/prices/{p}/amountKrw", "reason": "NEEDS_REVIEW", "description": reason})
+                continue
+            prices[p]["amountKrw"] = chosen
+            self.issue(
+                ["supplyGroups", g, "prices", p, "amountKrw"],
+                AMOUNT_BY_PARTS,
+                f"원문 {prices[p].get('sourceAmount')!r}의 마침표가 자릿수 쉼표인지 소수점인지 모호해, 같은 요금안의 보증금(분양가) = 계약금 + 잔금이 "
+                f"맞는 {chosen:,}원으로 읽었습니다.",
+            )
         for i, location in enumerate(self.sections.get("locations", [])):
             if self.source.regions is None:
                 match_code, note = None, "지역 코드표가 없습니다."

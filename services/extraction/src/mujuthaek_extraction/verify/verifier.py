@@ -78,6 +78,9 @@ NOTE_CODES = {
     "AI_OUTPUT_FIELD_CLEARED",
     # 공급표 전환안의 부호와 숫자가 어긋나 숫자(기본 요금 대비 보증금·월세 증감)로 방향을 고침(supply_tables, 2026-10-24). 고친 값이라 표시만
     "CONVERSION_DIRECTION_CORRECTED",
+    # 마침표 뒤 세 자리라 모호한 금액(「18,400.000」)을 같은 요금안의 보증금(분양가) = 계약금 + 잔금으로 정해 읽음(assembler, 2026-11-09).
+    # 계산으로 확인한 값이라 표시만
+    "AMOUNT_READ_BY_PARTS",
     # 행 이름 칸이 없어 읽지 못한 가격표(supply_tables, 2026-11-07). 빠진 값이지 틀린 값이 아니라 읽은 가격은 게시하고 검수 대기열에만 올립니다
     "SUPPLY_PRICE_TABLE_UNREAD",
 }

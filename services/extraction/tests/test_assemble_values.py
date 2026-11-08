@@ -445,3 +445,13 @@ def test_digit_groups_that_are_not_three_digits_are_not_guessed():
         assert result.amount_krw is None and "자릿수 쉼표" in result.reason
     assert to_krw("2억5,400만원", None).amount_krw == 254_000_000  # 세 자리씩이면 그대로 읽음
     assert to_krw("1,234,567", "원").amount_krw == 1_234_567
+
+
+def test_point_or_comma_amount_gives_both_readings_for_the_caller_to_choose():
+    # 2026-11-09 jbdc-16011: 「18,400.000」은 자릿수 쉼표 오타(18,400,000)인지 소수점(18,400)인지 글자만으로는 모름 — 같은 요금안의 합으로 고름
+    from mujuthaek_extraction.assemble.values import point_readings
+
+    assert point_readings("18,400.000", "원") == (18_400_000, 18_400)
+    assert point_readings("12.500", "천원") == (12_500_000, 12_500)
+    assert point_readings("18,400,000", "원") == ()  # 모호하지 않은 금액
+    assert point_readings("1.5", "억원") == ()

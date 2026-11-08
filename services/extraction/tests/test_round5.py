@@ -381,3 +381,39 @@ def test_long_notice_quote_not_found_without_core_values_holds_only_the_descript
         narrow_notice_issues(candidate)
         assert candidate["quality"]["reviewIssues"][0]["target"] == target
     assert held_target({"notice": notice, "supplyGroups": []}, "/notice/description") == ("/notice/description", "ITEM")
+
+
+def test_ambiguous_amount_is_read_by_the_plan_whole_equal_to_contract_plus_balance():
+    # 2026-11-09 23건: jbdc-16011 계약금 칸 「18,400.000」(합계 92,000,000 · 잔금 73,600,000) 24개를 V1은 18,400원으로 게시, V2는 비워 둠
+    from mujuthaek_extraction.assemble.assembler import _read_by_parts
+    from mujuthaek_extraction.verify.model import SourceBundle
+    from mujuthaek_extraction.verify.numbers import check_numbers
+
+    def p(kind, amount, source=None, plan="기본"):
+        return {
+            "pricePlanId": plan,
+            "priceStage": "STANDARD",
+            "kind": kind,
+            "sourceAmount": source or f"{amount:,}",
+            "sourceUnit": "원",
+            "amountKrw": amount,
+            "scope": {"targetGroups": []},
+        }
+
+    readings = (18_400_000, 18_400)
+    contract = p("CONTRACT_PAYMENT", None, "18,400.000")
+    plan = [p("DEPOSIT", 92_000_000), contract, p("BALANCE", 73_600_000), p("MONTHLY_RENT", 389_000)]
+    assert _read_by_parts(plan, 1, readings) == 18_400_000
+    assert _read_by_parts([p("DEPOSIT", 73_618_400), contract, p("BALANCE", 73_600_000)], 1, readings) == 18_400  # 소수점 읽기가 맞으면 그쪽
+    # 합이 어느 읽기로도 안 맞거나, 잔금을 모르거나, 다른 금액(OTHER)이 섞였거나, 같은 요금안이 아니면 정하지 않습니다
+    assert _read_by_parts([p("DEPOSIT", 90_000_000), contract, p("BALANCE", 73_600_000)], 1, readings) is None
+    assert _read_by_parts([p("DEPOSIT", 92_000_000), contract, p("BALANCE", None, "73,600.000")], 1, readings) is None
+    assert _read_by_parts([*plan, p("OTHER", 1_000)], 1, readings) is None
+    assert _read_by_parts([p("DEPOSIT", 92_000_000, plan="다른안"), contract, p("BALANCE", 73_600_000)], 1, readings) is None
+
+    # 다시 계산 검사: 두 읽기 가운데 하나면 받고, 아닌 값은 그대로 잡습니다
+    resolved = [*plan[:1], contract | {"amountKrw": 18_400_000}, *plan[2:]]
+    candidate = {"evidence": [], "supplyGroups": [{"prices": resolved, "counts": [], "scope": {"targetGroups": []}}]}
+    assert not [f for f in check_numbers(candidate, SourceBundle()) if f.code == "PRICE_UNIT_MISMATCH"]
+    resolved[1] = contract | {"amountKrw": 1_840_000}
+    assert [f.target for f in check_numbers(candidate, SourceBundle()) if f.code == "PRICE_UNIT_MISMATCH"] == ["/supplyGroups/0/prices/1/amountKrw"]
