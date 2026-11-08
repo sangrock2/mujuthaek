@@ -508,6 +508,8 @@ def _eligibility_fit(e: dict[str, Any], a: dict[str, Any], criterion: str | None
     """추출 기준 a가 정답표 기준 e와 같은 뜻인지. 다르면 None, 같으면 확인하지 못한 차원들(빈 튜플이면 모두 확인).
 
     - 방향: 양쪽 다 숫자 비교 연산자(이하·미만·이상·초과·같음·사이)면 같아야 합니다. 「이하」와 「미만」도 경계가 달라 다른 뜻으로 봅니다.
+      다만 「0 이하」와 「0」은 같은 뜻입니다(채점하는 기준은 금액·비율·나이라 음수가 없음). 계약 속성 사전에 EQ가 없는 자동차가액은
+      「자동차 없음」을 LTE 0으로 적습니다(2026-11-09 유료 확인 gh-809: 정답표 EQ 0 ↔ 추출 LTE 0이 틀린 값 후보로 세어졌음).
     - 대상 계층: 정답표가 계층을 적었고 추출에도 계층이 있으면 겹쳐야 합니다(정답표가 「모두」면 보지 않음).
     """
     if a.get("criterion") != (criterion or e.get("criterion")):
@@ -515,7 +517,8 @@ def _eligibility_fit(e: dict[str, Any], a: dict[str, Any], criterion: str | None
     unchecked = []
     left, right = _operator(e.get("operator")), _operator(a.get("operator"))
     if left and right:
-        if left != right:
+        zero = {left, right} == {"LTE", "EQ"} and _values(e.get("value")) == [0] and _values(a.get("value")) == [0]
+        if left != right and not zero:
             return None
     else:
         unchecked.append("방향(연산자)")

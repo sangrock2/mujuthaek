@@ -382,6 +382,20 @@ def notice_field_of(notice: dict[str, Any], quote: str) -> str | None:
     return fields.pop() if len(fields) == 1 else None
 
 
+# 원문에서 찾지 못한 긴 인용(표 칸을 이어 붙인 글 등)이 제목·기관·날짜·수량을 담지 않으면 소개 글(description)을 받치는 인용이라 그 칸만 보류합니다.
+# 2026-11-09 유료 확인 sh-311005: 구조 호출이 「용도 다세대주택 (도시형 생활주택) 근린생활시설 * 무주택자로 … 소득의 120% 이하에 해당하는…」처럼
+# 표의 여러 칸을 이은 인용 하나를 만들어 공고 전체(찾은 값 140개)가 검수로 감. 짧은 인용은 제목의 일부일 수 있어 그대로 둡니다
+DESCRIPTION_QUOTE_MIN_CHARS = 20
+CORE_IN_QUOTE = re.compile(r"\d{4}\s*[.년\-/]\s*\d{1,2}|\d+\s*(?:세대|호|가구|명|실)(?![가-힣])")
+
+
+def _description_quote(notice: dict[str, Any], quote: str) -> bool:
+    flat = _flat(quote)
+    if len(flat) < DESCRIPTION_QUOTE_MIN_CHARS or CORE_IN_QUOTE.search(quote):
+        return False
+    return not any(_flat(value) and _flat(value) in flat for value in (notice.get("title"), notice.get("publisher")))
+
+
 def narrow_notice_issues(candidate: dict[str, Any]) -> None:
     notice = candidate.get("notice") if isinstance(candidate.get("notice"), dict) else {}
     for issue in candidate["quality"]["reviewIssues"]:
@@ -389,6 +403,8 @@ def narrow_notice_issues(candidate: dict[str, Any]) -> None:
             continue
         quoted = QUOTED.search(issue.get("description") or "")
         field = notice_field_of(notice, quoted[1]) if quoted else None
+        if field is None and quoted and issue.get("code") == "EVIDENCE_QUOTE_NOT_FOUND" and _description_quote(notice, quoted[1]):
+            field = "description"
         if field:
             issue["target"] = f"/notice/{field}"
 

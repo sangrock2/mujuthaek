@@ -358,3 +358,26 @@ def test_quote_joined_from_two_places_is_split_into_found_parts():
         "가상 주택을 소유하지 않은 세대의 구성원이어야 합니다.",
     ]
     assert split_joined_quote(text, "신청자격 : 공고일 현재 만19세 이상인 가상 성년자", index) is None  # 이미 원문에 있음
+
+
+def test_long_notice_quote_not_found_without_core_values_holds_only_the_description():
+    # 2026-11-09 유료 확인 sh-311005: 구조 호출이 표의 여러 칸을 이은 인용 하나를 원문에서 찾지 못해 공고 전체가 검수로 감
+    from mujuthaek_extraction.verify.verifier import held_target, narrow_notice_issues
+
+    stitched = "가상 용도 다세대주택 (도시형 생활주택) 근린생활시설 * 무주택자로 전년도 소득의 120% 이하에 해당하는…"
+
+    def issue(code, quote):
+        return {"code": code, "target": "/notice", "description": f"가상공고: 인용문 1개를 원문에서 찾지 못했습니다 「{quote}」"}
+
+    notice = {"title": "가상스페이스 입주자 모집공고", "publisher": "가상기업", "targetGroups": ["청년"], "supplyType": "사회주택", "counts": []}
+    cases = [
+        (issue("EVIDENCE_QUOTE_NOT_FOUND", stitched), "/notice/description"),
+        (issue("EVIDENCE_QUOTE_NOT_FOUND", "가상스페이스 입주자 모집공고 안내 문구가 이어진 긴 인용문입니다"), "/notice"),  # 제목을 담음
+        (issue("EVIDENCE_QUOTE_NOT_FOUND", "모집 세대수 원룸 1세대 추가모집 안내 문구가 이어진 긴 인용"), "/notice"),  # 수량을 담음
+        (issue("EVIDENCE_QUOTE_TOO_SHORT", stitched), "/notice"),  # 찾은 인용이 짧은 것은 그대로
+    ]
+    for found, target in cases:
+        candidate = {"notice": notice, "quality": {"reviewIssues": [found]}, "supplyGroups": []}
+        narrow_notice_issues(candidate)
+        assert candidate["quality"]["reviewIssues"][0]["target"] == target
+    assert held_target({"notice": notice, "supplyGroups": []}, "/notice/description") == ("/notice/description", "ITEM")

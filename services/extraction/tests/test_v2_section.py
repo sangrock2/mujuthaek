@@ -796,7 +796,7 @@ def test_section_notes_go_only_to_the_task_of_the_agent_that_needs_them():
     assert not any(section.TASK_NOTES["documents"] in section.task(spec, {}) for name, spec in workers.items() if name != "documents")
     assert section.TASK_NOTES["documents"] not in system_prompt(RULES)  # 공통 지시(담당들이 함께 쓰는 앞부분)는 그대로
     assert "announcedOn은 null" in workers["structure"].instructions and "PARTIAL로 두지 않습니다" in workers["structure"].instructions
-    assert "CAR_ASSETS_KRW EQ 0" in workers["eligibility"].instructions
+    assert "CAR_ASSETS_KRW LTE 0" in workers["eligibility"].instructions
     assert "WINNER_ANNOUNCEMENT" in workers["schedules"].instructions and "시작과 끝을 모두" in workers["schedules"].instructions
 
 
@@ -829,7 +829,7 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
     everyone = verify_report(draft, [{**issue, "code": "SCOPE_SUBGROUP_SUSPECTED"}])  # 계층 조건을 대상 없이 넣음(2026-11-08 bmc-106)
     assert "## 확인할 것 1개" in everyone and "- SCOPE_SUBGROUP_SUSPECTED:" in everyone and "계층마다 대상을 따로" in everyone
-    assert "CAR_ASSETS_KRW EQ 0" in shown  # 자동차 미소유 기준(2026-11-09 23건: 대학생 4건을 글로만 남김)
+    assert "CAR_ASSETS_KRW LTE 0" in shown  # 자동차 미소유 기준(2026-11-09 23건: 대학생 4건을 글로만 남김)
     dated = {"code": "SCHEDULE_OMISSION_SUSPECTED", "target": "/quality/coverage/schedules", "description": "날짜가 적힌 단계 1개"}
     steps = verify_report(SectionDraft(("schedules",), items={"schedules": []}), [dated])  # 번호 붙은 글 줄의 계약·입주(2026-11-09 sh-311087)
     assert "## 확인할 것 1개" in steps and "일정표 밖" in steps

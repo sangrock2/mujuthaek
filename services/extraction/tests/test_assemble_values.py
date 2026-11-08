@@ -436,3 +436,12 @@ def test_table_row_quote_with_merged_cell_filled_is_that_row():
     # 원문 행의 값(120%)을 다르게 적었거나, 병합 복원으로 설명되지 않는 값(3인)이 있으면 그 행이 아닙니다
     for wrong in ("| | 2인 | | 1인 | 110% | 276,000,000원 |", "| | 3인 | | 1인 | 120% | 276,000,000원 |"):
         assert resolve_item_quotes(text, [wrong])[0].span != found.span
+
+
+def test_digit_groups_that_are_not_three_digits_are_not_guessed():
+    # 2026-11-09 유료 확인 sh-310672: 청년 총자산 「2억5,4000만 원 이하」를 7.4억으로 읽은 조건이 근거 확인을 통과해 자동 게시됨
+    for amount in ("2억5,4000만원", "12,30", "1,0000"):
+        result = to_krw(amount, None if "원" in amount else "원")
+        assert result.amount_krw is None and "자릿수 쉼표" in result.reason
+    assert to_krw("2억5,400만원", None).amount_krw == 254_000_000  # 세 자리씩이면 그대로 읽음
+    assert to_krw("1,234,567", "원").amount_krw == 1_234_567

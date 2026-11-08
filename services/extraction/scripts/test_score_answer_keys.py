@@ -54,3 +54,13 @@ def test_verified_entry_needs_source_and_reason(tmp_path):
     path.write_text(json.dumps({"values": [{"notice": "n1", "section": "s", "label": "l"}]}), encoding="utf-8")
     with pytest.raises(ValueError):
         sk._load_verified(path)
+
+
+def test_zero_or_less_is_the_same_criterion_as_zero():
+    # 2026-11-09 유료 확인 gh-809: 대학생 「자동차를 소유하고 있지 않을 것」 — 정답표 EQ 0, 추출 LTE 0(속성 사전에 EQ 없음)
+    key = {"criterion": "CAR_ASSETS", "operator": "EQ", "value": 0, "targetGroup": "대학생"}
+    extracted = {"criterion": "CAR_ASSETS", "operator": "LTE", "value": 0, "targetGroup": "대학생"}
+    assert sk._eligibility_fit(key, extracted) is not None
+    assert sk._eligibility_fit(key, extracted | {"value": 1}) is None  # 0이 아니면 방향이 다른 기준
+    assert sk._eligibility_fit(key | {"value": 45_420_000}, extracted | {"value": 45_420_000}) is None
+    assert sk._eligibility_fit(key, extracted | {"operator": "GTE"}) is None
