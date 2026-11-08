@@ -796,6 +796,8 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 고치는 법" not in verify_report(draft, [{**issue, "code": "EXCEPTION_SUSPECTED"}])
     scoped = verify_report(draft, [{**issue, "code": "DEFINITION_SCOPE_SUSPECTED"}])  # 낱말 정의로 만든 조건의 대상(2026-11-06 dcco-24812)
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
+    everyone = verify_report(draft, [{**issue, "code": "SCOPE_SUBGROUP_SUSPECTED"}])  # 계층 조건을 대상 없이 넣음(2026-11-08 bmc-106)
+    assert "## 확인할 것 1개" in everyone and "- SCOPE_SUBGROUP_SUSPECTED:" in everyone and "계층마다 대상을 따로" in everyone
 
 
 def test_tiers_split_into_separate_conditions_must_be_fixed_into_one_condition_with_exceptions():

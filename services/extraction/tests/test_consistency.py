@@ -451,6 +451,35 @@ def test_condition_made_from_one_definition_entry_and_put_on_a_wider_target_is_s
     assert flagged(item("주거약자용 주택 신청자", original="고령자(주택 소유와 무관)")) == []  # 정의에 조건식 값이 없음
 
 
+def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
+    # 2026-11-08 V2 유료 확인 bmc-106: 1순위 자격(가~자목 중 하나)의 계층 조건을 대상 없이 넣어 나이 65세 이상·부모 나이·나·마·바·아목만의
+    # 소득 상한이 신청자 전체 조건으로 게시됨(65세 미만은 모두 「지원 불가」)
+    def atom(attribute, operator, value, subject="APPLICANT"):
+        return {"kind": "ATOMIC", "subject": subject, "attribute": attribute, "operator": operator, "value": value}
+
+    def item(expression, *groups, original="원문"):
+        rule = {"status": "STRUCTURED", "expression": expression}
+        return {"category": "OTHER", "scope": scope(*groups), "evidenceIds": [], "originalText": original, "rule": rule}
+
+    def flagged(*items):
+        found = check_consistency(candidate(eligibility=list(items)), SourceBundle(texts={"pdf-text": TABLE}))
+        return {f.target: f for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"}
+
+    adult, senior = item(atom("AGE_YEARS", "GTE", 19)), item(atom("AGE_YEARS", "GTE", 65), original="자. 65세 이상인 사람으로서 수급권자")
+    found = flagged(adult, senior)
+    assert list(found) == ["/eligibility/1"] and "만 나이" in found["/eligibility/1"].description and "19, 65" in found["/eligibility/1"].description
+    assert not is_note(found["/eligibility/1"].issue())  # 사람 확인(그 조건만 보류). 경계가 더 좁은 쪽만(넓은 쪽은 판정을 바꾸지 않음)
+    assert flagged(adult, item(atom("AGE_YEARS", "GTE", 65), "65세 이상 수급권자")) == {}  # 계층 대상이면 그 계층에만
+    assert flagged(adult, item({"kind": "ALL", "children": [atom("AGE_YEARS", "BETWEEN", [19, 39])]})) == {}  # 하한이 같고 상한은 하나
+    assert list(flagged(*(item(atom("INCOME_BENCHMARK_PERCENT", "LTE", value)) for value in (100, 70)))) == ["/eligibility/1"]  # 상한은 작은 쪽
+    parents = item(atom("AGE_YEARS", "GTE", 65, subject="PARENTS"), original="사. 65세 이상의 직계존속을 부양하는 사람")
+    assert "부모 나이" in flagged(parents)["/eligibility/0"].description
+    listed = item(atom("INCOME_BENCHMARK_PERCENT", "LTE", 70), original="※ 위 자격 중 ‘나’목, ‘마’목, ‘바’목, ‘아’목의 경우에는 월평균소득 70% 이하")
+    assert "나목, 마목, 바목, 아목" in flagged(listed)["/eligibility/0"].description
+    one = item(atom("INCOME_BENCHMARK_PERCENT", "LTE", 70), original="「공공주택 특별법 시행규칙」 별표3 사목에 따라 다음 각 목의 요건을 갖추고 목적에 맞게")
+    assert flagged(one) == {}  # 목 하나·「각 목」·「목적」은 목록의 일부 계층을 가리키는 것이 아님
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [
