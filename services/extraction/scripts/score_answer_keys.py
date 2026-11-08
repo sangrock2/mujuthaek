@@ -57,6 +57,9 @@ YEAR_DO = re.compile(r"(\d{4})\s*년도")
 # 그 상황을 적용 대상(appliesTo, 「비상장주식을 자산으로 신고하는 경우」)으로 둡니다
 SITUATION_EVIDENCE = re.compile(r"^(.+?)\s*증빙(?:\s*서류|\s*자료)?$")
 DOC_SUFFIX = re.compile(r"(?:서|증|본|부|내역|자료|원|표|카드|명단)$")  # 서류 이름의 끝(증명서·등록증·등본·등기부·조회내역·신청원·통지표 등)
+# 같은 증명서를 풀어 쓴 이름(2026-11-09 23건 서류 놓침 3개): 원문 「소득 신고한 사실이 없음을 확인하는 사실증명서」 = 정답표 「소득신고 사실
+# 없음 사실증명서」. 공백을 지운 뒤 「…한 사실」은 「… 사실」로, 「사실이 없음을 확인하는」은 「사실 없음」으로 봅니다
+SPELLED_OUT = ((re.compile(r"한사실"), "사실"), (re.compile(r"(?<=사실)[이가]?없음을(?:확인|증명)하는"), "없음"))
 
 
 # ---------- 추출 결과 → 중립 형식 ----------
@@ -713,7 +716,10 @@ def compare(expected: dict[str, Any], actual: dict[str, Any]) -> Score:
 
     def doc(name: Any) -> str:
         text = YEAR_DO.sub(r"\1년", SHORT_YEAR.sub(r"20\1년", str(name or ""))).replace("內", "내")
-        return DOC_NOISE.sub("", POSSESSIVE.sub(" ", text))
+        plain = DOC_NOISE.sub("", POSSESSIVE.sub(" ", text))
+        for pattern, short in SPELLED_OUT:
+            plain = pattern.sub(short, plain)
+        return plain
 
     def variants(raw: Any) -> set[str]:
         """한 서류 이름을 비교할 글자들: 이름 전체, 괄호 안을 살린 이름, 괄호 안에 나열한 서류마다, 첫 쉼표 앞,

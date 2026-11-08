@@ -64,3 +64,18 @@ def test_zero_or_less_is_the_same_criterion_as_zero():
     assert sk._eligibility_fit(key, extracted | {"value": 1}) is None  # 0이 아니면 방향이 다른 기준
     assert sk._eligibility_fit(key | {"value": 45_420_000}, extracted | {"value": 45_420_000}) is None
     assert sk._eligibility_fit(key, extracted | {"operator": "GTE"}) is None
+
+
+@pytest.mark.parametrize(
+    ("extracted", "same"),
+    [
+        ("소득신고 사실이 없음을 확인하는 사실증명서", True),
+        ("’24년도에 소득 신고한 사실이 없음을 확인하는 사실 증명서", True),  # 연도·띄어 쓴 「사실 증명서」
+        ("소득금액증명원", False),
+        ("소득신고 사실이 있음을 확인하는 사실증명서", False),  # 있음은 다른 증명
+    ],
+)
+def test_spelled_out_certificate_name_is_the_same_document(extracted, same):
+    # 2026-11-09 23건 서류 놓침 3개(sh-310976·gndc 2건): 추출은 원문 이름 그대로, 정답표는 줄인 이름
+    score = sk.compare({"documents": [{"name": "소득신고 사실 없음 사실증명서"}]}, {"documents": [{"name": extracted}]})
+    assert (score.found["서류"] == 1) is same
