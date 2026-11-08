@@ -52,6 +52,8 @@ v29(2026-10-23): v28 + 프론트 요청 — 일정의 접수 방법(정해진 �
 v30(2026-10-29): v29 + 순위·계층·소득 구간마다 기준이 달라도 모든 신청자에게 같은 조건(나이·거주지·무주택·국적 등)은 대상 표시를 비움.
   실측: 구로구 도전숙에서 나이·거주가 「청년창업인」에만 붙어 「월평균소득 50% 이하」 구간에는 소득만 남아 66세·부산도 지원 가능.
   (판정 틀도 소득 구간 대상군을 대상마다 「구간 중 하나」로 접어요, judgment/frame.py _fold_income_tiers)
+  v30 서류 호출 지시(2026-11-08, 지시 파일은 그대로 — 구조 호출·다른 담당이 같은 파일을 읽음): 서류 종류 이름 뒤 괄호에 든 예시는
+  서류 하나(DOCUMENT_EXAMPLES_NOTE).
 v19(2026-10-18): v18 + 선착순 공고의 접수 일정은 먼저 오는 서류 제출로,
     소득은 비율과 금액표가 함께면 비율로(19-6), 기본·금회 완화 조건은 적용하는 쪽만 STRUCTURED(19-7).
 v18(2026-10-18): v17 + 짧게 적힌 서류(신분증·인감도장·기타서류 등) 빠짐없이, 순위·계층 정의 속 나이(65세 이상)도 AGE 조건으로(19-5).
@@ -76,6 +78,18 @@ from mujuthaek_extraction.rules.base import CallSpec, FieldRules
 SPLIT_NOTE = (
     "대상군(청년·신혼부부 등)별 조건은 scope.targetGroups로 구분합니다. 공고 기본 정보·위치·공급 조건·일정과 이 호출이 맡지 않은 섹션은 "
     "다시 추출하지 않습니다.\n섹션을 나눠 호출합니다. 맡은 섹션은 원문 끝까지 빠짐없이, 요약하지 말고 항목마다 넣습니다."
+)
+
+# 서류를 넣는 호출마다 덧붙이는 지시. 종류 이름 뒤 괄호 속 예시도 공통 지시의 「괄호 속에 있는 서류」「"/"·"또는"으로 함께 있으면 나눔」대로
+# 서류마다 나누던 것(2026-11-08 조사: jbdc-16011 「② 부양가족임을 확인할 수 있는 서류 (주민등록표등본, 가족관계증명서 등)」를 V2 서류 담당이
+# 저장된 네 실행 모두 예시 둘로 나눠 넣어 부양가족 확인이라는 목적이 사라지고 둘 다 내야 하는 것처럼 보임. 23건 원문의 같은 모양 15곳(9건)에서
+# V2는 판별되는 12곳 중 8곳을 예시마다 나눴고(당첨자·대리인 신분증은 예시마다 6개), 정답표는 대부분 한 서류(「A 또는 B」)로 적음).
+# 지시 파일(prompt.v30.md)이 아니라 여기에 두는 것: 구조 호출과 V2의 다른 담당도 그 파일을 읽어, 고치면 서류와 상관없는 호출의 캐시까지 바뀜
+DOCUMENT_EXAMPLES_NOTE = (
+    "서류 종류 이름 뒤 괄호에 예시를 든 서류(「혼인 사실을 확인할 수 있는 서류 (혼인관계증명서, 주민등록표등본 등)」「본인 신분증(주민등록증, "
+    "운전면허증, 여권 중 1)」처럼 「등」「중 1」로 그 가운데 하나를 내면 되는 나열)는 예시가 「/」·「또는」으로 이어져 있어도 서류 하나입니다. "
+    "이름은 종류 이름 뒤에 괄호 속 예시를 그대로 붙여 적고 예시마다 서류를 나누지 않습니다. 괄호 속 서류를 모두 내거나(「및」「각 1부」) "
+    "대상·상황마다 다른 서류를 적었으면 서류마다 나눕니다."
 )
 
 # 호출별 출력 한도 근거: 저장된 실제 유료 응답(gpt-6-luna, 정상 종료 END) 중 최대 출력 토큰 (2026-10-20 집계, 시도 446건:
@@ -271,7 +285,10 @@ _DOCUMENTS = CallSpec(
     instructions=(
         "제출 서류(requiredDocuments)를 추출합니다. 공통 지시 2장의 「서류」 절을 따릅니다. 서류는 이름마다 하나(대상은 appliesTo)이며, "
         "서류 표를 다 넣은 뒤 「빠뜨리기 쉬운 곳」(방문·대리 신청 상자, 계약 시 구비서류, ※ 주석, 신분증·도장·인감 낱말)을 다시 훑습니다. "
-        "서류 표가 공통·해당자·본인 방문·대리 신청으로 묶음을 나눴으면 group을, 부수·발급 기관이 적혀 있으면 copies·issuer를 적습니다.\n" + SPLIT_NOTE
+        "서류 표가 공통·해당자·본인 방문·대리 신청으로 묶음을 나눴으면 group을, 부수·발급 기관이 적혀 있으면 copies·issuer를 적습니다. "
+        + DOCUMENT_EXAMPLES_NOTE
+        + "\n"
+        + SPLIT_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["documents"],
@@ -285,7 +302,7 @@ _DOCUMENTS_SUBMIT = CallSpec(
     instructions=(
         "제출 서류(requiredDocuments) 가운데 **신청·서류 제출 단계에서 내는 서류 표**(공통 제출서류, 해당자·계층별 추가 서류, 소득·자산 증빙)만 "
         "추출합니다. 공통 지시 2장의 「서류」 절을 따릅니다. 현장(방문)·대리 신청 때 확인하는 신분증·도장·위임장 상자와 계약·입주 때 내는 서류는 "
-        "다른 호출이 맡으므로 넣지 않습니다.\n" + SPLIT_NOTE
+        "다른 호출이 맡으므로 넣지 않습니다. " + DOCUMENT_EXAMPLES_NOTE + "\n" + SPLIT_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["documents"],
@@ -296,7 +313,7 @@ _DOCUMENTS_VISIT = CallSpec(
     instructions=(
         "제출 서류(requiredDocuments) 가운데 **현장(방문)·대리 신청 때 확인하는 서류**(본인·배우자·기타 대리인별 신분증·도장·인감·위임장 상자), "
         "**계약·입주 때 내는 서류**, ※ 주석에만 적힌 서류만 추출합니다. 공통 지시 2장의 「서류」 절을 따릅니다. 신청·서류 제출 단계의 공통·해당자·"
-        "계층별 서류 표는 다른 호출이 맡으므로 넣지 않습니다.\n" + SPLIT_NOTE
+        "계층별 서류 표는 다른 호출이 맡으므로 넣지 않습니다. " + DOCUMENT_EXAMPLES_NOTE + "\n" + SPLIT_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["documents"],
@@ -306,7 +323,8 @@ _CONDITIONS = CallSpec(  # 나눠 부르지 않을 때(large_text_chars 설정)�
     sections=("eligibility", "selectionRules", "requiredDocuments"),
     instructions=(
         "신청 자격(eligibility), 선정 방식(selectionRules), 제출 서류(requiredDocuments)를 추출합니다. 공통 지시 2장의 「자격」「선정」「서류」 "
-        "절을 모두 따릅니다. 대상군별 조건은 scope.targetGroups로 구분하고, 공고 기본 정보·위치·공급 조건·일정은 다시 추출하지 않습니다."
+        "절을 모두 따릅니다. 대상군별 조건은 scope.targetGroups로 구분하고, 공고 기본 정보·위치·공급 조건·일정은 다시 추출하지 않습니다.\n"
+        + DOCUMENT_EXAMPLES_NOTE
     ),
     uses_structure=True,
     max_output_tokens=OUTPUT_LIMITS["conditions"],

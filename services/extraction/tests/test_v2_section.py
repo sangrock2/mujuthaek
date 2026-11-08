@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 from events import raw_event
-from helpers import ai_part, example, source_for
+from helpers import ai_part, every_call, example, source_for
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -767,6 +767,21 @@ def test_agent_instructions_leave_out_the_location_and_supply_sections_the_agent
     assert "(`locations`)" not in agent and "(`supplyGroups`)" not in agent and "### 묶음" not in agent and "### 가격" not in agent
     assert all(head in agent for head in ("## 2-1. 공고", "## 2-4. 일정", "## 2-5. 자격", "## 2-8. 안내", "# 3. 근거(evidence)", "# 6. 도구로 일하는 법"))
     assert "`set_coverage`를 부르지 않습니다" in agent  # 다 넣은 섹션의 EXTRACTED는 기본값: 부르는 데 차례를 쓰지 않음
+
+
+def test_every_call_that_puts_documents_says_examples_after_a_kind_name_are_one_document():
+    # 2026-11-08 jbdc-16011: 「부양가족임을 확인할 수 있는 서류 (주민등록표등본, 가족관계증명서 등)」를 V2 서류 담당이 네 실행 모두 예시 둘로 나눠 넣음.
+    # 서류 담당의 할 일(둘째 메시지)에만 실어, 같은 공고의 담당들이 함께 쓰는 앞부분(지시)과 구조 호출은 그대로
+    from mujuthaek_extraction.rules.housing_notice import DOCUMENT_EXAMPLES_NOTE, RULES
+    from mujuthaek_extraction.v2.agents.prompt import system_prompt
+
+    calls = [*every_call(RULES), *(call for _, split in RULES.runaway_splits for call in split)]
+    documents = [call for call in calls if "requiredDocuments" in call.sections]
+    assert {call.name for call in documents} == {"conditions", "documents", "documents-submit", "documents-visit"}
+    assert all(DOCUMENT_EXAMPLES_NOTE in call.instructions for call in documents)
+    assert not any(DOCUMENT_EXAMPLES_NOTE in call.instructions for call in calls if call not in documents)
+    assert DOCUMENT_EXAMPLES_NOTE in section.task(graph.workers(RULES)["documents"], {})
+    assert "예시마다 서류를 나누지 않습니다" not in system_prompt(RULES) + RULES.system_prompt()
 
 
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
