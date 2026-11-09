@@ -587,6 +587,36 @@ def test_evidence_written_outside_the_item_is_tucked_into_the_item_it_belongs_to
     assert {row["id"]: row["evidence"] for row in draft.items["eligibility"]} == {"first": ["p1.1"], "top": ["p1.1"], "lost": ["p1.2"]}
 
 
+def test_content_free_junk_at_the_top_of_the_arguments_is_ignored_but_real_content_is_still_refused():
+    # 2026-11-10 23건 유료 jbdc-16011: 자격 담당 인자가 「…}]},"evidence:["],"note":"."}」처럼 끝나 맨 위 군더더기 칸(note·oops·x·garbage)
+    # 하나로 호출 전체가 거절됨(12차례 중 4차례, 첫 차례 항목 29개 포함) → 호출 상한에 끊김
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    bare = {k: v for k, v in income["exceptions"][0].items() if k != "originalText"}
+
+    def criterion(item_id, **more):
+        return {**income, "id": item_id, "exceptions": [{**bare, "id": f"{item_id}-x", "evidence": ["p1.2"]}], **more}
+
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("first", evidence=["p1.1"]), criterion("lost"), "evidence:["], note=".")]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("count", evidence=["p1.1"])], garbage=1, x="x")]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("scoped", evidence=["p1.1"])], scope={"level": "NOTICE"})]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("noted", evidence=["p1.1"])], note="소득 기준은 표 3을 따름")]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    tucked, ignored, scoped, noted = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert tucked["added"] == ["first", "lost"] and "알 수 없는 칸(note)은 담긴 것이 없어 무시했습니다" in tucked["note"]
+    assert "하위 칸의 근거(p1.2)" in tucked["note"]  # 「evidence:[」 바로잡기도 그대로
+    assert ignored["added"] == ["count"] and "(garbage, x)" in ignored["note"]
+    assert scoped["error"] == "BAD_ARGS" and "scope" in scoped["message"]  # 내용이 있는 모르는 칸은 예전처럼 거절
+    assert noted["error"] == "BAD_ARGS" and "note" in noted["message"]
+    assert [row["id"] for row in draft.items["eligibility"]] == ["first", "lost", "count"]
+
+
 def test_a_refused_fix_of_an_added_item_keeps_it_and_says_not_to_remove_it():
     # 2026-11-09 유료 확인 jbdc-16011: 고치기가 형식 오류로 두 번 거절된 신생아 자녀 나이를 담당이 뺌 → 사람 확인 대신 값이 사라짐
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
