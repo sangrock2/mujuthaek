@@ -517,6 +517,27 @@ def test_child_age_on_every_applicant_and_an_age_boundary_day_go_to_review():
     assert not is_note(day.issue())  # 사람 확인(그 조건만 보류)
 
 
+def test_a_child_age_limit_left_out_of_the_expression_goes_to_review():
+    # 2026-11-09 저장 결과 1,123개 실행: 「만6세 이하(태아포함)자녀를 둔 사람」을 자녀 수(CHILD_COUNT GTE 1)만으로 넣어 원문보다 넓은 조건 6가지
+    count = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "CHILD_COUNT", "operator": "GTE", "value": 1}
+    youngest = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": "LTE", "value": 6}
+
+    def item(original, *atoms, status="STRUCTURED"):
+        expression = (atoms[0] if len(atoms) == 1 else {"kind": "ALL", "children": list(atoms)}) if atoms else None
+        return {"category": "CHILDREN", "scope": scope(), "evidenceIds": [], "originalText": original, "rule": {"status": status, "expression": expression}}
+
+    def found(*items):
+        c = candidate(eligibility=list(items), notice={"counts": [], "targetGroups": ["한부모가족"]})
+        return [f for f in check_consistency(c, SourceBundle(texts={"pdf-text": TABLE})) if f.code == "CHILD_AGE_LIMIT_MISSING"]
+
+    [missing] = found(item("만6세 이하(태아포함)자녀를 둔 사람", count))
+    assert missing.target == "/eligibility/0" and "「만6세 이하(태아포함)자녀」" in missing.description
+    assert not is_note(missing.issue())  # 사람 확인(그 조건만 보류)
+    assert found(item("만6세 이하(태아포함)자녀를 둔 사람", count, youngest)) == []  # 조건식에 있음
+    assert found(item("만19세 미만 자녀 2명 이상을 둔 사람", count)) == []  # 미성년 자녀 수 기준
+    assert found(item("6세 이하 자녀를 둔 한부모가족", status="UNSTRUCTURED")) == []  # 조건식이 없으면 조건식 없음 검사가 봄
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [
@@ -953,8 +974,10 @@ def test_documents_asked_for_in_prose_must_be_in_the_document_list():
         "다만 현재 입주대기자는 입주대기 취소 신청서 제출 후 신청 가능합니다.",
         "※ 외국인은 신청불가 합니다.",  # 다음 문장의 「불가」는 앞 문장의 제출과 상관없음
         "선정된예비입주자는정해진일정까지아래절차이행 • 입주신청확인서제출 • 입주신청확인금입금",
+        "※ 2020.12.21. 이후 발급한 여권은 여권정보증명서를 함께 구비해야 인정",  # 「구비」도 내라는 말(jbdc-16011)
     ]
     not_asked = [
+        "인터넷 청약 시 공동인증서 또는 카카오톡인증서를 구비하여야 합니다.",  # 로그인용 전자 인증서
         "공고문을 해당 지자체(시·군·자치구)로부터 받아서 제출",  # 「받아서」는 서류가 아님
         "하는 자가 이 동의서 제출을 2회 거부하면",  # 이미 넣은 「동의서」
         "추후 청약신청납입확인서를 제출하더라도 인정하지 않습니다.",
@@ -965,10 +988,12 @@ def test_documents_asked_for_in_prose_must_be_in_the_document_list():
     ]
     text = TABLE + "\n" + "\n".join([*asked, *not_asked])
     finding = document_omission(text, ["개인정보 수집·이용 동의서"])
-    assert finding is not None and "글에서 내라고 한 서류 3개" in finding.description
-    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):
+    assert finding is not None and "글에서 내라고 한 서류 4개" in finding.description
+    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):  # 설명에는 앞 3개만 보임
         assert f"「{name}」" in finding.description
-    assert document_omission(text, ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]) is None
+    listed = ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]
+    assert "글에서 내라고 한 서류 1개가 서류 목록에 없습니다: 「여권정보증명서」" in document_omission(text, listed).description
+    assert document_omission(text, [*listed, "여권정보증명서"]) is None
 
 
 def schedule_item(kind, start, end=None):

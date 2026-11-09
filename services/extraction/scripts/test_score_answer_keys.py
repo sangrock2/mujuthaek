@@ -104,6 +104,8 @@ def _count(kind, value, groups=()):
 def test_total_offered_counts_new_reserves_and_counts_covering_every_target():
     # 2026-11-09 gndc 2건: 「모집인원 17명(우선 입주자 2명, 예비 입주자 15명)」 — 정답표 정책: 즉시 입주와 함께 뽑는 예비인원을 합친 수
     assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 2), _count("RESERVE", 15)], []), "n")["totalOffered"] == 17
+    # 모집 수를 전체(「모집인원 17명」)로 적고 예비 15명을 따로 적었으면 이미 예비를 품은 수(2026-11-09 23건 측정 gndc-1239: 32로 셌음)
+    assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 17), _count("RESERVE", 15)], []), "n")["totalOffered"] == 17
     assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 280), _count("WAITLIST", 197)], []), "n")["totalOffered"] == 280  # 기존 대기자는 빼고
     # umca-4439: 대상이 「청년」뿐인 공고의 「청년 50명」은 공고 전체 수
     assert sk.neutral_from_candidate(_candidate([_count("OFFERED", 50, ["청년"])], ["청년"]), "n")["totalOffered"] == 50

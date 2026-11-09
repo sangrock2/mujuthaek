@@ -1068,13 +1068,16 @@ def _unlisted_forms(documents: list[dict[str, Any]], text: str) -> list[str]:
 # 글 속에서 내라고 한 서류(「신청 시 희망주택목록을 함께 제출」「입주대기 취소 신청서 제출 후 신청 가능」「입주신청확인서제출」). 표·별지 서식이
 # 아니라 위 검사들이 보지 못함(2026-11-09 23건 남은 서류 놓침 gbdc-a909·jbdc-15611·sh-310976: V2 서류 담당이 넣지 않음).
 # 서류 이름 끝말 바로 뒤의 「제출」만 보고, 「받아서 제출」처럼 동사는 서류가 아닙니다. 「제출하더라도」「제출 전에 …」「제출 후 … 수정 불가」 같은
-# 주의 문장, 소명·이의신청 글, 절차 표의 단계 행(「8단계 | 청약신청서 제출」)은 뺍니다. 저장 결과 102개 실행(23건)에서 걸린 것은 실제로 내는 서류뿐
+# 주의 문장, 소명·이의신청 글, 절차 표의 단계 행(「8단계 | 청약신청서 제출」)은 뺍니다. 저장 결과 102개 실행(23건)에서 걸린 것은 실제로 내는 서류뿐.
+# 「구비」「지참」도 내라는 말입니다(2026-11-09 jbdc-16011 「2020.12.21. 이후 발급한 여권은 여권정보증명서를 함께 구비해야 인정」을 서류 담당이
+# 넣지 않음). 「공동인증서·카카오톡인증서 구비」는 인터넷 청약 로그인용 전자 인증서라 서류가 아님. 저장 결과 1,126개 실행에서 넓혀서 새로 걸린 것은
+# 이 셋뿐(인증서 둘은 뺌)
 SUBMITTED = re.compile(
-    r"([가-힣A-Za-z0-9·ㆍ]+(?:서|목록|명단|사본|등본|초본))\s*(?:을|를)?\s*(?:함께\s*|반드시\s*|별도로\s*|추가로\s*|각각\s*)?제출"
+    r"([가-힣A-Za-z0-9·ㆍ]+(?:서|목록|명단|사본|등본|초본))\s*(?:을|를)?\s*(?:함께\s*|반드시\s*|별도로\s*|추가로\s*|각각\s*)?(?:제출|구비|지참)"
     r"(?!\s*(?:하더라도|하지\s*않|할\s*필요|불필요|않아도|여부|전))"
 )
 SUBMITTED_VERB = re.compile(r"(?:아|어|해|여|와|워|라|려|에|로|면|져|쳐|켜)서$")  # 「받아서」「작성하여서」
-SUBMITTED_GENERIC = re.compile(r"^(?:서류|관련서류|구비서류|제출서류|증빙서류|서류일체|각종서류|증명서류|확인서류|첨부서류|신청서류)$")
+SUBMITTED_GENERIC = re.compile(r"^(?:서류|관련서류|구비서류|제출서류|증빙서류|서류일체|각종서류|증명서류|확인서류|첨부서류|신청서류|.*인증서)$")
 SENTENCE_END = re.compile(r"\n|다\.|\.\s")
 SUBMITTED_CAUTION = re.compile(r"^\s*후\S{0,3}\s.*?(?:수정|취소|변경|삭제|불가)|소명|이의\s*신청")  # 「제출 후 … 수정 불가」, 소명 절차
 # 이름이 짧으면(「신청서」「동의서」) 앞 낱말까지 이름으로 봅니다(「입주대기 취소 신청서」). 조사로 끝나거나 가리키는 말(「이 동의서」)은 이름이 아님
@@ -1631,6 +1634,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_definition_scope(candidate, find)
     _check_subgroup_scope(candidate, find)
     _check_age_boundary_day(candidate, find)
+    _check_child_age_limit(candidate, find)
     return findings
 
 
@@ -1654,6 +1658,37 @@ def _check_age_boundary_day(candidate: dict[str, Any], find: Any) -> None:
                 why = f"원문이 나이 경계일(「{shown}」)을 따로 정해, 만 나이 조건식으로는 그날을 정확히 담지 못합니다. 원문 확인이 필요합니다"
                 find("V7", AGE_BOUNDARY, f"/eligibility/{index}", why)
                 break
+
+
+# 원문 조건 글의 자녀 나이 한정(「6세 이하 자녀를 둔」)이 조건식에 없는 조건: 자녀 수(CHILD_COUNT GTE 1)만 남아 원문보다 넓게 판정됩니다
+# (나이 많은 자녀만 둔 신청자도 지원 가능으로). 2026-11-09 저장 결과 1,123개 실행에서 조건식이 있는데 이렇게 빠진 조건은 6가지(dcco-24804
+# 「만6세 이하(태아포함)자녀를 둔 사람」을 자녀 수만으로, jbdc-16011 한부모·신생아, dudc-8934 신혼부부, gbdc-e544 한부모·유자녀 혼인가구)로
+# 모두 진짜였음(막내 자녀 나이 속성이 생기기 전 실행). 12세 이하만 봅니다(「만19세 미만 자녀 2명 이상」은 자녀 수 기준의 미성년 정의).
+# 조건식이 없는 조건은 조건식 없음 검사가 봅니다. 사람 확인으로 보냅니다(그 조건만 보류)
+CHILD_AGE_LIMIT = "CHILD_AGE_LIMIT_MISSING"
+CHILD_AGE_PHRASE = re.compile(
+    r"(?:만\s*)?(\d{1,2})\s*세\s*(?:이하|미만)(?:\s*\([^)]{0,30}\))?\s*(?:의\s*)?(?:자녀|아동|영유아)|자녀\s*\(\s*(?:만\s*)?(\d{1,2})\s*세\s*(?:이하|미만)"
+)
+YOUNG_CHILD_AGE = 12
+
+
+def _check_child_age_limit(candidate: dict[str, Any], find: Any) -> None:
+    for index, item in enumerate(candidate.get("eligibility") or []):
+        rule = item.get("rule") or {}
+        if rule.get("status") != "STRUCTURED" or not rule.get("expression"):
+            continue
+        text = item.get("originalText") or ""
+        phrase = next((m for m in CHILD_AGE_PHRASE.finditer(text) if int(m.group(1) or m.group(2)) <= YOUNG_CHILD_AGE), None)
+        if phrase is None:
+            continue
+        expressions = [rule["expression"]]
+        for exception in item.get("exceptions") or []:
+            expressions += [exception.get("effectExpression"), (exception.get("when") or {}).get("expression")]
+        if any(atom.get("attribute") == "YOUNGEST_CHILD_AGE_YEARS" for expression in expressions for _, atom in _atoms(expression, "")):
+            continue
+        shown = " ".join(phrase.group(0).split())
+        why = f"원문 조건 글의 자녀 나이 한정(「{shown}」)이 조건식에 없어 조건이 원문보다 넓습니다. 원문 확인이 필요합니다"
+        find("V7", CHILD_AGE_LIMIT, f"/eligibility/{index}", why)
 
 
 # 보증금(또는 분양가) = 계약금 + 잔금. 실측(2026-11-07 23건 대조, jbdc-16011): 원문 계약금 「18,400.000」을 18,400원으로 읽어
