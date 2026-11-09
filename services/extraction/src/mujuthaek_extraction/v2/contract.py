@@ -80,6 +80,32 @@ def _distinct(document: DocumentModel, text: str) -> bool:
     return len(normalize(text)) >= MIN_QUOTE_CHARS and document.occurrences(text) == 1
 
 
+def anchor_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str | None:
+    """넓혀도 원문 여러 곳에 똑같이 있는 근거 글(같은 모양 표의 합계 행 등) 옆에서 원문에 한 곳뿐인 행·줄(같은 표 위 행부터, 다음 아래 행).
+    결합기는 한 항목의 인용 가운데 한 곳뿐인 인용에 가장 가까운 곳으로 여러 곳에 있는 인용의 위치를 정하므로(assemble.quotes.resolve_item_quotes)
+    그 항목 근거에 함께 붙입니다. 2026-11-10 23건 유료 확인 jbdc-16011: 공고 수량(기관추천 모집 수)의 근거 「| 합 계 | | | 30 | 8 | 7 | 15 |」가
+    원문 두 표에 똑같이 있어 결합기가 그 수량을 빼고 공고 섹션이 PARTIAL → 공고 전체가 사람 확인(게시 0)."""
+    ref = evidence if isinstance(evidence, str) else str(evidence.get("id", ""))
+    return next((text for text in document.neighbors(ref) if text.strip() and _distinct(document, text)), None)
+
+
+def joined_text(document: DocumentModel, evidence: str | dict[str, Any]) -> str | None:
+    """너무 짧은 원문 줄(줄바꿈으로 끊긴 날짜 조각 「06」 등)을 같은 쪽의 바로 앞·뒤 줄과 이은 원문 범위. 원문에 이어진 글로 한 곳뿐일 때만
+    (사이에 표·다른 글이 끼면 원문에서 찾지 못해 쓰지 않음). 2026-11-10 23건 유료 확인 sh-310672: 공고 근거 줄 하나가 「06」뿐이라 결합기가
+    「인용문이 너무 짧음」으로 공고를 사람 확인으로 보내 공고 전체가 게시되지 않음."""
+    ref = evidence if isinstance(evidence, str) else str(evidence.get("id", ""))
+    lines = [line for line in document.lines if line.id.rsplit(".", 1)[0] == ref.rsplit(".", 1)[0]]
+    at = next((i for i, line in enumerate(lines) if line.id == ref), None)
+    if at is None:
+        return None
+    before = lines[at - 1].text if at > 0 else None
+    after = lines[at + 1].text if at + 1 < len(lines) else None
+    text = lines[at].text
+    tries = [f"{before}\n{text}" if before else None, f"{text}\n{after}" if after else None]
+    tries.append(f"{before}\n{text}\n{after}" if before and after else None)
+    return next((joined for joined in tries if joined and _distinct(document, joined)), None)
+
+
 def source_sentence(document: DocumentModel, evidence: str | dict[str, Any]) -> str:
     """근거 하나 → 사람이 읽을 원문 문장(표 행은 칸 구분자 없이 칸 글자를 이음). originalText를 비운 항목에 채웁니다.
     V1 검증기는 공백·칸 구분자를 무시하고 원문과 대조하므로 이은 글도 원문 그대로로 확인됩니다."""
@@ -332,19 +358,29 @@ def to_part(
     documents: tuple[str, ...],
     coverage: dict[str, Any] | None = None,
     missing: list[dict[str, Any]] | None = None,
+    anchors: bool = False,
 ) -> dict[str, Any]:
     """항목들(각각 evidence 칸) → V1 AI 조각. 같은 인용 글은 ref 하나를 같이 씁니다.
     하위 항목(모집 수·가격·예외 등 quoteRefs가 있는 객체)은 자기 evidence가 있으면 그것을, 없으면 위 항목의 근거를 이어받습니다
-    (그 값이 위 근거에 없으면 검증기가 「값이 인용에 없음」으로 알려 에이전트가 하위 근거를 붙임)."""
+    (그 값이 위 근거에 없으면 검증기가 「값이 인용에 없음」으로 알려 에이전트가 하위 근거를 붙임).
+    anchors: 여러 곳에 똑같이 있는 근거에 위치를 정할 이웃 행을 붙이고(anchor_text), 너무 짧은 줄은 앞뒤 줄과 이음(joined_text).
+    지금은 구조 단계(공고·위치)만 씁니다 — 판정에 쓰여 근거 하나로 공고 전체가 사람 확인으로 가는 섹션. 담당 섹션에 쓰면 담당 검증 결과도
+    바뀌어 효과는 유료로 따로 확인해야 합니다."""
     refs: dict[str, str] = {}
 
-    def ref_of(entry: str | dict[str, Any]) -> str:
-        return refs.setdefault(located_text(document, entry), f"q{len(refs) + 1}")
+    def refs_of(entry: str | dict[str, Any]) -> list[str]:
+        text = located_text(document, entry)
+        if anchors and len(normalize(text)) < MIN_QUOTE_CHARS:
+            text = joined_text(document, entry) or text
+        found = [refs.setdefault(text, f"q{len(refs) + 1}")]
+        if anchors and document.occurrences(text) > 1 and (anchor := anchor_text(document, entry)) is not None:
+            found.append(refs.setdefault(anchor, f"q{len(refs) + 1}"))  # 위치를 정할 이웃 행(anchor_text)
+        return found
 
     built = []
     for item in items:
         body = complete(section, without_evidence(item), documents)
-        _attach(body, item, [], ref_of)
+        _attach(body, item, [], refs_of)
         built.append(body)
     _unique_inner_ids(built)
     part: dict[str, Any] = {
@@ -416,18 +452,18 @@ def evidence_entries(value: Any) -> list[str | dict[str, Any]]:
     return found
 
 
-def _attach(body: Any, original: Any, inherited: list[str], ref_of: Callable[[str | dict[str, Any]], str]) -> None:
+def _attach(body: Any, original: Any, inherited: list[str], refs_of: Callable[[str | dict[str, Any]], list[str]]) -> None:
     if isinstance(body, dict) and isinstance(original, dict):
         own = original.get("evidence")
-        mine = list(dict.fromkeys(ref_of(e) for e in own)) if isinstance(own, list) and own else inherited
+        mine = list(dict.fromkeys(ref for e in own for ref in refs_of(e))) if isinstance(own, list) and own else inherited
         if "quoteRefs" in body:
             body["quoteRefs"] = mine
         for key, child in body.items():
             if key != "quoteRefs" and key in original:
-                _attach(child, original[key], mine, ref_of)
+                _attach(child, original[key], mine, refs_of)
     elif isinstance(body, list) and isinstance(original, list):
         for child, source in zip(body, original, strict=False):
-            _attach(child, source, inherited, ref_of)
+            _attach(child, source, inherited, refs_of)
 
 
 @lru_cache(maxsize=64)

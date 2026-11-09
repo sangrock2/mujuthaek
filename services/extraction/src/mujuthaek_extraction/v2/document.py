@@ -96,6 +96,23 @@ class DocumentModel:
             raise KeyError(ref)
         return cells[column]
 
+    def neighbors(self, ref: str, reach: int = 6) -> list[str]:
+        """id가 가리키는 행·줄 둘레의 원문 글자: 표 행·칸이면 같은 표의 위 행부터 가까운 순서로, 다음 아래 행. 줄이면 같은 쪽·묶음의
+        위 줄부터, 다음 아래 줄(각 reach개까지). 없는 id면 빈 목록."""
+        item = self._by_id.get(ref)
+        if isinstance(item, Line):
+            same = [line for line in self.lines if line.id.rsplit(".", 1)[0] == item.id.rsplit(".", 1)[0]]
+            at = same.index(item)
+            return [line.text for line in [*reversed(same[max(0, at - reach) : at]), *same[at + 1 : at + 1 + reach]]]
+        try:
+            table_id, row, _ = _split_cell_ref(ref)
+        except KeyError:
+            return []
+        table = self._by_id.get(table_id)
+        if not isinstance(table, Table) or row >= len(table.lines):
+            return []
+        return [*reversed(table.lines[max(0, row - reach) : row]), *table.lines[row + 1 : row + 1 + reach]]
+
     def exists(self, ref: str) -> bool:
         try:
             self.text(ref)

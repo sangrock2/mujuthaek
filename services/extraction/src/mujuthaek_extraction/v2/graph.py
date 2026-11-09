@@ -9,7 +9,9 @@
   구조와 동시에 돌아 시간이 들지 않음. 담당들이 동시에 처음 보내면 저마다 앞부분을 캐시에 올려 쓰기 값을 담당 수만큼 냄.
   계획 에이전트가 표 해석·섹션별 담당 범위를 정할 자리이기도 함
 - structure: 공고 기본·위치·공급. 공급·가격 표는 코드가 옮기고(V1 공급표 장치, 열 의미만 AI) 공고·위치는 한 번 호출 — V1과 같은 방식.
-  다른 담당이 그 id를 쓰므로 먼저(2026-11-06 첫 실제 실행: 에이전트가 공급 묶음을 손으로 넣다 가격이 거의 다 빠짐)
+  다른 담당이 그 id를 쓰므로 먼저(2026-11-06 첫 실제 실행: 에이전트가 공급 묶음을 손으로 넣다 가격이 거의 다 빠짐).
+  공급표가 있는 공고는 열 의미·공고·위치 호출을 담당과 같은 앞부분으로 보냄(v2/agents/structure.py, 끄면 V1 호출 층).
+  이때 데우기는 계획이 아니라 구조가 먼저 보냄(캐시는 앞 요청이 끝난 자리에만 남아, 데우기가 끝난 뒤에 보내야 원문을 함께 읽음)
 - section: 판단이 많은 나머지 담당이 에이전트로 동시에. 담당이 낸 V1 AI 조각·호출 기록·대화 기록을 리듀서로 합침
 - conclude: 구조 단계 섹션(공고·위치·공급)의 문제만 V1 재확인으로 한 번 더 보고(담당 섹션은 담당이 검증 미들웨어로 이미 고침),
   V1과 같은 결합·검증·계약 정리·게시·기록(틀린 값 0을 지키는 결정론 부분은 V1의 검증된 코드).
@@ -86,11 +88,18 @@ def document(state: V2State, runtime: Context) -> dict[str, Any]:
 
 
 def plan(state: V2State, runtime: Context) -> dict[str, Any]:
-    named = workers(state["rules"])
-    planned = {"workers": list(named), "sections": [section for name, spec in named.items() if name != STRUCTURE for section in spec.sections]}
+    planned = planned_for(state["rules"])
+    if _shared_structure(state, runtime.context):
+        return {"plan": planned}  # 데우기는 구조가 열 의미 묻기 앞에 보냄
     from mujuthaek_extraction.v2.agents.section import prime  # 담당 공통 앞부분 캐시 데우기(LangChain)
 
     return {"plan": planned, "usage": prime({**state, "plan": planned}, runtime.context)}
+
+
+def planned_for(rules: FieldRules) -> dict[str, Any]:
+    """담당 목록과 담당들이 함께 쓰는 도구 섹션(구조 단계 섹션은 빼고). 구조 단계가 담당 앞부분을 쓸 때도 같은 도구 목록이어야 합니다."""
+    named = workers(rules)
+    return {"workers": list(named), "sections": [section for name, spec in named.items() if name != STRUCTURE for section in spec.sections]}
 
 
 def structure(state: V2State, runtime: Context) -> dict[str, Any]:
@@ -98,11 +107,26 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
     if STRUCTURE in AGENTS:
         parts, usage, trace = _unpack(AGENTS[STRUCTURE](spec, state, runtime.context))
         return {"parts": parts, "usage": usage, "traces": trace, "structure": structure_summary(parts[0]) if parts else None}
+    shared: dict[str, Any] = {}
+    if _shared_structure(state, runtime.context):
+        from mujuthaek_extraction.v2.agents.structure import run_structure  # 담당 앞부분으로 부르는 구조 단계(LangChain)
+
+        shared = run_structure(spec, {**state, "plan": planned_for(state["rules"])}, runtime.context)
+        if "parts" in shared:
+            return shared
     only = dataclasses.replace(state["rules"], calls=(spec,), split_calls=(), large_text_chars=None)
     extracted = pipeline.extract_parts(only, state["material"], runtime.context, source=state["intake"].raw.source_code)
     run = extracted.run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
-    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model}
+    fallback = {"usage": shared.get("usage") or [], "traces": shared.get("traces") or []}  # 담당 앞부분으로 받지 못한 시도의 기록
+    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model, **fallback}
+
+
+def _shared_structure(state: V2State, rt: pipeline.Runtime) -> bool:
+    """구조 단계를 담당 앞부분으로 부르는지(꽂은 구조 담당이 없을 때만). 계획 노드와 구조 노드가 같은 답을 내야 데우기를 한 번만 보냅니다."""
+    from mujuthaek_extraction.v2.agents.structure import shares
+
+    return STRUCTURE not in AGENTS and shares(state, rt)
 
 
 def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:

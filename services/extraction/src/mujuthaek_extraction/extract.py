@@ -608,6 +608,12 @@ def _supply_from_tables(
         return None
     if sink is not None:
         sink.table_mapping = (tables, mapping)
+    return code_supply_part(material, tables, mapping)
+
+
+def code_supply_part(material: ExtractionMaterial, tables: list[supply_tables.Table], mapping: dict[str, Any]) -> dict[str, Any] | None:
+    """형식에 맞는 열 의미 답 → 코드가 행을 옮긴 공급 조각. 옮길 행이 없거나 조각이 공급 형식에 맞지 않으면 None(이전 방식으로).
+    V2 구조 단계(v2/agents/structure.py)도 씁니다."""
     part = supply_tables.build_part(
         tables,
         mapping,

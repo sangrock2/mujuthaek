@@ -347,14 +347,14 @@ def task(spec: CallSpec, state: Any) -> str:
     return "\n".join(lines)
 
 
-def parts_of(spec: CallSpec, draft: SectionDraft, document: DocumentModel, documents: tuple[str, ...]) -> list[dict[str, Any]]:
+def parts_of(spec: CallSpec, draft: SectionDraft, document: DocumentModel, documents: tuple[str, ...], anchors: bool = False) -> list[dict[str, Any]]:
     parts = []
     for section in spec.sections:
         items = draft.items.get(section, [])
         coverage = draft.coverage.get(section) or (
             {"status": "EXTRACTED", "reason": None} if items else {"status": "FAILED", "reason": "담당이 항목을 넣지 못했어요."}
         )
-        parts.append(to_part(section, items, document, documents, coverage, draft.missing_for(section)))
+        parts.append(to_part(section, items, document, documents, coverage, draft.missing_for(section), anchors=anchors))
     return parts
 
 
