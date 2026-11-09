@@ -1598,7 +1598,30 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_income_tiers(candidate, find)
     _check_definition_scope(candidate, find)
     _check_subgroup_scope(candidate, find)
+    _check_age_boundary_day(candidate, find)
     return findings
+
+
+# 원문이 나이 경계일을 따로 정한 조건(「2세 미만(2세가 되는 날을 포함)」 「만 39세가 되는 날까지」): 조건식의 나이는 만 나이 정수라 그날을
+# 정확히 담지 못합니다(「미만」으로 옮기면 그날이 빠지고 「이하」로 옮기면 그 나이 한 해가 통째로 들어감). 사람 확인으로 보냅니다.
+# 2026-11-09 유료 측정 jbdc-16011 신생아 「2세 미만(2세가 되는 날을 포함)」: 추출 LT 2, 정답표 LTE 2 — 사용자 결정: 확인 필요
+AGE_BOUNDARY = "AGE_BOUNDARY_DAY"
+AGE_ATTRIBUTES = {"AGE_YEARS", "YOUNGEST_CHILD_AGE_YEARS"}
+BOUNDARY_DAY = re.compile(r"\d+\s*세가?\s*되는\s*날")
+
+
+def _check_age_boundary_day(candidate: dict[str, Any], find: Any) -> None:
+    quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
+    for index, item in enumerate(candidate.get("eligibility") or []):
+        if not any(atom.get("attribute") in AGE_ATTRIBUTES for _, atom in _atoms((item.get("rule") or {}).get("expression"), "")):
+            continue
+        for text in (item.get("originalText") or "", *(quotes.get(i, "") for i in item.get("evidenceIds") or [])):
+            day = BOUNDARY_DAY.search(text)
+            if day:
+                shown = " ".join(text[day.start() : day.end() + len(re.match(r"[^)\]」]{0,6}", text[day.end() :])[0])].split())  # 닫는 괄호 앞까지
+                why = f"원문이 나이 경계일(「{shown}」)을 따로 정해, 만 나이 조건식으로는 그날을 정확히 담지 못합니다. 원문 확인이 필요합니다"
+                find("V7", AGE_BOUNDARY, f"/eligibility/{index}", why)
+                break
 
 
 # 보증금(또는 분양가) = 계약금 + 잔금. 실측(2026-11-07 23건 대조, jbdc-16011): 원문 계약금 「18,400.000」을 18,400원으로 읽어
@@ -1712,7 +1735,7 @@ def _check_definition_scope(candidate: dict[str, Any], find: Any) -> None:
 # 「지원 불가」. 앞 실행은 같은 조건을 계층 대상으로 넣었음). 대상·공급 묶음·위치·공급 구분 어디에도 한정되지 않은 조건식 가운데
 # ① 서로 다른 조건 항목이 같은 주체·기준에 다른 경계를 걸면 더 좁은 쪽(모두 함께 적용되어 넓은 쪽은 뜻이 없어짐: 한쪽은 일부 계층의 기준으로 봄).
 #    한 항목 안의 경계 둘(「이상」을 「이하」로 뒤집어 상한이 둘이 된 나이 등)은 이 꼴이 아니라 보지 않습니다(방향 대조 OPERATOR_MISMATCH가 봄)
-# ② 부모·그 밖의 가족(자녀 등)의 나이
+# ② 부모·그 밖의 가족(자녀 등)의 나이(막내 자녀 나이 속성 포함. 공고 대상이 하나뿐인 공고의 자녀 나이는 빼고 봄)
 # ③ 원문 글이나 근거 인용 하나가 목록의 목을 둘 이상 가리킴(「나목, 마목」 「‘나’목, ‘마’목의 경우에는」). 근거도 봅니다: 다시 확인한 실행에서
 #    담당이 같은 총자산·자동차 조건의 원문 글을 「총자산가액 기준 … 이하」로 좁혀 적어 원문 글로는 안 걸렸고, 근거에는 「자산기준이 적용되는 자격
 #    - 나목(국가유공자등), 마목(북한이탈주민) …」이 그대로 있었음
@@ -1728,6 +1751,8 @@ def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
     quotes = {e["id"]: e["quote"] for e in candidate.get("evidence") or []}
     flagged: dict[int, str] = {}
     bounds: dict[tuple[str, str, str], dict[int, float]] = {}  # (주체, 기준, low·high) → 항목 → 그 항목의 가장 좁은 경계
+    # 공고 대상이 하나뿐이면(신생아 가구만 모집) 그 대상의 자녀 요건이 곧 신청자 전체의 요건일 수 있어 자녀 나이는 보지 않습니다
+    several = len((candidate.get("notice") or {}).get("targetGroups") or []) != 1
     for index, item in enumerate(candidate.get("eligibility") or []):
         if not _applies_to_everyone(item):
             continue
@@ -1738,6 +1763,9 @@ def _check_subgroup_scope(candidate: dict[str, Any], find: Any) -> None:
         for _, atom in _atoms(expression, ""):
             if atom.get("attribute") == "AGE_YEARS" and atom.get("subject") in FAMILY_SUBJECTS:
                 flagged.setdefault(index, f"{FAMILY_SUBJECTS[atom['subject']]} 나이 기준이 대상 없이 신청자 전체에 걸립니다")
+            elif atom.get("attribute") == "YOUNGEST_CHILD_AGE_YEARS" and several:
+                # 2026-11-09 유료 측정 jbdc-16011: 「6세 이하(만7세미만) 의 자녀를 둔」(신혼부부 정의의 일부)을 대상 없이 넣어 모두에게 자녀 요건이 걸림
+                flagged.setdefault(index, "자녀 나이 기준이 대상 없이 신청자 전체에 걸립니다")
         for text in (item.get("originalText") or "", *(quotes.get(i, "") for i in item.get("evidenceIds") or [])):
             letters = list(dict.fromkeys(LIST_ITEM_REFERENCE.findall(text)))
             if len(letters) >= 2:

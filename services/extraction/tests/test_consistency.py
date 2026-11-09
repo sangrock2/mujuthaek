@@ -490,6 +490,33 @@ def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
     assert [f.target for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"] == ["/eligibility/0"]
 
 
+def test_child_age_on_every_applicant_and_an_age_boundary_day_go_to_review():
+    # 2026-11-09 유료 측정 jbdc-16011: 「6세 이하(만7세미만) 의 자녀를 둔」(신혼부부 정의의 일부)을 대상 없이 넣어 모두에게 자녀 요건이 걸림.
+    # 신생아 「2세 미만(2세가 되는 날을 포함)」은 만 나이 조건식으로 그날을 담지 못함(사용자 결정: 확인 필요)
+    def child(operator, value, *groups, original="6세 이하(만7세미만 2019.10.09일 이후 출생자) 의 자녀를 둔"):
+        expression = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": operator, "value": value}
+        return {
+            "category": "CHILDREN",
+            "scope": scope(*groups),
+            "evidenceIds": [],
+            "originalText": original,
+            "rule": {"status": "STRUCTURED", "expression": expression},
+        }
+
+    def found(*items, targets=("신혼부부", "신생아")):
+        c = candidate(eligibility=list(items), notice={"counts": [], "targetGroups": list(targets)})
+        return [f for f in check_consistency(c, SourceBundle(texts={"pdf-text": TABLE})) if f.code in ("SCOPE_SUBGROUP_SUSPECTED", "AGE_BOUNDARY_DAY")]
+
+    [scoped] = found(child("LT", 7))
+    assert (scoped.code, scoped.target) == ("SCOPE_SUBGROUP_SUSPECTED", "/eligibility/0") and "자녀 나이" in scoped.description
+    assert found(child("LT", 7, "신혼부부")) == []  # 그 대상에만
+    assert found(child("LT", 2), targets=("신생아 가구",)) == []  # 공고 대상이 하나뿐이면 그 대상의 요건이 곧 모두의 요건
+    newborn = child("LT", 2, "신생아", original="① 입주자모집공고일 현재 2세 미만(2세가 되는 날을 포함)의 자녀(태아 포함)가 있는 무주택세대구성원")
+    [day] = found(newborn)
+    assert (day.code, day.target) == ("AGE_BOUNDARY_DAY", "/eligibility/0") and "「2세가 되는 날을 포함」" in day.description
+    assert not is_note(day.issue())  # 사람 확인(그 조건만 보류)
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [

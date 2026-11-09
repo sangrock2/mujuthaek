@@ -76,6 +76,11 @@ HOW_TO = {
         "(「적격여부 검수」)도 단계입니다. 연도 없이 적은 날짜(「서류심사 (7.10. ~ 7.14.)」)는 공고 연도로 넣습니다. "
         "그 날짜가 이미 다른 일정의 시작·끝이거나 이번 모집의 단계가 아니면(단지 준공·입주 연월 등) 그대로 둡니다."
     ),
+    # 2026-11-09 사용자 결정: 원문이 나이 경계일을 정한 조건은 사람 확인(consistency._check_age_boundary_day). 담당이 고칠 것은 없음
+    "AGE_BOUNDARY_DAY": (
+        "만 나이 조건식으로는 원문의 경계일(「2세가 되는 날을 포함」)을 담을 수 없어 이 조건은 사람이 확인합니다. "
+        "원문 표현(미만·이하)대로 두고 바꾸지 않습니다."
+    ),
     "CONTRACT_INCOMPLETE_INCOME_BENCHMARK": (
         "소득 기준(INCOME_BENCHMARK_PERCENT)의 benchmark에는 householdScope와, referenceYear·referenceVersion 중 하나가 꼭 있어야 합니다. "
         "원문에 기준 연도가 없으면 연도를 짐작해 넣지 말고 referenceVersion에 원문의 기준 표현(「전년도」「입주자모집공고일 당시」 등)을 그대로 적습니다."

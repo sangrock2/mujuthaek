@@ -80,6 +80,24 @@ def test_household_tiers_written_as_separate_conditions_are_flagged():
     assert not [f for f in check(fixed, "") if f.code == "TIER_CONDITION_MISSING"]
 
 
+def test_looser_limit_kept_as_its_own_condition_for_part_of_the_targets_is_flagged():
+    # 2026-11-09 유료 측정 dudc-8934: 신혼부부·예비신혼부부·한부모가족 「100% 이하」와 따로 신혼부부·예비신혼부부 「140% 이하」(원문 「출산자녀 2인 이상
+    # 20% 가산」, 맞벌이·자녀 조건은 적용 대상 글에만). 대상 목록이 달라 같은 대상끼리 견주는 규칙으로는 못 잡았음
+    percent = lambda v: atom("INCOME_BENCHMARK_PERCENT", v, unit="PERCENT")  # noqa: E731
+
+    def item(value, *groups):
+        return dict(condition(percent(value)), scope={"level": "NOTICE", "supplyGroupIds": [], "targetGroups": list(groups)})
+
+    def flagged(*items):
+        return [f.target for f in check(list(items), "") if f.code == "TIER_CONDITION_MISSING"]
+
+    base = item(100, "신혼부부", "예비신혼부부", "한부모가족")
+    assert flagged(base, item(140, "신혼부부", "예비신혼부부")) == ["/eligibility/1"]  # 느슨한 쪽만(기본 조건은 맞을 수 있음)
+    assert flagged(base, item(70, "한부모가족")) == []  # 일부 대상에 더 엄격한 기준은 함께 적용되는 뜻 있는 조건
+    assert flagged(base, item(140, "청년")) == []  # 다른 대상
+    assert flagged(item(100), item(120, "신혼부부")) == ["/eligibility/1"]  # 대상 없는 조건은 모든 신청자
+
+
 def test_tiers_joined_to_the_criterion_with_and_are_held_with_the_other_conditions_on_it():
     # 2026-11-08 유료 확인 dcco-24812: 구간 조건 누락 경고를 받은 담당이 「ALL[2인, 80% 이하]」처럼 구간을 그리고로 붙인 조건을 새로 넣어
     # 자동 게시(모두 함께 적용되어 2인이 아닌 가구는 자격 없음, 구간마다 두면 아무도 자격 없음)

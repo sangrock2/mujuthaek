@@ -142,6 +142,60 @@ def check_unconditioned_tiers(candidate: dict[str, Any]) -> list[Finding]:
                     "모든 조건이 함께 적용되어 가장 낮은 값이 모든 가구에 적용됩니다",
                 )
             )
+    return findings + _looser_subgroup_limits(candidate, {f.target for f in findings})
+
+
+def _top_uppers(expression: Any) -> list[tuple[Any, str, float]]:
+    """조건식 맨 위(원자 하나 또는 ALL의 원자들)의 소득·자산 상한 (주체, 기준, 값). ANY·NOT 안의 상한은 함께 적용되는 상한이 아니라 뺍니다."""
+    if not isinstance(expression, dict):
+        return []
+    kind = expression.get("kind")
+    children = [c for c in expression.get("children") or [] if isinstance(c, dict) and c.get("kind") == "ATOMIC"]
+    atoms = [expression] if kind == "ATOMIC" else children if kind == "ALL" else []
+    return [
+        (atom.get("subject"), atom["attribute"], float(atom["value"]))
+        for atom in atoms
+        if atom.get("attribute") in TIER_ATTRIBUTES and atom.get("operator") in ("LTE", "LT") and isinstance(atom.get("value"), int | float)
+    ]
+
+
+def _looser_subgroup_limits(candidate: dict[str, Any], done: set[str]) -> list[Finding]:
+    """대상이 다른 조건 대상의 일부(진부분집합)인데 같은 기준의 상한만 더 느슨한 조건. 모든 조건이 함께 적용되어 느슨한 상한은 쓰이지 않으며,
+    가산·완화 단계를 그 경우(맞벌이·출생자녀 수 등) 없이 따로 넣은 것입니다(2026-11-09 유료 측정 dudc-8934: 신혼부부·예비신혼부부·한부모가족의
+    「100% 이하(맞벌이 120%)」와 따로 신혼부부·예비신혼부부 「140% 이하」(원문 「출산자녀 2인 이상 20% 가산」, 경우는 적용 대상 글에만) — 대상 목록이
+    달라 위 묶음으로는 못 견줌). 느슨한 쪽만 보류합니다(기본 조건은 맞을 수 있음)."""
+    entries = []
+    for index, item in enumerate(candidate["eligibility"]):
+        rule = item["rule"]
+        if rule["status"] != "STRUCTURED" or any(a.get("attribute") in TIER_SPLITTERS for a in _atoms(rule["expression"])):
+            continue
+        scope = item.get("scope") or {}
+        place = (scope.get("level"), tuple(sorted(scope.get("supplyGroupIds") or [])), tuple(sorted(scope.get("locationIds") or [])))
+        for subject, attribute, value in _top_uppers(rule["expression"]):
+            entries.append((index, place, frozenset(scope.get("targetGroups") or []), subject, attribute, value))
+    findings = []
+    for index, place, targets, subject, attribute, value in entries:
+        if not targets or f"/eligibility/{index}" in done:
+            continue
+        wider = [
+            (other_targets, other_value)
+            for other, other_place, other_targets, other_subject, other_attribute, other_value in entries
+            if other != index and (other_place, other_subject, other_attribute) == (place, subject, attribute)
+            and (targets < other_targets or not other_targets) and other_value < value  # 대상 없는 조건은 모든 신청자
+        ]  # fmt: skip
+        if wider:
+            group, strict = wider[0]
+            shown = "·".join(sorted(group)) or "모두"
+            findings.append(
+                Finding(
+                    "V5",
+                    "TIER_CONDITION_MISSING",
+                    f"/eligibility/{index}",
+                    f"{attribute} 상한 {value:g}이(가) 이 대상을 포함하는 조건({shown})의 상한 {strict:g}보다 느슨한데 따로 있어, 모든 조건이 함께 적용되면 "
+                    "쓰이지 않습니다. 가산·완화 단계면 그 경우(맞벌이·출생자녀 수 등)를 발동 조건으로 한 기본 조건의 예외(REPLACE)로 옮깁니다",
+                )
+            )
+            done.add(f"/eligibility/{index}")
     return findings
 
 

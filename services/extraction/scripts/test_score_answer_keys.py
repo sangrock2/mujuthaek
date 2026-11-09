@@ -21,6 +21,8 @@ def _age(subject, target, operator="GTE", value=65):
     ("rule", "same"),
     [
         (_age("PARENTS", "65세 이상의 직계존속 부양자"), True),
+        (_age("OTHER", "65세 이상의 직계존속 부양자"), True),  # 가족을 「그 밖의 사람」으로 적어도 신청자가 아닌 나이(2026-11-09 dcco-24812 사목)
+        (_age("OTHER", "65세 이상인 수급권자 또는 차상위계층"), False),  # 이름 속 나이가 신청자 나이면 OTHER는 다른 사람
         (_age("APPLICANT", "65세 이상인 수급권자 또는 차상위계층"), True),
         (_age("APPLICANT", "65세 이상의 직계존속 부양자"), False),  # 이름 속 나이는 직계존속의 나이
         (_age("APPLICANT", "65세 이상인 수급권자 또는 차상위계층", operator="LTE"), False),
@@ -165,3 +167,17 @@ def test_child_age_rows_of_the_key_match_the_youngest_child_age_attribute():
     }
     score = sk.compare(key, sk.neutral_from_candidate(_candidate([], [], [item]), "n"))
     assert (score.found["자격: CHILD_AGE"], score.total["자격: CHILD_AGE"]) == (1, 1)
+
+
+def test_under_n_years_is_the_same_whole_age_as_n_minus_one_or_less():
+    # 2026-11-09 유료 측정 jbdc-16011 「6세 이하(만7세미만 …)」: 추출 LT 7, 정답표 LTE 6 — 만 나이는 정수라 같은 기준
+    key = sk._child_age_rows({"eligibility": [{"criterion": "AGE", "operator": "LTE", "value": 6, "targetGroup": "신혼부부", "text": "6세 이하 자녀를 둔"}]})
+    item = {
+        "scope": {"targetGroups": ["신혼부부"]},
+        "originalText": "6세 이하(만7세미만) 의 자녀를 둔",
+        "category": "CHILDREN",
+        "rule": {"expression": {"kind": "ATOMIC", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": "LT", "value": 7}},
+        "evidenceIds": [],
+    }
+    assert sk.compare(key, sk.neutral_from_candidate(_candidate([], [], [item]), "n")).found["자격: CHILD_AGE"] == 1
+    assert sk._whole_bound("AGE", "GT", 64) == ("GTE", 65) and sk._whole_bound("INCOME_PERCENT", "LT", 100) == ("LT", 100)  # 비율은 그대로

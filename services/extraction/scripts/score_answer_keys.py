@@ -158,12 +158,14 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
             for atom in [*_atoms((exception.get("when") or {}).get("expression")), *_atoms(exception.get("effectExpression"))]:
                 atoms.append((atom, " ".join(str(t) for t in (exception.get("description"), atom.get("basis")) if t)))
         for atom, condition in atoms:
+            criterion = CRITERION_OF.get(atom.get("attribute"), "OTHER")
+            operator, value = _whole_bound(criterion, atom.get("operator"), atom.get("value"))
             eligibility.append(
                 {
                     "targetGroup": groups,
-                    "criterion": CRITERION_OF.get(atom.get("attribute"), "OTHER"),
-                    "operator": atom.get("operator"),
-                    "value": atom.get("value"),
+                    "criterion": criterion,
+                    "operator": operator,
+                    "value": value,
                     "text": item.get("originalText"),
                     "quotes": quotes,  # 근거 인용 글(가구원수별 금액 표 줄 등). 비율 기준과 금액 기준을 맞출 때만 봅니다
                     "category": item.get("category"),
@@ -273,6 +275,18 @@ OPERATOR_ALIASES = {
 def _operator(value: Any) -> str | None:
     text = str(value or "").strip()
     return OPERATOR_ALIASES.get(text.upper()) or OPERATOR_ALIASES.get(text)
+
+
+# 만 나이는 정수라 「만 7세 미만」은 「만 6세 이하」입니다(2026-11-09 유료 측정 jbdc-16011 「6세 이하(만7세미만 …)」: 추출 LT 7, 정답표 LTE 6)
+WHOLE_CRITERIA = {"AGE", "CHILD_AGE"}
+
+
+def _whole_bound(criterion: Any, operator: Any, value: Any) -> tuple[Any, Any]:
+    """정수 기준의 미만·초과를 이하·이상으로 바꾼 (연산자, 값). 그 밖은 그대로."""
+    op = _operator(operator)
+    if criterion in WHOLE_CRITERIA and op in ("LT", "GT") and isinstance(value, int | float) and not isinstance(value, bool) and float(value).is_integer():
+        return ("LTE", int(value) - 1) if op == "LT" else ("GTE", int(value) + 1)
+    return operator, value
 
 
 # 대상 계층 이름에서 계층을 가리지 않는 말(「청년 계층」↔「고령자 계층」이 「계층」으로 겹쳐 같다고 보지 않게)
@@ -889,7 +903,11 @@ def _age_in_group_name(expected: dict[str, Any], a: dict[str, Any]) -> bool:
     for name in {e["targetGroup"] for e in expected.get("eligibility") or [] if e.get("targetGroup")}:
         for number, word, owner in NAME_AGE.findall(name):
             same = (float(number), OPERATOR_ALIASES[word]) == (values[0], operator)
-            if same and NAME_AGE_SUBJECT.get(owner, "APPLICANT") == a.get("subject") and _groups_overlap(name, a.get("targetGroup")):
+            wanted = NAME_AGE_SUBJECT.get(owner, "APPLICANT")
+            # 가족의 나이를 추출이 「그 밖의 사람」(OTHER)으로 적은 것도 신청자가 아닌 그 가족의 나이입니다(2026-11-09 유료 측정 dcco-24812
+            # 사목 「65세 이상의 직계존속을 부양하는 사람」: 추출 OTHER.AGE ≥ 65)
+            owner_ok = a.get("subject") == wanted or (wanted != "APPLICANT" and a.get("subject") == "OTHER")
+            if same and owner_ok and _groups_overlap(name, a.get("targetGroup")):
                 return True
     return False
 
@@ -943,18 +961,21 @@ def published_view(outcome: dict[str, Any], notice: str) -> dict[str, Any] | Non
     if auto is None:
         return None
     neutral = neutral_from_candidate(auto, notice)
-    neutral["rules"] = [
-        {
-            "criterion": CRITERION_OF.get(atom.get("attribute"), "OTHER"),
-            "subject": atom.get("subject"),  # 나이의 주인(신청자·부모·자녀): 정답표가 대상 이름에만 적은 나이와 견줄 때 봅니다
-            "operator": atom.get("operator"),
-            "value": atom.get("value"),
-            "targetGroup": ", ".join(item["scope"]["targetGroups"]) or None,
-            "text": item.get("originalText"),  # 계층 이름이 달라도 원문이 같으면 같은 조건으로 봅니다(compare와 같은 기준)
-        }
-        for item in auto["eligibility"]
-        for atom in _atoms(item["rule"]["expression"])
-    ]
+    neutral["rules"] = []
+    for item in auto["eligibility"]:
+        for atom in _atoms(item["rule"]["expression"]):
+            criterion = CRITERION_OF.get(atom.get("attribute"), "OTHER")
+            operator, value = _whole_bound(criterion, atom.get("operator"), atom.get("value"))
+            neutral["rules"].append(
+                {
+                    "criterion": criterion,
+                    "subject": atom.get("subject"),  # 나이의 주인(신청자·부모·자녀): 정답표가 대상 이름에만 적은 나이와 견줄 때 봅니다
+                    "operator": operator,
+                    "value": value,
+                    "targetGroup": ", ".join(item["scope"]["targetGroups"]) or None,
+                    "text": item.get("originalText"),  # 계층 이름이 달라도 원문이 같으면 같은 조건으로 봅니다(compare와 같은 기준)
+                }
+            )
     return neutral
 
 
@@ -996,6 +1017,7 @@ def _child_age_rows(key: dict[str, Any]) -> dict[str, Any]:
         child = "자녀" in f"{e.get('text') or ''} {e.get('targetGroup') or ''}"
         if e.get("criterion") == "AGE" and _operator(e.get("operator")) in ("LTE", "LT") and values and max(values) <= CHILD_AGE_MAX and child:
             e["criterion"] = "CHILD_AGE"
+        e["operator"], e["value"] = _whole_bound(e.get("criterion"), e.get("operator"), e.get("value"))  # 추출 쪽과 같은 모양으로
     return key
 
 
