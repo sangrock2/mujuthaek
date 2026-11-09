@@ -886,6 +886,7 @@ def build_part(
                     "_address": named.get("ADDRESS"),
                     "_plans": {},
                     "_anonymous": not set(named) - {"TARGET_GROUP"},  # 행에 대상 칸 말고는 이름(주택형·호·단지·동·주소·층)이 없음
+                    "_row_words": _row_words(row),  # 열 의미를 답하지 않은 칸까지 행의 이름 칸 낱말(_attach_price_tables)
                 }
                 if len(title_types) > 1:
                     current["_type_ambiguous"] = title_types
@@ -1109,6 +1110,7 @@ def build_part(
         group.pop("_merged_cells", None)
         group.pop("_unit", None)
         group.pop("_anonymous", None)
+        group.pop("_row_words", None)
         name = group.get("unitLabel") or group.get("housingTypeCode") or group["id"]
         uncertain = group.pop("_scope_uncertain", None)
         if uncertain:
@@ -1635,7 +1637,7 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             and (_housing_number(g) == number or _within_area_range(g, number))
             and (same_complex(name, _norm(g.get("_complex"))) or single_complex(group, g))
             # 대상 계층이 둘 다 적혀 있으면 맞아야 합니다(실측: 포항 전세보증금 표의 계층별 5행이 21A 묶음마다 모두 붙음)
-            and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
+            and _classes_match(groups_of, set(g["scope"]["targetGroups"]), group.get("_row_words"))
         ]
         if number is None and name:
             # 주택형·면적 없이 단지 이름으로만 행을 나눈 가격표: 다른 표에 같은 이름의 모집 묶음이 딱 하나면 그 묶음의 가격입니다
@@ -1644,7 +1646,9 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             same_name = [
                 g
                 for g in with_counts
-                if table_of(g) != table_of(group) and _norm(g.get("_complex")) == name and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
+                if table_of(g) != table_of(group)
+                and _norm(g.get("_complex")) == name
+                and _classes_match(groups_of, set(g["scope"]["targetGroups"]), group.get("_row_words"))
             ]
             targets = same_name if len(same_name) == 1 else []
         code = _norm(group.get("housingTypeCode")).upper()
@@ -1743,14 +1747,24 @@ def _class_words(name: str) -> set[str]:
     return {_norm(w) for w in re.split(r"[·․ㆍ・‧,/]", INCOME_PRESENCE.sub("", CLASS_NOTE.sub("", name))) if _norm(w)}
 
 
-def _classes_match(a: set[str], b: set[str]) -> bool:
+def _classes_match(a: set[str], b: set[str], words: set[str] | None = None) -> bool:
     """공급표와 임대조건표가 같은 계층을 다르게 적은 경우를 맞춥니다(실측 LH 인천석남 행복주택: 공급표 「대학생」「청년」
-    「고령자 (주거약자용外)」 ↔ 임대조건표 「대학생· 청년(소득無)」「청년(소득有)」「고령자」라 가격 56개가 모집 수 없는 묶음으로 남음)."""
+    「고령자 (주거약자용外)」 ↔ 임대조건표 「대학생· 청년(소득無)」「청년(소득有)」「고령자」라 가격 56개가 모집 수 없는 묶음으로 남음).
+    a에 계층 낱말이 없으면(대상이 「소득 有」뿐) words(그 가격표 행의 이름 칸 낱말, 병합으로 이어받은 칸·열 의미를 답하지 않은 칸 포함)에
+    b의 계층 낱말이 있을 때만 맞습니다. 2026-11-10 23건 유료 umca-4439: 열 의미 답이 병합된 「청 년」 열을 빼고 「소득 有·無」 열만 대상으로 답해
+    가격 48개가 「청년」 모집 묶음에 붙지 않음(같은 표를 세 번 물어 두 번이 그렇게 답함). 행에 다른 계층 이름이 있으면 붙지 않습니다."""
     if not a or not b:
         return True
     words_a = set().union(*(_class_words(x) for x in a))
     words_b = set().union(*(_class_words(x) for x in b))
+    if not words_a:
+        return bool(words and words_b & words)
     return bool(words_a & words_b)
+
+
+def _row_words(row: list[str]) -> set[str]:
+    """행의 숫자 아닌 칸 낱말(계층 이름 비교용, _class_words와 같은 정규화)."""
+    return set().union(*(_class_words(cell) for cell in row if cell and not _numeric(cell)))
 
 
 def complex_names(part: dict[str, Any]) -> list[str]:

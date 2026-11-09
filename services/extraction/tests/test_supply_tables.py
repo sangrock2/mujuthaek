@@ -417,6 +417,48 @@ def test_income_presence_in_its_own_column_is_a_qualifier_not_a_class():
     assert not st._classes_match({"고령자 소득 有"}, {"청년"})
 
 
+def test_a_price_row_whose_target_is_only_income_presence_finds_its_class_in_the_row_name_cells():
+    # 2026-11-10 23건 유료 umca-4439: 열 의미 답이 병합된 「청 년」 열을 빼고 「소득 有·無」 열만 대상으로 답해(세 번 중 두 번) 가격 48개가
+    # 「청년」 모집 묶음에 붙지 않음. 대상에 계층 낱말이 없으면 그 행의 이름 칸(답하지 않은 칸·병합으로 이어받은 칸 포함)에서 계층을 찾음
+    count_rows = (("주택형", "계층", "모집"), ("19A", "청년", "6"), ("19B", "청년", "15"), ("19A", "고령자", "3"))
+    lease_rows = (
+        ("주택형", "계층", "소득", "임대보증금(원)"),
+        ("19A/B", "청 년", "소득 有", "25,120,000"),
+        ("", "", "소득 無", "23,720,000"),
+        ("19A", "고령자", "소득 有", "21,000,000"),
+    )
+    counts = st.Table("1-1", 1, "", count_rows[0], count_rows, None)
+    lease = st.Table("2-1", 2, "", lease_rows[0], lease_rows, ((0, 1, 2, 3), (4, 5, 6, 7), (4, 5, 8, 9), (10, 11, 12, 13)))
+    mapping = {
+        "tables": [
+            {
+                "table": "1-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "HOUSING_TYPE"), column(2, "TARGET_GROUP"), column(3, "COUNT", ck="OFFERED")],
+            },
+            {
+                "table": "2-1",
+                "role": "SUPPLY",
+                "rowUnit": "HOUSING_TYPE",
+                "complex": None,
+                "columns": [column(1, "HOUSING_TYPE"), column(3, "TARGET_GROUP"), column(4, "PRICE", pk="DEPOSIT", unit="원")],
+            },
+        ]
+    }
+    groups = st.build_part([counts, lease], mapping, "pdf-text")["supplyGroups"]
+    # 고령자 행은 「청년」 묶음에 붙지 않고 고령자 묶음에만(행 이름 칸의 계층이 다름)
+    assert [(g["housingTypeCode"], g["scope"]["targetGroups"], sorted(p["sourceAmount"] for p in g["prices"])) for g in groups] == [
+        ("19A", ["청년"], ["23,720,000", "25,120,000"]),
+        ("19B", ["청년"], ["23,720,000", "25,120,000"]),
+        ("19A", ["고령자"], ["21,000,000"]),
+    ]
+    assert all("_row_words" not in g for g in groups)
+    assert not st._classes_match({"소득 有"}, {"청년"})  # 행 이름 칸을 모르면 그대로 붙이지 않음
+    assert st._classes_match({"소득 有"}, {"청년"}, {"19ab", "청년"}) and not st._classes_match({"소득 有"}, {"청년"}, {"19a", "고령자"})
+
+
 def test_price_table_without_row_names_is_reported_instead_of_skipped_silently():
     # 2026-11-07 23건 대조 bmc-75: 「[39A] 구간별 임대조건」(행 = 소득 구간, 주택형은 표 제목)에 열 해석이 가격 열만 답해 표 4개, 가격 96개가
     # 표시 없이 빠짐. 읽은 다른 표는 그대로 두고, 읽지 못한 가격표를 공급 섹션 이슈로 남깁니다(메모 + 검수 대기열)
