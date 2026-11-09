@@ -68,6 +68,18 @@ def test_zero_or_less_is_the_same_criterion_as_zero():
     assert sk._eligibility_fit(key, extracted | {"operator": "GTE"}) is None
 
 
+def test_car_not_owned_written_without_a_value_in_the_key_is_zero():
+    # 2026-11-10 23건 dcco-24791·dudc-8934: 정답표가 「자동차가액 산출대상 자동차를 소유하고 있지 않을 것」을 값 없이 EQ로 적어 재현에서 빠지고,
+    # 추출의 대학생 「자동차가액 0 이하」가 틀린 값 후보로 세어짐
+    text = "자동차가액 산출대상 자동차를 소유하고 있지 않을 것"
+    key = sk._not_owned_rows({"eligibility": [{"criterion": "CAR_ASSETS", "operator": "EQ", "value": None, "targetGroup": "대학생 계층", "text": text}]})
+    assert key["eligibility"][0]["value"] == 0
+    extracted = {"criterion": "CAR_ASSETS", "operator": "LTE", "value": 0, "targetGroup": "대학생 계층"}
+    assert sk._eligibility_fit(key["eligibility"][0], extracted) is not None
+    other = sk._not_owned_rows({"eligibility": [{"criterion": "TOTAL_ASSETS", "operator": "EQ", "value": None, "text": "총자산 기준을 배제합니다"}]})
+    assert other["eligibility"][0]["value"] is None  # 값 없는 다른 기준은 그대로
+
+
 @pytest.mark.parametrize(
     ("extracted", "same"),
     [
