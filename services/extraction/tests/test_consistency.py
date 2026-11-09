@@ -1077,6 +1077,36 @@ def unit_group(label, value=1, kind="HOUSING_UNIT"):
     return {"housingTypeCode": None, "unitLabel": label, "exclusiveAreaSqm": 24.83, "itemKind": kind, "scope": scope(), "prices": [], "counts": counts}
 
 
+def type_group(code, value, *groups, location="loc-1"):
+    counts = [{"kind": "OFFERED", "value": value, "scope": scope(*groups), "evidenceIds": []}]
+    return {
+        "housingTypeCode": code,
+        "unitLabel": None,
+        "locationId": location,
+        "itemKind": "HOUSING_TYPE",
+        "scope": scope(*groups),
+        "prices": [],
+        "counts": counts,
+    }
+
+
+def test_a_type_count_that_disagrees_with_the_same_types_counts_by_target_is_held():
+    # 2026-11-10 23건 유료 확인 dcco-24804(추가모집): 「임대대상 : 64호」 아래 형별 「공급 호수」 11·28·25를 모집 수로 읽어 게시함.
+    # 같은 형의 계층별 표 모집 수 합은 2+7·11+2·7+6 → 형별 수는 대상 주택 규모일 수 있어 보류, 계층별 수는 그대로
+    groups = [type_group("21", 11), type_group("26", 28), type_group("21", 2, "대학생"), type_group("21", 7, "청년"), type_group("26", 13, "대학생")]
+    found = [f for f in check_consistency(candidate(supplyGroups=groups), SourceBundle(texts={"pdf-text": TABLE})) if f.code == "TYPE_COUNTS_DISAGREE"]
+    assert [f.target for f in found] == ["/supplyGroups/0/counts", "/supplyGroups/1/counts"] and not is_note(found[0].issue())
+    assert "주택형 21 모집 수 11" in found[0].description and "(9)" in found[0].description
+    # 합이 맞거나, 대상별 수가 없거나, 다른 단지의 같은 형이면 보지 않습니다
+    for others in (
+        [type_group("21", 9), type_group("21", 2, "대학생"), type_group("21", 7, "청년")],
+        [type_group("21", 11), type_group("26", 28)],
+        [type_group("21", 11), type_group("21", 2, "대학생", location="loc-2")],
+    ):
+        found = check_consistency(candidate(supplyGroups=others), SourceBundle(texts={"pdf-text": TABLE}))
+        assert not [f for f in found if f.code == "TYPE_COUNTS_DISAGREE"]
+
+
 def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
     # 2026-11-09 23건 sh-311005: 「모집 세대수 원룸1세대추가모집」인데 수량 열 없는 호실 표 두 개의 24행을 모두 모집 1로 셈(대상 「1인 가구」가 붙어
     # 합계 검사는 건너뜀). 어느 호실이 이번 모집인지 정할 수 없어 그 수량을 보류합니다

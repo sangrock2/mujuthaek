@@ -1013,6 +1013,20 @@ def test_two_amount_cell_is_split_by_arrow_and_word_signs_in_written_order():
     assert conversion_prices("↑ 10,000", "30,000 15,000", "250,000 350,000")[0] == []
 
 
+def test_conversion_column_answered_as_other_right_of_the_limit_is_split_like_an_unanswered_one():
+    # 2026-11-10 23건 유료 확인 bmc-75: 열 의미 답이 「상호전환 시 임대조건」 금액 열을 단계 OTHER로 한 번만 답해 줄마다 붙은 전환 금액을
+    # 나누지 못하고 보류(가격 68개 빠짐). 한도 칸 오른쪽 가격 열의 OTHER는 비워 답한 것처럼 한도 칸의 증감 표시로 나눕니다
+    other = [column(5, "PRICE", pk="DEPOSIT", unit="천원", stage="OTHER"), column(6, "PRICE", pk="MONTHLY_RENT", unit="원", stage="OTHER")]
+    prices, part = conversion_prices("(+) 10,000 (-) 5,000", "30,000 15,000", "250,000 350,000", other)
+    assert prices == [
+        ("DEPOSIT", "30,000", "CONVERSION_DEPOSIT_UP"),
+        ("DEPOSIT", "15,000", "CONVERSION_DEPOSIT_DOWN"),
+        ("MONTHLY_RENT", "250,000", "CONVERSION_DEPOSIT_UP"),
+        ("MONTHLY_RENT", "350,000", "CONVERSION_DEPOSIT_DOWN"),
+    ]
+    assert not part.get(st.ISSUES_KEY)
+
+
 def test_column_answered_twice_as_up_and_down_takes_only_its_own_amount():
     columns = [
         column(5, "PRICE", pk="DEPOSIT", unit="천원", plan="최대 전환 증액", stage="CONVERSION_DEPOSIT_UP"),

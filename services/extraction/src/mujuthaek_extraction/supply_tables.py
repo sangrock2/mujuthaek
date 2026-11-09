@@ -973,7 +973,13 @@ def build_part(
                     if origin[r][c] >= 0:
                         price_refs.append(quote(_row_line(table.rows[origin[r][c]])))
                 base_plan = f"{row_plan} {column['plan']}" if row_plan and column.get("plan") else row_plan or column.get("plan") or "기본"
-                base_stage = column.get("priceStage") or _guess_stage(column, base_plan, limit_column, first_price, sign)
+                answered = column.get("priceStage")
+                if answered == "OTHER" and limit_column is not None and column["column"] - 1 > limit_column:
+                    # 전환 한도 칸 오른쪽 가격 열을 「그 밖」으로 답하면 비워 답한 것처럼 봅니다: 한도 칸의 증감 표시로 나누는 전환 금액
+                    # (2026-11-10 23건 유료 확인 bmc-75: 「상호전환 시 임대조건」 금액 열을 OTHER로 한 번만 답해, 줄마다 붙은 감액·증액·최대 증액
+                    # 금액을 나누지 못하고 보류 → 가격 68개 빠짐. 같은 표의 앞선 답은 방향마다 따로 답해 나뉘었음)
+                    answered = None
+                base_stage = answered or _guess_stage(column, base_plan, limit_column, first_price, sign)
                 if base_stage in ("STANDARD", "CONVERSION_DEPOSIT_UP", "CONVERSION_DEPOSIT_DOWN"):
                     # 열 제목·요금안 이름이 보증금을 올리는지 내리는지 말하면 그 방향을 씁니다(아래 부호 칸이 있으면 부호가 우선)
                     base_stage = _stage_words(f"{table.columns[c]} {base_plan}") or base_stage

@@ -424,6 +424,41 @@ def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
         )
 
 
+# 같은 단지·주택형의 모집 수가 표 두 곳에서 다름: 대상 없이 센 주택형 모집 수가 같은 주택형의 대상별 모집 수 합과 다르면, 대상 없는 수가
+# 이번 모집이 아니라 대상 주택 규모(건설·공급 호수)일 수 있어 그 수량을 보류합니다(틀린 값보다 누락). 대상별 수는 계층마다 따로 센 더 자세한 수라 둡니다.
+# 2026-11-10 23건 유료 확인 dcco-24804(추가모집): 「□ 임대대상 : 64호」 아래 형별 「공급 호수」(11·28·25 = 형·계층별 표의 건설 호수 합)를
+# 열 의미 답이 모집 수로 읽어 게시됨. 같은 형의 계층별 모집 수 합은 2+7·11+2·7+6. 앞선 답은 같은 열을 건설 호수로 읽었음(회차마다 흔들리는 판단)
+TYPE_COUNTS = "TYPE_COUNTS_DISAGREE"
+
+
+def _check_type_counts(candidate: dict[str, Any], find: Any) -> None:
+    untargeted: dict[tuple[Any, str], list[tuple[int, int]]] = {}
+    targeted: dict[tuple[Any, str], list[int]] = {}
+    for g, group in enumerate(candidate["supplyGroups"]):
+        code = str(group.get("housingTypeCode") or "").strip()
+        if not code:
+            continue
+        key = (group.get("locationId"), code)
+        for count in group["counts"]:
+            if count["kind"] != "OFFERED" or not isinstance(count["value"], int):
+                continue
+            if count["scope"]["targetGroups"]:
+                targeted.setdefault(key, []).append(count["value"])
+            else:
+                untargeted.setdefault(key, []).append((g, count["value"]))
+    for key, counts in untargeted.items():
+        summed = sum(targeted.get(key) or [])
+        for g, value in counts:
+            if key in targeted and value != summed:
+                find(
+                    "V7",
+                    TYPE_COUNTS,
+                    f"/supplyGroups/{g}/counts",
+                    f"주택형 {key[1]} 모집 수 {value}가 같은 주택형의 대상별 모집 수 합({summed})과 다릅니다. "
+                    "대상 주택 규모(건설·공급 호수)일 수 있어 원문 확인이 필요합니다",
+                )
+
+
 # ---- V8 누락 탐지 ----
 
 SECTION_HEADINGS = {
@@ -1622,6 +1657,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_price_scope(candidate, found, find)
     _check_consistency(candidate, find)
     _check_unit_counts(candidate, find)
+    _check_type_counts(candidate, find)
     _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
