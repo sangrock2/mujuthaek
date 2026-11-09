@@ -246,7 +246,6 @@ def test_format_errors_that_make_the_assembler_drop_items_or_the_whole_answer_ar
 
 
 def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_notice_is_published_like_v1(monkeypatch):
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     recorded = answers()
     # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출)이라 시험에서는 그 결과를 꽂음
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
@@ -435,7 +434,6 @@ def test_verification_separates_defects_to_fix_from_warnings_to_check():
 
 def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypatch):
     # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤 → 재시도로도 안 되면 그 담당만 멈추고 섹션은 사람 확인으로
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     monkeypatch.setattr(retry, "FIRST_DELAY_SECONDS", 0.0)
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
@@ -500,7 +498,6 @@ def test_finishing_with_an_omission_warning_left_is_sent_back_once_with_only_tho
 
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
     # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     assert section.MODEL_CALLS["eligibility"] == 12 > section.MAX_MODEL_CALLS  # 자격 담당만 상한이 큼(기준표 행 예외)
     monkeypatch.setattr(section, "MODEL_CALLS", {"eligibility": 2})
     recorded = answers()
@@ -732,7 +729,6 @@ def test_an_add_call_cut_off_at_the_output_limit_keeps_the_items_that_came_whole
 
 def test_an_agent_cut_off_without_an_add_call_to_keep_sends_its_section_to_review(monkeypatch):
     # 넣기가 아닌 호출이 잘리면 살릴 것이 없어 실행할 호출 없이 끝남: 끝내기 전에 멈춘 담당처럼 섹션을 사람 확인으로
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
     rows = [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": ["p1.1"]} for row in ai_part(example("housing"))["eligibility"]]

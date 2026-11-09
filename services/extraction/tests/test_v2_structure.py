@@ -48,7 +48,6 @@ LOOSE_MAPPING = {
 
 @pytest.fixture
 def v2(monkeypatch):
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     monkeypatch.setattr(graph, "AGENTS", {})
 
 

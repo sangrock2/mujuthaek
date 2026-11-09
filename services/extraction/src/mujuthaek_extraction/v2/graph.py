@@ -1,8 +1,12 @@
-"""V2 추출 그래프(EXTRACTION_ENGINE=v2). 흐름은 LangGraph, 에이전트는 노드 안에서 LangChain create_agent로 돕니다.
+"""추출 그래프(V2, 유일한 엔진 — pipeline.process가 run_graph로 부름). 흐름은 LangGraph, 에이전트는 노드 안에서 LangChain create_agent로 돕니다.
 
     intake ─(준비 안 됨·규칙 없음)─▶ END
       └▶ document ─┬▶ plan ──────┬▶ dispatch ─▶ section(일정·자격·선정·서류, 담당마다 Send 병렬) ▶ conclude ▶ END
-                   └▶ structure ─┘
+                   └▶ structure ─┘          └─(채팅 모델 없음)─────────────────────────────────▶ conclude
+
+채팅 모델이 없는 실행(로컬 AI·녹화·대역)은 담당 에이전트를 돌릴 수 없어, 구조 노드가 V1 방식 추출 전체(pipeline.extract_parts: 구조 →
+섹션 호출, 대체 모델·병렬 간격 포함)를 돌리고 담당 없이 마무리로 갑니다. 마무리는 V1처럼 모든 섹션을 재확인합니다(2026-11-10: V1 정해진
+단계 그래프·에이전트 방식 엔진을 걷어내며 이 길로 옮김 — 노드가 부르던 단계 함수는 그대로).
 
 - document: 원문(그림 쪽은 지금은 V1 그림 판독으로 글자를 붙임, 그림 판독 에이전트로 바꿀 자리) → 문서 모델(줄·표·칸 id)
 - plan: 담당 목록과 담당들이 함께 쓰는 도구 섹션을 정하고, 담당들의 같은 앞부분(지시·도구·원문 전체)을 한 번 캐시에 올림(prime).
@@ -35,6 +39,7 @@ from langgraph.types import Send
 
 from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.extract import ExtractionRun
+from mujuthaek_extraction.method import extraction_method
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, structure_summary
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.document import build as build_document
@@ -53,6 +58,7 @@ class V2State(TypedDict, total=False):
     image_run: ExtractionRun | None
     structure_run: ExtractionRun | None  # 구조(V1 방식) 호출 기록
     recheck_model: Any  # 구조 단계 재확인 모델(V1 extract_parts가 고른 것: 대체 모델로 넘어갔으면 그 모델)
+    extracted: Any  # 채팅 모델이 없어 V1 방식으로 모든 섹션을 뽑은 결과(pipeline.Extracted). 있으면 담당 없이 마무리
     document: DocumentModel
     plan: dict[str, Any]
     structure: dict[str, Any] | None  # 구조가 낸 id·이름 요약(뒤 담당이 참조)
@@ -107,6 +113,9 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
     if STRUCTURE in AGENTS:
         parts, usage, trace = _unpack(AGENTS[STRUCTURE](spec, state, runtime.context))
         return {"parts": parts, "usage": usage, "traces": trace, "structure": structure_summary(parts[0]) if parts else None}
+    if getattr(runtime.context.models, "chat", None) is None:  # 담당을 돌릴 수 없는 실행: V1 방식으로 모든 섹션을 뽑고 담당 없이 마무리로
+        extracted = pipeline.extract_parts(state["rules"], state["material"], runtime.context, source=state["intake"].raw.source_code)
+        return {**_v1_state(extracted), "extracted": extracted}
     shared: dict[str, Any] = {}
     if _shared_structure(state, runtime.context):
         from mujuthaek_extraction.v2.agents.structure import run_structure  # 담당 앞부분으로 부르는 구조 단계(LangChain)
@@ -116,10 +125,15 @@ def structure(state: V2State, runtime: Context) -> dict[str, Any]:
             return shared
     only = dataclasses.replace(state["rules"], calls=(spec,), split_calls=(), large_text_chars=None)
     extracted = pipeline.extract_parts(only, state["material"], runtime.context, source=state["intake"].raw.source_code)
+    fallback = {"usage": shared.get("usage") or [], "traces": shared.get("traces") or []}  # 담당 앞부분으로 받지 못한 시도의 기록
+    return {**_v1_state(extracted), **fallback}
+
+
+def _v1_state(extracted: pipeline.Extracted) -> dict[str, Any]:
+    """V1 방식 추출 결과 → 그래프 상태(조각·구조 요약·호출 기록·재확인 모델)."""
     run = extracted.run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
-    fallback = {"usage": shared.get("usage") or [], "traces": shared.get("traces") or []}  # 담당 앞부분으로 받지 못한 시도의 기록
-    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model, **fallback}
+    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model}
 
 
 def _shared_structure(state: V2State, rt: pipeline.Runtime) -> bool:
@@ -134,7 +148,9 @@ def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:
     return {}
 
 
-def fan_out(state: V2State) -> list[Send]:
+def fan_out(state: V2State) -> list[Send] | str:
+    if state.get("extracted") is not None:
+        return "conclude"  # 구조 노드가 V1 방식으로 모든 섹션을 뽑음(채팅 모델 없음)
     names = [name for name in state["plan"]["workers"] if name != STRUCTURE]
     return [
         Send("section", {**state, "worker": name, "order": order, "parts": state.get("parts") or [], "usage": [], "traces": []})
@@ -159,20 +175,23 @@ def section(state: V2State, runtime: Context) -> dict[str, Any]:
 def conclude(state: V2State, runtime: Context) -> dict[str, Any]:
     rt = runtime.context
     material, context = state["material"], state["context"]
-    base = state.get("structure_run") or ExtractionRun()
-    run = ExtractionRun(
-        parts=list(state.get("parts") or []),
-        attempts=list(base.attempts),
-        failed_calls=list(base.failed_calls),
-        raw_responses=list(base.raw_responses),
-        structure=state.get("structure"),
-    )
-    extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), state.get("recheck_model") or rt.models.primary)
-    rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
-    report = pipeline.evaluate_parts(run.parts, material, context, rt)
+    extracted = state.get("extracted")
+    scope: tuple[str, ...] | None = None  # V1 방식으로 모든 섹션을 뽑았으면 V1처럼 모든 섹션을 재확인
+    if extracted is None:
+        base = state.get("structure_run") or ExtractionRun()
+        run = ExtractionRun(
+            parts=list(state.get("parts") or []),
+            attempts=list(base.attempts),
+            failed_calls=list(base.failed_calls),
+            raw_responses=list(base.raw_responses),
+            structure=state.get("structure"),
+        )
+        extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), state.get("recheck_model") or rt.models.primary)
+        rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
+        scope = workers(state["rules"])[STRUCTURE].sections
+    report = pipeline.first_report(extracted, material, context, rt)
     if report is None:
         return {"outcome": pipeline.extraction_failed_outcome(extracted, state.get("image_run"), material, rt)}
-    scope = workers(state["rules"])[STRUCTURE].sections
     recheck, repairs = pipeline.recheck_step(state["rules"], material, context, extracted, report, rt, scope=scope)
     report = recheck.report
     actions: list[str] = []
@@ -213,10 +232,15 @@ def build() -> Any:
     graph.add_edge("document", "plan")
     graph.add_edge("document", "structure")
     graph.add_edge(["plan", "structure"], "dispatch")
-    graph.add_conditional_edges("dispatch", fan_out, ["section"])
+    graph.add_conditional_edges("dispatch", fan_out, ["section", "conclude"])
     graph.add_edge("section", "conclude")
     graph.add_edge("conclude", END)
     return graph.compile()
 
 
 V2_GRAPH = build()
+
+
+def run_graph(raw_event: dict[str, Any], rt: pipeline.Runtime, method: str | None = None) -> pipeline.Outcome:
+    """공고 1건을 그래프로 처리합니다(pipeline.process가 부름). method가 없으면 설정 EXTRACTION_METHOD."""
+    return V2_GRAPH.invoke({"raw_event": raw_event, "method": method or extraction_method()}, context=rt)["outcome"]

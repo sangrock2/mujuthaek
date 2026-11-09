@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import os
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,21 +38,17 @@ def main() -> None:
     # 전체 상한 멈춤 규칙(2026-11-05): 공고당 상한(운영 $0.50)이 아니라 실제로 쓴 금액 + 다음 공고의 예상 금액으로 정합니다.
     # 전체 상한에 맞추려고 공고당 상한을 낮추면 동시 호출이 최악 비용 예약으로 거절돼(#14, 2026-11-05 에이전트 3건) 결과가 설정 탓으로 나빠짐
     parser.add_argument("--expected-per-notice-usd", type=float, default=0.08, help="다음 공고를 시작할지 정할 때 쓰는 공고당 예상 비용")
-    parser.add_argument("--strategy", choices=("batch", "agent"), default="batch", help="재확인 답 받기 방법(EXTRACTION_RECHECK_STRATEGY)")
-    parser.add_argument("--engine", choices=("graph", "agent", "v2"), default="graph", help="추출 방식(EXTRACTION_ENGINE): 정해진 단계·에이전트·V2")
     parser.add_argument("--call-cache-dir", type=Path, help="성공한 호출을 파일로 저장·재사용(평가용, 같은 첫 추출 위 비교)")
     parser.add_argument("--env-file", type=Path, help="유료 API 키를 읽을 파일(값은 출력하지 않음). 없으면 설정 기본 위치")
     parser.add_argument("--confirm-spend", action="store_true")
     args = parser.parse_args()
     targets = [("lh", n) for n in args.lh_notice] + [("board", b) for b in args.board]
 
-    os.environ["EXTRACTION_RECHECK_STRATEGY"] = args.strategy
-    os.environ["EXTRACTION_ENGINE"] = args.engine
     settings = Settings.from_env()
     if args.env_file is not None:
         settings = dataclasses.replace(settings, env_file=args.env_file)
     factory = ModelFactory(settings)
-    print(f"모델: {factory.describe()}, 방식: {args.engine}, 재확인: {args.strategy}")
+    print(f"모델: {factory.describe()}")
     if not args.confirm_spend:
         print(f"미리보기: {len(targets)}건, 공고당 상한 ${settings.notice_budget_usd:.2f}, 전체 상한 {args.total_budget_usd}. --confirm-spend로 실행합니다.")
         return
@@ -116,7 +111,7 @@ def main() -> None:
             "error": outcome.error,
             "repairs": outcome.repairs,
             "recheck": (outcome.usage or {}).get("recheck"),
-            "agentic": _agentic_brief((outcome.usage or {}).get("agentic")),
+            "v2": _v2_brief((outcome.usage or {}).get("v2")),
         }
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False))
@@ -124,16 +119,18 @@ def main() -> None:
     print(f"전체 추정 비용 ${total:.4f} ({len(rows)}건)")
 
 
-def _agentic_brief(record: dict | None) -> dict | None:
-    """에이전트 방식 기록 요약: 에이전트마다 차례·결말·부른 도구 순서, 받아들인·보류한 문제 수."""
+def _v2_brief(record: dict | None) -> dict | None:
+    """담당 기록 요약: 담당마다 호출 수·비용, 멈춘 담당과 이유. 채팅 모델 없이 V1 방식으로 돌았으면 None."""
     if not record:
         return None
-    applied = record.get("applied") or {}
+    calls = record.get("calls") or []
+    cost = Counter()
+    for call in calls:
+        cost[call.get("agent")] += call.get("costUsd") or 0.0
     return {
-        "agents": [f"{a['name']} {a['turns']}차례 {a['outcome']}: {'→'.join(a['steps'])}" for a in record["agents"]],
-        "accepted": len(applied.get("accepted") or []),
-        "held": len(applied.get("held") or []),
-        "verifierIssues": len(record.get("verifierIssues") or []),
+        "calls": dict(Counter(call.get("agent") for call in calls if "stopped" not in call)),
+        "costUsd": {agent: round(usd, 4) for agent, usd in cost.items()},
+        "stopped": [f"{call.get('agent')}: {call['stopped']}" for call in calls if call.get("stopped")],
     }
 
 

@@ -1,4 +1,4 @@
-"""V2 그래프(EXTRACTION_ENGINE=v2): 구조 담당 먼저, 나머지 담당은 Send로 동시에, 마무리는 V1과 같은 결합·검증·게시. 유료 호출 없음."""
+"""V2 그래프(유일한 엔진): 구조 담당 먼저, 나머지 담당은 Send로 동시에, 마무리는 V1과 같은 결합·검증·게시. 유료 호출 없음."""
 
 import json
 import threading
@@ -24,7 +24,6 @@ def models():
 
 @pytest.fixture
 def v2(monkeypatch):
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     monkeypatch.setattr(graph, "AGENTS", {})
     return graph.AGENTS
 
@@ -48,12 +47,13 @@ def test_section_agents_run_structure_first_then_in_parallel_and_the_notice_is_p
     assert {c["agent"] for c in outcome.usage["v2"]["calls"]} == {"structure", "schedules", "eligibility", "selection", "documents"}
 
 
-def test_structure_is_extracted_the_v1_way_and_without_chat_models_the_other_workers_do_nothing(v2):
-    # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출). 채팅 모델이 없는 실행(로컬 AI·녹화)에서는 섹션 에이전트가 돌지 않음
+def test_without_chat_models_the_structure_node_extracts_every_section_the_v1_way(v2):
+    # 채팅 모델이 없는 실행(로컬 AI만·녹화·대역)은 담당 에이전트를 돌릴 수 없어, 구조 노드가 V1 방식 추출 전체를 돌리고 담당 없이 마무리로 감
+    # (2026-11-10 V1 정해진 단계 그래프를 걷어내며 이 길로 옮김: 그 그래프와 같은 호출·결과)
     recorded = RecordedModel(answers(), "local")
     outcome = run(raw_event(), NoticeModels(recorded, None, names={"primary": "local"}))
-    assert [r.call_name for r in recorded.requests] == ["structure"]
-    assert outcome.candidate["notice"]["title"] and outcome.usage["v2"]["calls"] == [] and outcome.status != "COMPLETED"
+    assert [a["call_name"] for a in outcome.attempts] == ["structure", "schedules", "eligibility", "selection", "documents"]
+    assert outcome.status == "COMPLETED" and outcome.event["payload"]["reviewStatus"] == "AUTO_PASSED" and "v2" not in outcome.usage
 
 
 def test_section_agents_start_one_parallel_stagger_apart_like_v1_section_calls(v2, monkeypatch):
