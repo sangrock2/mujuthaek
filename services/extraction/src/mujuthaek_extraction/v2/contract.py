@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections import deque
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
@@ -27,6 +28,17 @@ LIST_SECTIONS = ("locations", "supplyGroups", "schedules", "eligibility", "selec
 CELL_REF = re.compile(r"(.+\.r\d+)\.c\d+")
 ORIGINAL_TEXT_SECTIONS = ("eligibility", "selectionRules")  # 항목에 원문 문장 칸(originalText)이 꼭 있는 섹션
 SCOPE_DEFAULTS = {"supplyCategory": "ALL", "resolution": "RESOLVED"}  # 적용 범위에서 생략하면 채우는 값
+# 형식 오류 가운데 영어 원문 대신 고치는 법으로 알리는 것. 저장 기록 401개 담당이 받은 원문 오류: 필수 칸 없음 65번, 칸 위치 틀림 40여 번
+# (rule 안에 적은 exceptionsStatus·exceptions, 항목 바로 아래 적은 reason), 조건 하나(ATOMIC)에 넣은 children 12번. 2026-11-09 유료 확인
+# jbdc-16011 자격 담당은 「{'kind': 'ATOMIC', 'children': …」로 시작해 240자에서 잘린 오류를 두 번 받고 그 항목을 뺌.
+# 목록 상한(maxItems)도 원문이 목록 값 전체를 앞에 적어 잘림: 예외가 없다고 한(exceptionsStatus NONE_IN_SOURCE) 항목에 예외를 넣어 「… 이면
+# [{'id': …」만 받음(2026-11-09 유료 확인 jbdc-16011·23건 측정 gh-808, 저장 기록 402개 담당 중 3번)
+EXPLAINED = ("required", "additionalProperties", "oneOf", "anyOf", "maxItems")
+EXPRESSION_KINDS = ("ATOMIC", "ALL", "ANY", "NOT")
+EXPRESSION_HINT = (
+    "조건식 형식: 조건 하나는 kind ATOMIC(attribute·operator·value, children 없음), 여러 조건은 kind ALL(모두)·ANY(하나라도)에 "
+    "children 2개 이상, 반대 조건은 kind NOT에 child 하나"
+)
 NOTICE_SCOPE = {"level": "NOTICE", "locationIds": [], "supplyGroupIds": [], "targetGroups": [], **SCOPE_DEFAULTS, "description": "공고 전체에 적용돼요."}
 
 
@@ -174,26 +186,45 @@ def errors(section: str, item: dict[str, Any], documents: tuple[str, ...], limit
     item = _placeholder_refs(item)  # 하위 객체의 quoteRefs는 to_part가 채우므로(위 근거 이어받기) 빈 목록 때문에 객체 전체가 틀린 것으로 보이지 않게
     part = {"quotes": [], section: item if section == "notice" else [item], "coverage": {section: {"status": "EXTRACTED", "reason": None}}, "missingFields": []}
     skip = 1 if section == "notice" else 2
-    found = []
+    found, told = [], []
     for error in validator.iter_errors(part):
-        leaf = best_match(error.context) if error.context else error
+        leaf = _leaf(error)
         path = "/".join(str(x) for x in list(leaf.absolute_path)[skip:])
         if "quoteRefs" in path.split("/"):
             continue  # 근거는 to_part가 붙임(하위 항목은 위 근거를 이어받음)
-        found.append(f"/{path}: {_reason(validator.schema, leaf)}")
+        reason = _reason(validator.schema, leaf, section, documents)
+        if any(at == path and (reason.endswith(said) or said.endswith(reason)) for at, said in told):
+            continue  # 같은 칸을 칸 형식과 조건부 규칙이 함께 보면 같은 안내가 조건만 붙어 두 번 옴
+        told.append((path, reason))
+        found.append(f"/{path}: {reason}")
     return found[:limit]
 
 
-def _reason(root: dict[str, Any], leaf: Any) -> str:
+def _leaf(error: Any) -> Any:
+    """알릴 하위 오류. 비울 수 있는 칸(anyOf의 null 갈래)의 「null이 아님」은 빼고 고릅니다: 값을 적었으면 고칠 것은 다른 갈래에 있음
+    (조건식 오류가 「{'kind': 'ATOMIC', … is not of type 'null'」로 와서 240자에서 잘리면 이유가 보이지 않았음)."""
+    if not error.context:
+        return error
+    context = [sub for sub in error.context if not (sub.validator == "type" and sub.validator_value == "null")]
+    return best_match(context or error.context)
+
+
+def _reason(root: dict[str, Any], leaf: Any, section: str, documents: tuple[str, ...]) -> str:
     """조건부 규칙(if/then) 오류는 조건을 풀어 씁니다. 2026-11-06 실제 실행: 「endsAt: None should not be valid under {'type': 'null'}」만
-    보고 담당이 「endStatus가 FIXED이면 마감일이 필요하다」를 몰라 같은 항목을 두 번 더 거절당함(형식 도구는 if/then을 보여 주지 않음)."""
+    보고 담당이 「endStatus가 FIXED이면 마감일이 필요하다」를 몰라 같은 항목을 두 번 더 거절당함(형식 도구는 if/then을 보여 주지 않음).
+    필수 칸·칸 위치·조건식 종류 오류(EXPLAINED)는 조건이 없어도 고치는 법으로 씁니다."""
     path = list(leaf.absolute_schema_path)
     if "then" in path:
         at = len(path) - 1 - path[::-1].index("then")
         node = _walk(root, path[:at])
         condition = _condition(node.get("if")) if isinstance(node, dict) else None
         if condition:
-            return f"{condition}이면 {_consequence(leaf)}"[:240]
+            consequence = _consequence(leaf, section, documents)
+            if leaf.validator == "maxItems" and leaf.validator_value == 0:  # 넣은 것이 맞으면 목록이 아니라 조건 칸이 틀림
+                consequence += f": 넣은 것이 맞으면 {'·'.join(node['if']['properties'])}를 바꿉니다"
+            return f"{condition}이면 {consequence}"[:240]
+    if leaf.validator in EXPLAINED:
+        return _consequence(leaf, section, documents)[:240]
     return leaf.message[:240]
 
 
@@ -227,21 +258,71 @@ def _condition(schema: Any) -> str | None:
     return " 그리고 ".join(parts) or None
 
 
-def _consequence(leaf: Any) -> str:
+def _consequence(leaf: Any, section: str, documents: tuple[str, ...]) -> str:
     value = leaf.validator_value
     if leaf.validator == "not" and isinstance(value, dict) and value.get("type") == "null":
         return "이 칸을 비울 수 없습니다(값이 필요함)"
     if leaf.validator == "required":
-        return leaf.message.replace(" is a required property", " 칸이 필요합니다")
+        found = leaf.message.replace(" is a required property", " 칸이 필요합니다")
+        if "'originalText'" in leaf.message and "exceptions" in (str(key) for key in leaf.absolute_path):
+            found += "(이 예외에 evidence를 붙이면 비워 둬도 그 근거의 원문으로 채움)"
+        return found
+    if leaf.validator == "additionalProperties":
+        return _misplaced(leaf, section, documents)
+    if leaf.validator in ("oneOf", "anyOf"):  # 원문은 값 전체를 앞에 적어 240자에서 잘리면 이유가 보이지 않음
+        return EXPRESSION_HINT if _expression(leaf.instance) else "허용된 형식 어느 것에도 맞지 않습니다(칸 이름·값 종류를 도구 형식과 맞춥니다)"
     if leaf.validator == "const":
         return f"값은 {value}이어야 합니다"
     if leaf.validator == "enum":
         return f"값은 {', '.join(str(v) for v in value)} 중 하나여야 합니다"
     if leaf.validator == "minItems":
         return f"{value}개 이상 넣어야 합니다"
+    if leaf.validator == "maxItems":
+        count = len(leaf.instance) if isinstance(leaf.instance, list) else 0
+        return f"이 목록은 비워야 합니다(지금 {count}개)" if value == 0 else f"{value}개까지 넣을 수 있습니다(지금 {count}개)"
     if leaf.validator == "type":
         return f"{value} 형식이어야 합니다"
     return leaf.message
+
+
+def _misplaced(leaf: Any, section: str, documents: tuple[str, ...]) -> str:
+    """형식에 없는 칸(additionalProperties): 그 이름의 칸이 항목 형식의 어디에 있는지 알립니다."""
+    instance = leaf.instance if isinstance(leaf.instance, dict) else {}
+    allowed = (leaf.schema or {}).get("properties") or {}
+    extra = [name for name in instance if name not in allowed]
+    if not extra:
+        return leaf.message
+    if _expression(instance) and ({"children", "child", "attribute"} & set(extra)):
+        return EXPRESSION_HINT
+    where = [f"{name}({_home(section, documents, name) or '형식에 없는 칸이라 적지 않음'})" for name in extra[:3]]
+    return f"이 자리에 없는 칸입니다: {', '.join(where)}"
+
+
+def _expression(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("kind") in EXPRESSION_KINDS
+
+
+@lru_cache(maxsize=256)
+def _home(section: str, documents: tuple[str, ...], name: str) -> str | None:
+    """항목 형식에서 그 이름의 칸이 있는 가장 얕은 곳(「항목 바로 아래에 적음」·「rule 안에 적음」). 없으면 None."""
+    start, defs = _item_schema(section, documents)
+    queue: deque[tuple[Any, tuple[str, ...]]] = deque([(start, ())])
+    seen: set[str] = set()
+    while queue:
+        node, path = queue.popleft()
+        while isinstance(node, dict) and "$ref" in node:  # 조건식처럼 자기를 다시 가리키는 형식은 한 번만 들어감
+            ref = node["$ref"]
+            node = None if ref in seen else defs.get(ref.split("/")[-1])
+            seen.add(ref)
+        if not isinstance(node, dict):
+            continue
+        properties = node.get("properties") if isinstance(node.get("properties"), dict) else {}
+        if name in properties:
+            return f"{'/'.join(path)} 안에 적음" if path else "항목 바로 아래에 적음"
+        queue.extend((child, (*path, key)) for key, child in properties.items())
+        queue.extend((child, path) for key in ("anyOf", "oneOf", "allOf") for child in node.get(key) or [])
+        queue.extend((node[key], path) for key in ("items", "then", "else") if isinstance(node.get(key), dict))
+    return None
 
 
 def to_part(

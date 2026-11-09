@@ -490,6 +490,33 @@ def test_a_subgroup_condition_put_on_every_applicant_is_suspected():
     assert [f.target for f in found if f.code == "SCOPE_SUBGROUP_SUSPECTED"] == ["/eligibility/0"]
 
 
+def test_child_age_on_every_applicant_and_an_age_boundary_day_go_to_review():
+    # 2026-11-09 유료 측정 jbdc-16011: 「6세 이하(만7세미만) 의 자녀를 둔」(신혼부부 정의의 일부)을 대상 없이 넣어 모두에게 자녀 요건이 걸림.
+    # 신생아 「2세 미만(2세가 되는 날을 포함)」은 만 나이 조건식으로 그날을 담지 못함(사용자 결정: 확인 필요)
+    def child(operator, value, *groups, original="6세 이하(만7세미만 2019.10.09일 이후 출생자) 의 자녀를 둔"):
+        expression = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": operator, "value": value}
+        return {
+            "category": "CHILDREN",
+            "scope": scope(*groups),
+            "evidenceIds": [],
+            "originalText": original,
+            "rule": {"status": "STRUCTURED", "expression": expression},
+        }
+
+    def found(*items, targets=("신혼부부", "신생아")):
+        c = candidate(eligibility=list(items), notice={"counts": [], "targetGroups": list(targets)})
+        return [f for f in check_consistency(c, SourceBundle(texts={"pdf-text": TABLE})) if f.code in ("SCOPE_SUBGROUP_SUSPECTED", "AGE_BOUNDARY_DAY")]
+
+    [scoped] = found(child("LT", 7))
+    assert (scoped.code, scoped.target) == ("SCOPE_SUBGROUP_SUSPECTED", "/eligibility/0") and "자녀 나이" in scoped.description
+    assert found(child("LT", 7, "신혼부부")) == []  # 그 대상에만
+    assert found(child("LT", 2), targets=("신생아 가구",)) == []  # 공고 대상이 하나뿐이면 그 대상의 요건이 곧 모두의 요건
+    newborn = child("LT", 2, "신생아", original="① 입주자모집공고일 현재 2세 미만(2세가 되는 날을 포함)의 자녀(태아 포함)가 있는 무주택세대구성원")
+    [day] = found(newborn)
+    assert (day.code, day.target) == ("AGE_BOUNDARY_DAY", "/eligibility/0") and "「2세가 되는 날을 포함」" in day.description
+    assert not is_note(day.issue())  # 사람 확인(그 조건만 보류)
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [
@@ -594,6 +621,26 @@ ASSET_DOCUMENT_TABLE = "\n".join(
 def document_omission(text, names):
     found = [f for f in check_consistency(document_candidate(text, names), SourceBundle(texts={"pdf-text": text})) if f.code == "DOCUMENT_OMISSION_SUSPECTED"]
     return found[0] if found else None
+
+
+def test_documents_of_a_whole_table_merged_into_one_row_are_checked_by_name():
+    # 2026-11-09 유료 측정 jbdc-16011: 앞 표 마지막 칸에 합쳐진 <표9>(재직증명서·건강보험자격득실확인서 …)를 묶음 서류 「소득세납부 입증서류
+    # (아래 <표9> 참고)」 하나가 인용해, 행은 인용된 것으로 보여 서류 8개가 빠져도 안 잡혔음
+    row = (
+        "| 공통 | ※ 직인 날인 서류만 인정합니다. <표9> 소득세납부 입증 제출서류 ① 재직증명서 근로자 ② 건강보험자격득실확인서 ① 사업자등록증 "
+        "자영업자 ② 원천징수영수증 ③ 소득금액증명원 ④ 납부증명서 | 세무서 |"
+    )
+    text = TABLE + "\n" + "\n".join(["5. 제출서류", "[표 9-1]", "| 구 분 | 제 출 서 류 | 발급처 |", row])
+    umbrella = "소득세납부 입증서류 (아래 <표9> 참고)"
+
+    def note(*names):
+        found = document_omission(text, list(names))
+        return found.description if found else ""
+
+    assert "서류 이름이 여럿 든 표 행의 서류 6개가 서류 목록에 없습니다" in note(umbrella) and "「재직증명서」" in note(umbrella)
+    listed = [umbrella, "재직증명서", "건강보험자격득실확인서", "사업자등록증 사본", "원천징수영수증 또는 소득금액증명원", "납부증명서"]
+    assert "여럿 든 표 행" not in note(*listed)  # 이름마다 넣었으면(이름을 품은 서류 포함) 없음
+    assert "여럿 든 표 행" not in note(umbrella, "재직증명서", "건강보험자격득실확인서", "사업자등록증")  # 빠진 이름이 3개면 다른 이름일 수 있어 보지 않음
 
 
 def test_attached_evidence_listed_in_a_cited_document_row_is_checked_too():
@@ -830,3 +877,191 @@ def test_reference_rent_prose_and_schedule_tables_are_not_criteria_tables():
     )
     income = criterion("INCOME", "INCOME_BENCHMARK_PERCENT", 120, "PERCENT")
     assert criteria_omission(TABLE + "\n" + tables, [income]) is None
+
+
+def test_image_quotes_also_written_outside_the_reading_are_not_image_evidence():
+    # 2026-11-09 23건 sh-311005: 표지 그림의 제목 글을 공고 근거로 써 공고 전체가 검수로 감. 같은 제목이 게시글 제목(그림 밖 글)에 있음
+    head = "=== 그림 판독 공고.pdf 1쪽 (AI가 그림 속 글자를 옮김) ===\n"
+    title = "[제목] [가상 사회주택]가상스페이스 신림3호점_가상 입주자 모집 공고"
+    text = f"{title}\n--- 1쪽 ---\n{head}가상스페이스 신림3호점\n입주자 모집공고\n월평균소득 70% 이하\n공고"
+
+    def ev(id_, quote):
+        at = text.index(quote, text.index(head))  # 그림 판독 묶음 안의 글
+        return {"id": id_, "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": at, "end": at + len(quote)}, "quote": quote}
+
+    income = {"category": "INCOME", "rule": {"status": "STRUCTURED", "expression": None}, "scope": scope(), "evidenceIds": ["ev-income"]}
+    base = {
+        "evidence": [ev("ev-title", "가상스페이스 신림3호점"), ev("ev-kind", "입주자 모집공고"), ev("ev-income", "월평균소득 70% 이하")],
+        "notice": {"counts": [], "evidenceIds": ["ev-title", "ev-kind"]},
+        "locations": [],
+        "supplyGroups": [],
+        "schedules": [],
+        "eligibility": [income],
+        "selectionRules": [],
+        "requiredDocuments": [],
+        "quality": {"coverage": {s: {"status": "EXTRACTED"} for s in ("eligibility", "requiredDocuments", "schedules")}, "missingFields": []},
+    }
+    found = {(f.code, f.target) for f in check_consistency(base, SourceBundle(texts={"pdf-text": text}, pdfs={"file-1": b"pdf"}))}
+    assert ("EVIDENCE_FROM_IMAGE", "/notice") not in found  # 띄어쓰기만 다른 같은 글이 그림 밖에 있음
+    assert ("EVIDENCE_FROM_IMAGE", "/eligibility/0") in found  # 그림에만 있는 글은 그대로 사람 확인
+    short = base | {"evidence": [*base["evidence"], ev("ev-short", "공고")], "notice": {"counts": [], "evidenceIds": ["ev-short"]}}
+    found = {(f.code, f.target) for f in check_consistency(short, SourceBundle(texts={"pdf-text": text}, pdfs={"file-1": b"pdf"}))}
+    assert ("EVIDENCE_FROM_IMAGE", "/notice") in found  # 짧은 글은 우연히 겹칠 수 있어 그림 근거로 봄
+
+    # 첨부 PDF가 있으면 원문은 PDF 글자뿐이라 게시글 제목이 원문에 없음: 수집기가 읽은 게시글 제목(원본 참조)으로 확인합니다
+    pdf_only = text.replace(title + "\n", "")
+    located = [
+        {**e, "locator": {**e["locator"], "start": pdf_only.index(e["quote"]), "end": pdf_only.index(e["quote"]) + len(e["quote"])}} for e in base["evidence"]
+    ]
+    moved = base | {"evidence": located}
+    alone = {(f.code, f.target) for f in check_consistency(moved, SourceBundle(texts={"pdf-text": pdf_only}, pdfs={"file-1": b"pdf"}))}
+    assert ("EVIDENCE_FROM_IMAGE", "/notice") in alone
+    titled = moved | {"sourceReferences": [{"sourceTitle": title.removeprefix("[제목] ")}]}
+    found = {(f.code, f.target) for f in check_consistency(titled, SourceBundle(texts={"pdf-text": pdf_only}, pdfs={"file-1": b"pdf"}))}
+    assert ("EVIDENCE_FROM_IMAGE", "/notice") not in found
+
+
+def test_criterion_the_source_waives_is_not_held_for_a_value_in_a_neighbouring_row():
+    # 2026-11-09 23건 jbdc-15611: 「자산기준 : 배제」가 근거로 붙은 옆 행의 「345백만원 이하」 때문에 조건식 없음으로 보류됨
+    text = TABLE + "\n| 총자산 | 345백만원 이하 |\n| 자산기준 : 배제 |"
+    row = "| 총자산 | 345백만원 이하 |"
+    evidence = {"id": "ev-assets", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": text.index(row), "end": text.index(row) + len(row)}}
+    waived = {"category": "ASSETS", "rule": {"status": "UNSTRUCTURED", "expression": None}, "scope": scope(), "evidenceIds": ["ev-assets"]}
+    waived["originalText"] = "자산기준 : 배제"
+    written = waived | {"originalText": "총자산 345백만원 이하(단, 수급자는 배제)"}
+    for item, held in ((waived, False), (written, True)):
+        c = candidate(text=text, eligibility=[item], evidence=[evidence | {"quote": row}])
+        found = [f.target for f in check_consistency(c, SourceBundle(texts={"pdf-text": text})) if f.code == "CRITERION_NOT_STRUCTURED"]
+        assert found == (["/eligibility/0"] if held else [])
+
+
+def test_forms_named_as_attached_sheets_in_prose_must_be_in_the_document_list():
+    # 2026-11-09 23건 sh-311005: 글 속 「입주 신청서(별지 1호), 개인 정보 동의서(별지 2호), 자기소개서(별지 3호) 작성 후 …」를 V2 서류 담당이 넣지 않음
+    text = TABLE + "\n가상 서류를 작성하여 입주 신청서(별지 1호), 개인 정보 동의서(별지 2호), 자기소개서(별지 3호) 작성 후 이메일로 제출"
+    finding = document_omission(text, ["가상 신청서"])
+    assert finding is not None and "별지 서식으로 든 서류 3개" in finding.description and "개인 정보 동의서(별지 2호)" in finding.description
+    assert is_note(finding.issue())  # 빠진 값이라 표시만(담당에게는 알림)
+    assert document_omission(text, ["입주신청서", "개인정보 동의서(별지 2호)", "자기소개서"]) is None
+
+
+def test_documents_asked_for_in_prose_must_be_in_the_document_list():
+    # 2026-11-09 23건 남은 서류 놓침: gbdc-a909 「신청 시 희망주택목록을 함께⏎제출」, jbdc-15611 「입주대기 취소 신청서 제출 후 신청 가능」,
+    # sh-310976 「• 입주신청확인서제출」을 V2 서류 담당이 넣지 않음
+    asked = [
+        "해당 모집단위 내 주택을 사전 열람하여 신청 시 희망주택목록을 함께",
+        "제출해야 하며, 순번에 따라 배정합니다.",
+        "다만 현재 입주대기자는 입주대기 취소 신청서 제출 후 신청 가능합니다.",
+        "※ 외국인은 신청불가 합니다.",  # 다음 문장의 「불가」는 앞 문장의 제출과 상관없음
+        "선정된예비입주자는정해진일정까지아래절차이행 • 입주신청확인서제출 • 입주신청확인금입금",
+    ]
+    not_asked = [
+        "공고문을 해당 지자체(시·군·자치구)로부터 받아서 제출",  # 「받아서」는 서류가 아님
+        "하는 자가 이 동의서 제출을 2회 거부하면",  # 이미 넣은 「동의서」
+        "추후 청약신청납입확인서를 제출하더라도 인정하지 않습니다.",
+        "✅ 신청서 제출 전에 신청자격기준을 확인하시기 바랍니다.",
+        "▫ 청약신청서 제출 후 신청당일 마감시간 전까지만 온라인 신청내용 취소 및 삭제 후 재신청 가능",
+        "| 8단계 | 청약신청서 제출 |",  # 절차 표의 단계
+        "자료를 수정한 후 동 기관의 확인서를 제출하여 소명",
+    ]
+    text = TABLE + "\n" + "\n".join([*asked, *not_asked])
+    finding = document_omission(text, ["개인정보 수집·이용 동의서"])
+    assert finding is not None and "글에서 내라고 한 서류 3개" in finding.description
+    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):
+        assert f"「{name}」" in finding.description
+    assert document_omission(text, ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]) is None
+
+
+def schedule_item(kind, start, end=None):
+    return {
+        "kinds": [kind],
+        "startsAt": {"precision": "DAY" if len(start) == 10 else "MONTH", "value": start},
+        "endsAt": {"precision": "DAY" if len(end) == 10 else "MONTH", "value": end} if end else None,
+        "scope": scope(),
+        "evidenceIds": [],
+    }
+
+
+def test_dated_steps_written_as_numbered_lines_must_be_in_the_schedules():
+    # 2026-11-09 23건 sh-311087: 일정표 밖 「나. 계약체결: 2027. 1. 20.(수) ~」「라. 입주기간: 2027. 2~4월 중」을 V2 일정 담당이 넣지 않음
+    text = TABLE + "\n".join(
+        [
+            "",
+            "가. 당첨자 발표: 2026. 12. 30.(수)",
+            "나. 계약체결: 2027. 1. 20.(수) ~ 2027. 1. 22.(금) (변동가능)",
+            "라. 입주기간: 2027. 2~4월 중 (변동 가능)",
+            "| 가상단지 | 입주월 2012. 8. | 30년 임대 |",  # 단지가 처음 입주한 달: 이번 모집의 단계가 아님
+            "입주자모집공고일(2026.10.08) 현재 만19세 이상",  # 「입주자」는 사람
+            "임대차 계약기간: 2027. 2. 1. ~ 2029. 1. 31.",  # 임대 기간은 단계가 아님
+            "소득은 2025. 12. 31. 기준으로 산정",
+        ]
+    )
+    listed = [schedule_item("ANNOUNCEMENT", "2026-10-08"), schedule_item("WINNER_ANNOUNCEMENT", "2026-12-30")]
+
+    def omission(schedules):
+        found = [
+            f
+            for f in check_consistency(candidate(text=text, schedules=schedules), SourceBundle(texts={"pdf-text": text}))
+            if f.code == "SCHEDULE_OMISSION_SUSPECTED"
+        ]
+        return found[0] if found else None
+
+    finding = omission(listed)
+    assert finding.target == "/quality/coverage/schedules" and is_note(finding.issue())
+    assert "단계 2개" in finding.description and "계약체결: 2027. 1. 20." in finding.description and "입주기간: 2027. 2~4월" in finding.description
+    complete = [*listed, schedule_item("CONTRACT", "2027-01-20", "2027-01-22"), schedule_item("MOVE_IN", "2027-02", "2027-04")]
+    assert omission(complete) is None
+
+
+def test_dated_steps_in_unrolled_timelines_tables_and_yearless_dates_must_be_in_the_schedules():
+    # 2026-11-09 23건 남은 일정 놓침: umca-4439 순서도가 풀려 단계 이름 줄과 날짜 줄이 따로(입주자격 조사·소명 심사), gndc-1239 연도 없는
+    # 「서류심사 (7.10. ~ 7.14.)」, gh-809 일정 표의 「적격여부 검수」 칸(단계 낱말이 아닌 칸도 같은 표라 봄)
+    timeline = ["입주자격 조사 소명 심사 확정명단 발표", "(개별통보)", "2026. 7. 10. 2026. 7. 22. ~ 24. 2026. 7. 27. ~ 2026. 8. ~ 2026. 9."]
+    yearless = ["| 서류심사 (7.30. ~ 7.31.) | - 서류검토 및 적격여부판단 |"]
+    table = [
+        "| 신청접수 |  | 적격여부 검수 |  | 당첨자 발표 |",
+        "| 2026.07.22.(수) ~ 2026.07.24.(금) |  | 2026.08.03(월) ~ 2026.08.17(월) |  | 2026.09.15.(화) 이후 |",
+    ]
+    noise = [
+        "전용 36.29㎡, 접수 인원은 공급 호수의 2.5배수",  # 면적·배수는 연도 없는 날짜가 아님
+        "1985.11.07 ~ 2007.11.06 출생자",  # 날짜 줄이 아니고 공고일보다 한참 앞섬
+    ]
+    listed = [
+        schedule_item("ANNOUNCEMENT", "2026-07-10"),
+        schedule_item("APPLICATION", "2026-07-22", "2026-07-24"),
+        schedule_item("WINNER_ANNOUNCEMENT", "2026-09"),
+    ]
+
+    def omission(lines):
+        text = TABLE + "\n".join(["", *lines])
+        found = [
+            f
+            for f in check_consistency(candidate(text=text, schedules=listed), SourceBundle(texts={"pdf-text": text}))
+            if f.code == "SCHEDULE_OMISSION_SUSPECTED"
+        ]
+        return found[0].description if found else ""
+
+    assert "단계 2개" in omission(timeline) and "입주자격 조사 소명 심사 확정명단 발표 … 2026. 7. 27" in omission(timeline)  # 7.10·7.22·9월은 있음
+    assert "단계 1개" in omission(yearless) and "서류심사 (7.30." in omission(yearless)
+    assert "단계 3개" in omission(table) and "적격여부 검수 … 2026.08.03" in omission(table)  # 칸 이름으로 보여 줌
+    assert omission(noise) == ""
+    assert "단계 6개" in omission(timeline + yearless + table + noise)  # 표 행이 날짜만 있는 줄이어도 같은 날짜는 한 번만
+
+
+def unit_group(label, value=1, kind="HOUSING_UNIT"):
+    counts = [{"kind": "OFFERED", "value": value, "scope": scope("1인 가구"), "evidenceIds": []}]
+    return {"housingTypeCode": None, "unitLabel": label, "exclusiveAreaSqm": 24.83, "itemKind": kind, "scope": scope(), "prices": [], "counts": counts}
+
+
+def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
+    # 2026-11-09 23건 sh-311005: 「모집 세대수 원룸1세대추가모집」인데 수량 열 없는 호실 표 두 개의 24행을 모두 모집 1로 셈(대상 「1인 가구」가 붙어
+    # 합계 검사는 건너뜀). 어느 호실이 이번 모집인지 정할 수 없어 그 수량을 보류합니다
+    total = {"kind": "OFFERED", "value": 1, "scope": {"targetGroups": [], "supplyCategory": "ALL"}}
+    rooms = [unit_group(label) for label in ("201", "202", "203", "201", "202", "203")]  # 같은 호실이 표 두 개에 나옴
+    found = check_consistency(candidate(notice={"counts": [total]}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
+    held = [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]
+    assert [f.target for f in held] == [f"/supplyGroups/{g}/counts" for g in range(6)] and not is_note(held[0].issue())
+    assert "호실 3곳" in held[0].description
+    # 서로 다른 호실 수가 공고 전체 모집 수 이하이거나(같은 호실이 두 표에 나온 것뿐), 주택형 묶음이면 보지 않습니다
+    for notice_total, groups in ((total | {"value": 3}, rooms), (total, [unit_group("59A", 10, "HOUSING_TYPE"), unit_group("59B", 5, "HOUSING_TYPE")])):
+        found = check_consistency(candidate(notice={"counts": [notice_total]}, supplyGroups=groups), SourceBundle(texts={"pdf-text": TABLE}))
+        assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]

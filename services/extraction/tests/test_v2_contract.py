@@ -8,6 +8,7 @@ from test_v2_document import TEXT
 
 from mujuthaek_extraction.rules.base import document_ids
 from mujuthaek_extraction.v2.contract import (
+    EXPRESSION_HINT,
     LIST_SECTIONS,
     EvidenceError,
     complete,
@@ -98,6 +99,36 @@ def test_wrong_fields_are_reported_as_location_and_reason():
     schedule["startsAt"] = 123
     found = errors("schedules", schedule, documents)
     assert found and found[0].startswith("/startsAt: ")
+
+
+def test_missing_and_misplaced_fields_and_condition_kinds_are_told_how_to_fix():
+    # 2026-11-09 저장 기록 401개 담당이 받은 영어 원문 오류: 필수 칸 없음 65번, 칸 위치 틀림 40여 번, 조건 하나(ATOMIC)에 children 12번.
+    # 유료 확인 jbdc-16011 자격 담당은 「{'kind': 'ATOMIC', 'children': …」로 시작해 240자에서 잘린 오류를 두 번 받고 그 항목을 뺌
+    data = example("housing")
+    documents = tuple(document_ids(source_for("housing", data).material))
+    base = ai_part(data)["eligibility"][2]
+    expression = base["rule"]["expression"]
+
+    def found(change):
+        item = copy.deepcopy(base)
+        change(item)
+        return errors("eligibility", item, documents)
+
+    joined = found(lambda item: item["rule"].update(expression={"kind": "ATOMIC", "children": [expression, expression]}))
+    assert joined == [f"/rule/expression: {EXPRESSION_HINT}"]  # 칸 형식과 조건부 규칙이 같은 안내를 두 번 주지 않음
+    assert found(lambda item: item["rule"].update(expression={**expression, "kind": "ALL"})) == joined
+    moved = found(lambda item: item["rule"].update(exceptionsStatus=item.pop("exceptionsStatus")))
+    assert "/rule: 이 자리에 없는 칸입니다: exceptionsStatus(항목 바로 아래에 적음)" in moved and "/: 'exceptionsStatus' 칸이 필요합니다" in moved
+    assert found(lambda item: item.update(reason="글로 남김")) == ["/: 이 자리에 없는 칸입니다: reason(rule 안에 적음)"]
+    assert found(lambda item: item["exceptions"][0].pop("originalText")) == [
+        "/exceptions/0: 'originalText' 칸이 필요합니다(이 예외에 evidence를 붙이면 비워 둬도 그 근거의 원문으로 채움)"
+    ]
+    assert found(lambda item: item["scope"].update(supplyGroups=["a"])) == ["/scope: 이 자리에 없는 칸입니다: supplyGroups(형식에 없는 칸이라 적지 않음)"]
+    # 예외가 없다고 한 항목에 넣은 예외(2026-11-09 유료 확인 jbdc-16011·23건 측정 gh-808): 목록 값 전체 대신 비우거나 조건 칸을 바꾸라고
+    assert found(lambda item: item.update(exceptionsStatus="NONE_IN_SOURCE")) == [
+        "/exceptions: exceptionsStatus가 NONE_IN_SOURCE·NOT_REVIEWED 중 하나이면 이 목록은 비워야 합니다(지금 1개): "
+        "넣은 것이 맞으면 exceptionsStatus를 바꿉니다"
+    ]
 
 
 def test_quotes_handed_to_the_assembler_are_widened_until_they_occur_once_in_the_source():

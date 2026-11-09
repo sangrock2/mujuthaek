@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 from events import raw_event
-from helpers import ai_part, example, source_for
+from helpers import ai_part, every_call, example, source_for
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -147,7 +147,7 @@ def test_an_exception_left_without_original_text_is_filled_from_its_own_evidence
     result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
     answers = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
     assert answers[0]["added"] == ["added"] and [f["id"] for f in answers[0]["failed"]] == ["orphan"]
-    assert "'originalText' is a required property" in answers[0]["failed"][0]["errors"][0]
+    assert "'originalText' 칸이 필요합니다(이 예외에 evidence를 붙이면" in answers[0]["failed"][0]["errors"][0]
     assert answers[1] == {"ok": "eligibility/added 고침"}  # 고치며 넣은 예외도 채움
     [exception] = draft.items["eligibility"][0]["exceptions"]
     assert exception["id"] == "later" and exception["originalText"] == "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"
@@ -455,10 +455,53 @@ def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypa
     assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈
 
 
+def test_finishing_with_an_omission_warning_left_is_sent_back_once_with_only_those_warnings():
+    # 2026-11-09 유료 측정 jbdc-16011: 자격 담당이 기준표 21행 누락 메모(확인할 것)를 「소득표 일부는 가점 기준」으로 보고 끝냄.
+    # 끝내기를 한 번 거두고 빠진 것 의심만 모아 행마다 정하게 하고, 두 번째 끝내기는 받음
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    omission = {
+        "code": "SCHEDULE_OMISSION_SUSPECTED",
+        "target": "/quality/coverage/schedules",
+        "description": "날짜가 적힌 단계가 일정에 없어요: 「서류심사 (7.10.」",
+    }
+    suspect = {"code": "EXCEPTION_SUSPECTED", "target": "/schedules/0", "item": "apply", "description": "기준값 뒤에 다른 기준값이 있어요."}
+
+    def agent_run(*turns, issues, calls=8):
+        draft = SectionDraft(("schedules",))
+        context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+        context.check = lambda: list(issues)
+        agent = create_agent(
+            ToolCallingFake(messages=iter([*turns, AIMessage(content="불리면 안 됨")])),
+            tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+            middleware=[VerifyMiddleware(calls)],
+            context_schema=SectionContext,
+        )
+        result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+        humans = [m.content for m in result["messages"] if m.type == "human"][1:]
+        return draft, humans, [m for m in result["messages"] if m.type == "ai"]
+
+    def finish(summary):
+        return AIMessage(content="", tool_calls=[call("finish", summary=summary)])
+
+    add = AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule]), call("finish", summary="다 넣었어요.")])
+    # 넣기·끝내기 → 새 문제라 검증 결과로 거둠 → 끝내기 → 빠진 것 의심만 모아 한 번 더 거둠 → 이유를 적은 끝내기는 받음
+    reason = "「서류심사」는 공고 일정표가 아니라 내부 절차라 넣지 않아요."
+    draft, humans, said = agent_run(add, finish("확인했어요."), finish(reason), issues=[omission, suspect])
+    assert len(said) == 3 and humans[0].startswith("# 검증 결과") and humans[1].startswith("# 끝내기 전 확인") and draft.finished == reason
+    assert "SCHEDULE_OMISSION_SUSPECTED" in humans[1] and "EXCEPTION_SUSPECTED" not in humans[1]  # 그 메모만
+    # 빠진 것 의심이 없으면 확인할 것만 남은 끝내기는 그대로 받음(한 번 더 거두지 않음)
+    draft, humans, said = agent_run(add, finish("확인했어요."), issues=[suspect])
+    assert len(said) == 2 and len(humans) == 1 and draft.finished == "확인했어요."
+    # 호출 상한까지 두 차례가 남지 않았거나(두 번 부른 뒤 상한 3번), 상한을 모르는 해결 담당이면 빠진 것 의심이 남아도 받음
+    for calls in (3, None):
+        draft, humans, said = agent_run(add, finish("확인했어요."), issues=[omission, suspect], calls=calls)
+        assert len(said) == 2 and len(humans) == 1 and draft.finished == "확인했어요."
+
+
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
     # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
     monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
-    assert section.MODEL_CALLS["eligibility"] == 10 > section.MAX_MODEL_CALLS  # 자격 담당만 상한이 큼(기준표 행 예외)
+    assert section.MODEL_CALLS["eligibility"] == 12 > section.MAX_MODEL_CALLS  # 자격 담당만 상한이 큼(기준표 행 예외)
     monkeypatch.setattr(section, "MODEL_CALLS", {"eligibility": 2})
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
@@ -487,7 +530,8 @@ def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_t
 
 
 def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agent_goes_on():
-    # 2026-11-06 23건 측정: 넣기 도구에 evidence를 항목 밖에 적어 TypeError → 도구 실행기가 오류를 올려 측정 전체가 멈춤
+    # 2026-11-06 23건 측정: 넣기 도구에 evidence를 항목 밖에 적어 TypeError → 도구 실행기가 오류를 올려 측정 전체가 멈춤.
+    # 항목 안으로 옮길 수 있는 맨 위 근거는 옮겨 넣고(아래 시험), 옮길 수 없으면(원문에 없는 id) 예전처럼 아무것도 넣지 않음
     schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply"}
 
     @tool
@@ -496,7 +540,7 @@ def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agen
         raise RuntimeError("도구 결함")
 
     turns = [
-        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule], evidence=["p1.2"]), call("broken", note="x")]),
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule], evidence=["p9.9"]), call("broken", note="x")]),
         AIMessage(content="", tool_calls=[call("add_schedules", items=[{**schedule, "evidence": ["p1.2"]}])]),
         AIMessage(content="끝"),
     ]
@@ -513,6 +557,54 @@ def test_unknown_tool_arguments_and_tool_errors_come_back_as_errors_and_the_agen
     assert answers[0]["error"] == "BAD_ARGS" and "evidence" in answers[0]["message"]
     assert answers[1] == {"error": "TOOL_FAILED", "message": "RuntimeError: 도구 결함"}
     assert answers[2]["added"] == ["apply"] and result["messages"][-1].content == "끝"  # 다음 차례에 고쳐 넣고 끝냄
+
+
+def test_evidence_written_outside_the_item_is_tucked_into_the_item_it_belongs_to():
+    # 2026-11-09 유료 측정·확인: 자격 담당이 마지막 항목을 근거 없이 닫고 목록에 「evidence:[」 글을 넣은 뒤 근거 id를 도구 인자 맨 위에 적거나
+    # 빠뜨림(LangSmith 원래 인자 6건) → 호출 전체·그 항목이 거절되어, 호출 상한에 끊긴 자격 담당 셋이 이 거절에 2~4차례를 씀
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    bare = {k: v for k, v in income["exceptions"][0].items() if k != "originalText"}
+
+    def criterion(item_id, **more):
+        return {**income, "id": item_id, "exceptions": [{**bare, "id": f"{item_id}-x", "evidence": ["p1.2"]}], **more}
+
+    turns = [
+        # 맨 위 근거는 「evidence:[」 바로 앞 항목에(자기 근거가 있는 항목은 그대로)
+        AIMessage(
+            content="", tool_calls=[call("add_eligibility", items=[criterion("first", evidence=["p1.1"]), criterion("top"), "evidence:["], evidence=["p1.1"])]
+        ),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("lost"), "evidence:["])]),  # 근거 id가 없으면 하위 칸 근거
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("has", evidence=["p1.1"])], evidence=["p1.1"])]),  # 받을 항목이 없음
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("bare")])]),  # 「evidence:[」 없이 빠뜨린 근거는 그대로 거절
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    moved, nested, refused, forgot = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert moved["added"] == ["first", "top"] and moved["failed"] == [] and moved["note"].startswith("top 항목: 도구 인자 맨 위에 적은 근거를 항목 안으로")
+    assert nested["added"] == ["lost"] and "하위 칸의 근거(p1.2)" in nested["note"]
+    assert refused["error"] == "BAD_ARGS" and forgot["added"] == [] and "evidence 칸이 비었습니다" in forgot["failed"][0]["errors"][0]
+    assert {row["id"]: row["evidence"] for row in draft.items["eligibility"]} == {"first": ["p1.1"], "top": ["p1.1"], "lost": ["p1.2"]}
+
+
+def test_a_refused_fix_of_an_added_item_keeps_it_and_says_not_to_remove_it():
+    # 2026-11-09 유료 확인 jbdc-16011: 고치기가 형식 오류로 두 번 거절된 신생아 자녀 나이를 담당이 뺌 → 사람 확인 대신 값이 사라짐
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule])]),
+        AIMessage(content="", tool_calls=[call("update_item", section="schedules", item_id="apply", changes={"evidence": ["p9.9"]})]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+    refused = [json.loads(m.content) for m in result["messages"] if m.type == "tool"][1]
+    assert refused["error"] == "BAD_ITEM" and "앞 내용 그대로" in refused["message"] and "빼지 않습니다" in refused["message"]
+    assert draft.items["schedules"][0]["evidence"] == ["p1.2"]
 
 
 def test_items_refused_when_added_are_reported_to_fix_until_they_are_added_again():
@@ -769,6 +861,38 @@ def test_agent_instructions_leave_out_the_location_and_supply_sections_the_agent
     assert "`set_coverage`를 부르지 않습니다" in agent  # 다 넣은 섹션의 EXTRACTED는 기본값: 부르는 데 차례를 쓰지 않음
 
 
+def test_every_call_that_puts_documents_says_examples_after_a_kind_name_are_one_document():
+    # 2026-11-08 jbdc-16011: 「부양가족임을 확인할 수 있는 서류 (주민등록표등본, 가족관계증명서 등)」를 V2 서류 담당이 네 실행 모두 예시 둘로 나눠 넣음.
+    # 서류 담당의 할 일(둘째 메시지)에만 실어, 같은 공고의 담당들이 함께 쓰는 앞부분(지시)과 구조 호출은 그대로
+    from mujuthaek_extraction.rules.housing_notice import DOCUMENT_EXAMPLES_NOTE, DOCUMENT_NAME_NOTE, RULES
+    from mujuthaek_extraction.v2.agents.prompt import system_prompt
+
+    calls = [*every_call(RULES), *(call for _, split in RULES.runaway_splits for call in split)]
+    documents = [call for call in calls if "requiredDocuments" in call.sections]
+    assert {call.name for call in documents} == {"conditions", "documents", "documents-submit", "documents-visit"}
+    assert all(DOCUMENT_EXAMPLES_NOTE in call.instructions and DOCUMENT_NAME_NOTE in call.instructions for call in documents)
+    assert not any(DOCUMENT_EXAMPLES_NOTE in call.instructions for call in calls if call not in documents)
+    assert DOCUMENT_EXAMPLES_NOTE in section.task(graph.workers(RULES)["documents"], {})
+    assert "예시마다 서류를 나누지 않습니다" not in system_prompt(RULES) + RULES.system_prompt()
+
+
+def test_section_rules_go_only_to_the_call_of_that_section():
+    # 2026-11-09 23건: 구조 호출은 월까지만 있는 공고일로 공고 범위를 PARTIAL로 적어 공고 전체를 보류, 자격은 자동차 미소유를 글로만,
+    # 일정은 선정 결과 발표를 OTHER로 넣음. 호출 지시에만 실어 공통 지시(담당들이 함께 쓰는 앞부분)는 그대로
+    from mujuthaek_extraction.rules.housing_notice import RULES
+    from mujuthaek_extraction.v2.agents.prompt import system_prompt
+
+    workers = graph.workers(RULES)
+    assert "announcedOn은 null" not in system_prompt(RULES)
+    assert "announcedOn은 null" in workers["structure"].instructions and "PARTIAL로 두지 않습니다" in workers["structure"].instructions
+    assert "CAR_ASSETS_KRW LTE 0" in workers["eligibility"].instructions
+    assert "WINNER_ANNOUNCEMENT" in workers["schedules"].instructions and "시작과 끝을 모두" in workers["schedules"].instructions
+    # 새 속성(막내 자녀 나이)은 사전에 있어도 공통 지시의 속성 목록에 넣지 않고 자격 호출 지시에만(공통 지시가 바뀌면 모든 호출의 캐시가 바뀜)
+    assert "YOUNGEST_CHILD_AGE_YEARS" not in system_prompt(RULES) and "YOUNGEST_CHILD_AGE_YEARS" not in RULES.system_prompt()
+    assert "YOUNGEST_CHILD_AGE_YEARS" in workers["eligibility"].instructions and "「4,542」 다음 줄" in workers["eligibility"].instructions
+    assert "YOUNGEST_CHILD_AGE_YEARS" not in workers["documents"].instructions + workers["schedules"].instructions
+
+
 def test_an_item_citing_only_in_its_parts_is_told_to_fill_its_own_evidence_with_what_the_parts_cite():
     # 2026-11-06 5건 재측정 bmc-106: 조건식·예외에만 근거를 붙이고 항목 자체 evidence를 비운 성년·무주택·소득·자산·자동차 기준이
     # 「근거 id를 1개 이상 붙입니다」만 두 번 받고 거절된 채 끝남
@@ -798,6 +922,10 @@ def test_a_warning_comes_with_how_to_fix_it_from_the_common_rules():
     assert "## 확인할 것 1개" in scoped and "- DEFINITION_SCOPE_SUSPECTED:" in scoped and "scope.targetGroups" in scoped
     everyone = verify_report(draft, [{**issue, "code": "SCOPE_SUBGROUP_SUSPECTED"}])  # 계층 조건을 대상 없이 넣음(2026-11-08 bmc-106)
     assert "## 확인할 것 1개" in everyone and "- SCOPE_SUBGROUP_SUSPECTED:" in everyone and "계층마다 대상을 따로" in everyone
+    assert "CAR_ASSETS_KRW LTE 0" in shown  # 자동차 미소유 기준(2026-11-09 23건: 대학생 4건을 글로만 남김)
+    dated = {"code": "SCHEDULE_OMISSION_SUSPECTED", "target": "/quality/coverage/schedules", "description": "날짜가 적힌 단계 1개"}
+    steps = verify_report(SectionDraft(("schedules",), items={"schedules": []}), [dated])  # 번호 붙은 글 줄의 계약·입주(2026-11-09 sh-311087)
+    assert "## 확인할 것 1개" in steps and "일정표 밖" in steps
 
 
 def test_tiers_split_into_separate_conditions_must_be_fixed_into_one_condition_with_exceptions():

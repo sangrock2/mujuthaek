@@ -80,6 +80,24 @@ def test_household_tiers_written_as_separate_conditions_are_flagged():
     assert not [f for f in check(fixed, "") if f.code == "TIER_CONDITION_MISSING"]
 
 
+def test_looser_limit_kept_as_its_own_condition_for_part_of_the_targets_is_flagged():
+    # 2026-11-09 유료 측정 dudc-8934: 신혼부부·예비신혼부부·한부모가족 「100% 이하」와 따로 신혼부부·예비신혼부부 「140% 이하」(원문 「출산자녀 2인 이상
+    # 20% 가산」, 맞벌이·자녀 조건은 적용 대상 글에만). 대상 목록이 달라 같은 대상끼리 견주는 규칙으로는 못 잡았음
+    percent = lambda v: atom("INCOME_BENCHMARK_PERCENT", v, unit="PERCENT")  # noqa: E731
+
+    def item(value, *groups):
+        return dict(condition(percent(value)), scope={"level": "NOTICE", "supplyGroupIds": [], "targetGroups": list(groups)})
+
+    def flagged(*items):
+        return [f.target for f in check(list(items), "") if f.code == "TIER_CONDITION_MISSING"]
+
+    base = item(100, "신혼부부", "예비신혼부부", "한부모가족")
+    assert flagged(base, item(140, "신혼부부", "예비신혼부부")) == ["/eligibility/1"]  # 느슨한 쪽만(기본 조건은 맞을 수 있음)
+    assert flagged(base, item(70, "한부모가족")) == []  # 일부 대상에 더 엄격한 기준은 함께 적용되는 뜻 있는 조건
+    assert flagged(base, item(140, "청년")) == []  # 다른 대상
+    assert flagged(item(100), item(120, "신혼부부")) == ["/eligibility/1"]  # 대상 없는 조건은 모든 신청자
+
+
 def test_tiers_joined_to_the_criterion_with_and_are_held_with_the_other_conditions_on_it():
     # 2026-11-08 유료 확인 dcco-24812: 구간 조건 누락 경고를 받은 담당이 「ALL[2인, 80% 이하]」처럼 구간을 그리고로 붙인 조건을 새로 넣어
     # 자동 게시(모두 함께 적용되어 2인이 아닌 가구는 자격 없음, 구간마다 두면 아무도 자격 없음)
@@ -138,3 +156,25 @@ def test_lower_bound_of_a_stage_band_in_eligibility_is_held():
     trigger = condition(percent(100), [{"when": {"status": "STRUCTURED", "expression": percent(100, "GT")}, "effectExpression": percent(90)}])
     age = condition(atom("AGE_YEARS", 19, unit="YEAR") | {"operator": "GTE"})
     assert not [f for f in check([condition(percent(100)), trigger, age], "") if f.code == "LOWER_BOUND_IN_ELIGIBILITY"]
+
+
+def test_bracket_headers_payment_shares_and_rent_tier_rows_are_not_missing_tiers():
+    # 2026-11-09 23건: 임대조건 소득 구간 머리 칸(「1구간 (~130%)」), 계약금·잔금 비율, 소득 구간별 임대료표(「130%초과 150%이하 … 140% 적용」)를
+    # 소득 기준의 빠진 예외로 의심해 조건을 보류함
+    income = condition(atom("INCOME_BENCHMARK_PERCENT", 150, unit="PERCENT"))
+    assert check([income], "기준 중위소득의 150% | 가구 원수 | 1구간 (~130%) | 2구간 (~170%)") == []
+    hundred = condition(atom("INCOME_BENCHMARK_PERCENT", 100, unit="PERCENT"))
+    assert check([hundred], "월평균소득의 100%) | 표준임대조건 › 임대보증금(원) › 계약금(20%) | 표준임대조건 › 잔금(80%)") == []
+    assert check([income], "130%초과 150%이하 19,882,000 3,976,400 147,200 140% 적용") == []
+    # 기준값 뒤에 바로 붙은 가산 기준은 그대로 의심합니다
+    [finding] = check([income], "월평균소득 150% 이하(맞벌이 180%)")
+    assert "180%" in finding.description
+
+
+def test_values_used_by_selection_rules_are_not_missing_tiers():
+    # 2026-11-09 jbdc-16011: 가점표 「가구 소득 … 80% 이하인 경우 : 1점」(가점 규칙은 글로만 남김)이 소득 100% 조건의 빠진 예외로 의심됨
+    text = "월평균소득의 100% 이하인 자 | 가구 소득 월평균 소득의 80% 이하인 경우 : 1점"
+    income = condition(atom("INCOME_BENCHMARK_PERCENT", 100, unit="PERCENT"))
+    assert check([income], text)
+    scoring = {"kind": "SCORING", "originalText": "가구 소득 월평균 소득의 80% 이하인 경우 : 1점", "rule": {"status": "UNSTRUCTURED", "expression": None}}
+    assert check_missing_exceptions({"eligibility": [income], "selectionRules": [scoring]}, SourceBundle(texts={"text": text})) == []

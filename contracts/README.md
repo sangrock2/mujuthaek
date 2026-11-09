@@ -13,7 +13,7 @@
 | `mappings/extraction-projection.v1.json` | 상세 자격 조건에서 판정용 조건으로 옮기는 필드 대응표 | Python 발행·검사 / Java 수신 |
 | `schemas/eligibility.v1.json` | 적용 범위·조건식·예외를 보존하는 자격 조건 | extraction 작성, eligibility 판정, 담당자 4와 공유 |
 | `schemas/notice-common.v1.json` | 가격·수량·일정·단지/건물·근거 등 공통 자료형 | 위 스키마가 `$ref`로 사용 |
-| `schemas/eligibility-attributes.v1.json` | 지원하는 조건 속성 22개의 코드·단위·연산자·값 제약·benchmark 필수 여부 사전 | extraction / eligibility 공유. JSON Schema가 아닌 사전 데이터이며, 속성별 규칙의 유일한 기준 |
+| `schemas/eligibility-attributes.v1.json` | 지원하는 조건 속성 23개의 코드·단위·연산자·값 제약·benchmark 필수 여부 사전 | extraction / eligibility 공유. JSON Schema가 아닌 사전 데이터이며, 속성별 규칙의 유일한 기준 |
 | `events/extraction.completed.v1.json` | 추출·자동 검증이 끝난 결과 이벤트(팀 이벤트 흐름 문서 확정 형식). 큐 `mujuthaek.extraction.completed` | extraction → api(notice) |
 | `examples/` | 주거·상가·부분 실패·이벤트의 가상 예시 7개 | 계약 검토·회귀 검사 |
 | `tools/validate_contracts.py`, `tests/` | JSON Schema 및 참조·정합성·완료 조건 검사 | 로컬 / CI |

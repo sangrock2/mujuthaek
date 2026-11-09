@@ -36,6 +36,8 @@ AMOUNT_NOTE = re.compile(r"\s*\(\s*(?![^)]*(?:원|미정))[가-힣][가-힣\s]{0
 TWO_AMOUNTS = re.compile(r"\d[\d,.]*\s+\(?[+\-−]?\)?\s*\d")
 # 마침표 뒤 숫자가 꼭 세 자리(「18,400.000」「389.000」)면 자릿수 쉼표를 마침표로 잘못 찍은 것인지 소수점인지 글자만으로 정할 수 없습니다
 POINT_OR_COMMA = re.compile(r"\d\.\d{3}(?!\d)")
+# 자릿수 쉼표 뒤가 꼭 세 자리가 아니면(「2억5,4000만」「12,30」) 숫자를 잘못 적은 것이라 어느 값인지 정할 수 없습니다
+BAD_GROUPING = re.compile(r"\d,(?!\d{3}(?!\d))")
 
 
 def _clean(text: str) -> str:
@@ -67,6 +69,18 @@ def _small(text: str) -> Decimal | None:
     return total
 
 
+def point_readings(source_amount: str | None, source_unit: str | None) -> tuple[int, ...]:
+    """마침표 뒤 숫자가 세 자리라 모호한 금액(「18,400.000」)의 두 읽기: 마침표를 자릿수 쉼표로 본 값과, 소수점으로 본 값(그 1/1000,
+    원 단위로 떨어질 때만). 모호한 금액이 아니면 빈 튜플. 어느 읽기인지는 부른 쪽이 다른 근거(같은 요금안의 합)로 정합니다."""
+    compact = "".join(unicodedata.normalize("NFKC", source_amount or "").split())
+    if not POINT_OR_COMMA.search(compact):
+        return ()
+    comma = to_krw(compact.replace(".", ","), source_unit).amount_krw
+    if comma is None:
+        return ()
+    return (comma, comma // 1000) if compact.count(".") == 1 and comma % 1000 == 0 else (comma,)
+
+
 def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     """원문 금액과 단위를 원 단위 정수로 환산합니다. 모호하거나 읽을 수 없으면 금액 대신 검수 사유를 담아 돌려줍니다."""
     if source_amount is None or not _clean(source_amount):
@@ -79,6 +93,10 @@ def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     # 소수점으로 읽어 계약금 18,400원이 자동 게시됨. 어느 쪽인지 짐작하지 않고 검수로 넘깁니다
     if POINT_OR_COMMA.search("".join(unicodedata.normalize("NFKC", source_amount).split())):
         return AmountResult(None, f"마침표 뒤 숫자가 세 자리라 자릿수 쉼표의 오타인지 소수점인지 모호합니다: {source_amount!r}")
+    # 2026-11-09 유료 확인 sh-310672: 청년 총자산 「2억5,4000만 원 이하」를 2억 + 5억4천만 = 7.4억으로 읽은 조건이 근거 확인을 통과해 자동 게시됨
+    # (V1도 같은 값을 게시). 근거 확인도 이 환산을 쓰므로 이런 금액은 원문에서 확인한 값이 되지 않습니다
+    if BAD_GROUPING.search("".join(unicodedata.normalize("NFKC", source_amount).split())):
+        return AmountResult(None, f"자릿수 쉼표 뒤가 세 자리가 아니라 숫자를 잘못 적은 것인지 모호합니다: {source_amount!r}")
     # 금액 뒤 괄호 꼬리말(「500 (정액)」「1,000(부가세 포함)」)은 금액의 성격을 말할 뿐이라 떼고 읽습니다(2026-10-24 세 번째 채점:
     # 계약금 「500 (정액)」이 환산되지 않아 화면에 계약금 숫자가 없었음). 꼬리말에 숫자가 있으면 다른 금액일 수 있어 떼지 않습니다
     amount = _clean(AMOUNT_NOTE.sub("", unicodedata.normalize("NFKC", source_amount)))

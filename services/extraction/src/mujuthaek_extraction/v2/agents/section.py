@@ -46,8 +46,10 @@ log = logging.getLogger(__name__)
 
 MAX_MODEL_CALLS = 8  # 담당 하나의 모델 호출(차례) 상한: 넣기·고치기·끝 + 여유(2026-11-06 세 번째 실행: 6이면 서류 75개 공고가 넣다가 걸림)
 # 담당별 상한. 자격은 기준표 행을 예외로 넣고 고치는 차례가 더 듦(2026-11-07 유료 확인 dudc-8934: 8번째 호출에서 항목 13개를 남기고 끊김).
-# 저장된 유료 기록 282번 중 상한에 끊긴 담당은 자격뿐이었고, 늘린 두 호출은 앞부분을 캐시로 읽어 한 번에 약 $0.002~0.005
-MODEL_CALLS = {"eligibility": 10}
+# 저장된 유료 기록 282번 중 상한에 끊긴 담당은 자격뿐이었고, 늘린 두 호출은 앞부분을 캐시로 읽어 한 번에 약 $0.002~0.005.
+# 10 → 12(2026-11-09 23건 유료 측정·jbdc-16011 확인: 자격 담당 셋이 10번에 끊겨 자격 섹션 전체가 검수로 감 — 대상 전체 누락을 대상별 조건으로
+# 다시 넣다가 끊기고, 근거 위치·형식 거절에 2~4차례를 씀. 거절은 쓰기 도구가 줄이고 남는 끊김에 두 차례를 더 둠)
+MODEL_CALLS = {"eligibility": 12}
 # 호출 상한 미들웨어(ModelCallLimitMiddleware, exit_behavior="end")가 상한에서 대화를 끝내며 붙이는 답의 머리
 CALL_LIMIT_MESSAGE = "Model call limits exceeded"
 TRACE_CHARS = 400  # 대화 기록에 남길 도구 인자·결과 앞부분
@@ -76,6 +78,7 @@ RESOLVER_OUTPUT_TOKENS = 16_000
 LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "IMAGE_TRANSCRIBED_VALUES",
     "CONVERSION_DIRECTION_CORRECTED",
+    "AMOUNT_READ_BY_PARTS",
     "EVIDENCE_AMBIGUOUS",
     "EVIDENCE_QUOTE_TOO_SHORT",
 }
@@ -94,7 +97,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     calls = MODEL_CALLS.get(spec.name, MAX_MODEL_CALLS)
     limit = ModelCallLimitMiddleware(run_limit=calls, exit_behavior="end")
     model = chat(spec.name, max_output_tokens=spec.max_output_tokens)  # V1 섹션 호출과 같은 출력 한도(첫 차례에 다 넣음)
-    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware(), CutCallMiddleware()])
+    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware(calls), CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
     try:

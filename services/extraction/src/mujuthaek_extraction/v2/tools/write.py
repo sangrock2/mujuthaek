@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +38,15 @@ JUDGED = ("notice", "eligibility")  # 판정에 쓰여 비울 수 없는 섹션
 MISSING_REASONS = ("NOT_IN_SOURCE", "TO_BE_ANNOUNCED", "SOURCE_ATTACHMENT_REQUIRED", "CONFLICT", "UNREADABLE", "NOT_APPLICABLE")
 PATCH_HINT = "거절된 항목은 update_item(같은 id, 틀린 칸만)으로 고치면 넣어집니다. 항목 전체를 다시 보내지 않습니다."
 RULE_STATUS_CLEARS = {"UNSTRUCTURED": "expression", "STRUCTURED": "reason"}  # 규칙 상태(status)를 바꾸면 계약상 비워야 하는 칸
+# 넣은 항목의 고치기가 거절되면 앞 내용이 그대로 남습니다. 저장 기록 401개 담당에서 이런 거절 102번 뒤 3번은 그 항목을 뺐음(2026-11-09 유료 확인
+# jbdc-16011: 나이 경계일 경고가 걸린 신생아 자녀 나이를 고치다 형식 거절 두 번 뒤 뺌 → 사람 확인 대신 값이 사라짐)
+KEPT_AS_IS = (
+    "고치지 않았습니다(항목은 앞 내용 그대로). 오류를 고쳐 다시 부릅니다. 고치지 못해도 항목을 빼지 않습니다(검증 경고가 남으면 그 항목은 사람이 확인)."
+)
+# 근거를 항목 밖에 적는 실수: 마지막 항목을 근거 없이 닫고 목록에 「evidence:[」 글을 넣은 뒤, 근거 id를 도구 인자 맨 위에 적거나 빠뜨림.
+# 맨 위에 적으면 모르는 인자라 호출 전체가, 빠뜨리면 그 항목이 거절됨(2026-11-09 유료 측정·확인: 호출 상한 10번에 끊긴 자격 담당 셋
+# jbdc-16011·bmc-75·gbdc-e544가 이 거절에 2~4차례를 씀, LangSmith 원래 인자 6건 중 맨 위 근거 2건·근거 없음 4건)
+STRAY_MARK = re.compile(r"\s*evidence\b", re.IGNORECASE)
 
 
 @dataclass
@@ -84,8 +94,61 @@ class SectionContext(V2Context):
     check: SkipValidation[Callable[[], list[dict[str, Any]]] | None] = None  # 지금 초안을 V1 결합·검증기로 본 이 담당 섹션의 문제(검증 미들웨어가 부름)
 
 
-def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> str:
-    """섹션별 형식 도구(add_<섹션>, v2/tools/typed.py)가 부르는 넣기: 항목마다 형식·근거를 검사해 맞는 것만 넣고 틀린 것은 「위치: 이유」로."""
+def tuck_evidence(document: DocumentModel, items: Any, stray: Any = None) -> tuple[Any, Any, list[str]]:
+    """근거를 항목 밖에 적은 실수를 바로잡아 (항목들, 옮기지 못한 맨 위 근거, 바로잡은 내용)을 돌려줍니다. 목록에 낀 「evidence:[」 글은 빼고,
+    그 바로 앞 항목(글이 없으면 마지막 항목)에 자기 근거가 없을 때만 맨 위 근거(stray)를 넣습니다. 맨 위 근거도 없으면 「evidence:[」 글이
+    있을 때만 그 항목 하위 칸(조건식·예외 등)의 근거를 씁니다(거절된 담당도 그렇게 고침). 원문에 없는 근거 id면 바로잡지 않습니다."""
+    if not isinstance(items, list):
+        return items, stray, []
+    kept: list[Any] = []
+    target = None
+    for entry in items:
+        if isinstance(entry, str) and STRAY_MARK.match(entry):
+            target = len(kept) - 1 if kept and isinstance(kept[-1], dict) else target
+            continue
+        kept.append(entry)
+    marked = target is not None
+    if target is None and stray is not None and kept and isinstance(kept[-1], dict):
+        target = len(kept) - 1
+    if target is None or _own_evidence(kept[target]):
+        return kept, stray, []
+    item = kept[target]
+    nested = [ref if isinstance(ref, str) else str(ref.get("id") or "") for ref in evidence_entries(item) if isinstance(ref, str | dict)]
+    refs = ([stray] if isinstance(stray, str) else stray) if stray is not None else (list(dict.fromkeys(ref for ref in nested if ref)) if marked else [])
+    if not _resolves(document, refs):
+        return kept, stray, []
+    kept[target] = {**item, "evidence": refs}
+    label = item.get("id") or "이"
+    if stray is not None:
+        return kept, None, [f"{label} 항목: 도구 인자 맨 위에 적은 근거를 항목 안으로 옮겨 넣었습니다"]
+    return (
+        kept,
+        None,
+        [f"{label} 항목: 근거가 항목 밖으로 빠져(「evidence:[」) 하위 칸의 근거({', '.join(refs[:5])})를 항목 근거로 넣었습니다(다르면 update_item으로 고침)"],
+    )
+
+
+def _own_evidence(item: dict[str, Any]) -> bool:
+    return isinstance(item.get("evidence"), list) and bool(item["evidence"])
+
+
+def _resolves(document: DocumentModel, refs: Any) -> bool:
+    """근거 목록이 비지 않았고 id가 모두 원문에 있는지(part가 있으면 그 조각 안에 있는지까지)."""
+    if not isinstance(refs, list) or not refs:
+        return False
+    try:
+        for ref in refs:
+            if not isinstance(ref, str | dict):
+                return False
+            quote_text(document, ref)
+    except EvidenceError:
+        return False
+    return True
+
+
+def add(context: SectionContext, section: str, items: list[dict[str, Any]], tucked: list[str] | None = None) -> str:
+    """섹션별 형식 도구(add_<섹션>, v2/tools/typed.py)가 부르는 넣기: 항목마다 형식·근거를 검사해 맞는 것만 넣고 틀린 것은 「위치: 이유」로.
+    tucked는 넣기 전에 바로잡은 근거 위치(tuck_evidence)로, 결과에 함께 알립니다."""
     draft = context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
@@ -110,7 +173,8 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]]) -> s
             draft.pending.pop((section, item_id), None)
             draft.version += 1
         added.append(item.get("id") or section)
-    return _dump({"added": added, "failed": failed, **({"hint": PATCH_HINT} if kept else {})})
+    note = {"note": " ".join(tucked) + ". 근거(evidence)는 항목 객체 안에 적습니다."} if tucked else {}
+    return _dump({"added": added, "failed": failed, **({"hint": PATCH_HINT} if kept else {}), **note})
 
 
 @tool
@@ -134,7 +198,7 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
     merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
     problems = _problems(context, section, merged, adding=False)
     if problems:
-        return _dump({"error": "BAD_ITEM", "errors": problems})
+        return _dump({"error": "BAD_ITEM", "errors": problems, "message": KEPT_AS_IS})
     with draft._lock:
         draft.items[section][index] = merged
         draft.version += 1

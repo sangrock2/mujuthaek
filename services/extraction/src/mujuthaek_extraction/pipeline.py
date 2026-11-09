@@ -23,6 +23,7 @@ from typing import Any
 
 from mujuthaek_extraction import format_memory
 from mujuthaek_extraction.assemble.assembler import AssemblyInput, assemble
+from mujuthaek_extraction.assemble.contacts import fill_contacts
 from mujuthaek_extraction.assemble.quarantine import quarantine
 from mujuthaek_extraction.assemble.regions import SOURCE_SIDO, RegionCodeTable
 from mujuthaek_extraction.contracts import tools
@@ -255,6 +256,7 @@ def extract_parts(rules: FieldRules, material: ExtractionMaterial, rt: Runtime, 
 def assemble_candidate(parts: list[dict[str, Any]], material: ExtractionMaterial, context: TrustedContext, rt: Runtime) -> dict[str, Any] | None:
     source_code = context.source_references[0]["sourceCode"] if context.source_references else None
     default_sido = SOURCE_SIDO.get(source_code)  # SH 공고의 "강동구"처럼 시도가 생략된 지역을 위해
+    parts = fill_contacts(parts, material.text, material.text_document_id)  # 담당이 빠뜨린 문의처 번호(assemble/contacts.py)
     candidate = assemble(parts, AssemblyInput(context, material, regions=rt.regions, default_sido=default_sido)).candidate
     if candidate is not None:  # 입력 단계에서 정한 사람 확인 강제 (예: 공고 PDF 없이 수집 글자로 추출)
         for code, description in context.forced_review:

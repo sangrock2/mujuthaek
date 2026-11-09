@@ -608,7 +608,13 @@ def _supply_from_tables(
         return None
     if sink is not None:
         sink.table_mapping = (tables, mapping)
-    part = supply_tables.build_part(tables, mapping, material.text_document_id, offered=supply_tables.offered_units(material.text))
+    part = supply_tables.build_part(
+        tables,
+        mapping,
+        material.text_document_id,
+        offered=supply_tables.offered_units(material.text),
+        specials=supply_tables.special_tables(material),
+    )
     if part is None:
         return None
     # 주소 위치는 구조 호출 조각으로 옮겨 그쪽에서 검사하고, 코드가 남긴 검수 이슈는 결합기가 꺼내 씁니다(계약 칸 아님)

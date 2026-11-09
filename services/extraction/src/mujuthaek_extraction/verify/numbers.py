@@ -10,7 +10,7 @@ from collections import Counter
 from itertools import groupby
 from typing import Any
 
-from mujuthaek_extraction.assemble.values import to_krw
+from mujuthaek_extraction.assemble.values import point_readings, to_krw
 from mujuthaek_extraction.verify.model import Finding, SourceBundle
 
 PLAN_KINDS = {"DEPOSIT", "MONTHLY_RENT", "ANNUAL_RENT"}
@@ -41,6 +41,8 @@ def check_numbers(candidate: dict[str, Any], sources: SourceBundle) -> list[Find
             if price["amountKrw"] is None:
                 continue
             recomputed = to_krw(price["sourceAmount"], price["sourceUnit"]).amount_krw
+            if recomputed is None and price["amountKrw"] in point_readings(price["sourceAmount"], price["sourceUnit"]):
+                continue  # 모호한 「18,400.000」을 결합기가 같은 요금안의 합으로 정한 읽기(합이 맞는지는 V7 PRICE_PARTS_MISMATCH가 봄)
             if recomputed != price["amountKrw"]:
                 find(
                     "PRICE_UNIT_MISMATCH",

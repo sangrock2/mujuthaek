@@ -28,7 +28,14 @@ RATIO = (0.7, 1.5)
 SNIPPET_CHARS = 100
 # 「100% 우선공급 (70%)」처럼 기준값 뒤의 비율이 공급 물량 몫이면 가산 기준이 아닙니다(실측: 전북개발공사 분양 공고)
 ALLOCATION = re.compile(r"우선\s*공급|일반\s*공급|공급\s*(?:비율|물량)|물량|(?:주택|세대|호)\s*수의")
+# 기준값과 다른 값 사이에 대금·임대 조건 칸이 있으면 그 값은 계약금·잔금 비율이나 임대 조건입니다
+# (2026-11-09 23건 umca-4439: 「100%) | 5. 표준임대조건 › 임대보증금(원) › 계약금(20%) | 6. … › 잔금(80%」가 소득 100% 조건의 예외 의심으로 보류)
+PAYMENT = re.compile(r"계약금|중도금|잔금|보증금|임대료|전환")
 RANGE_TABLE = "초과"  # 구간표(○○% 초과 ○○% 이하) 표시. 가산·완화 표는 "1명 4,996만원"처럼 값만 나열합니다
+# 기준값이 구간의 위 끝(「130%초과 150%이하」)이면 그 행도 구간표입니다(2026-11-09 jbdc-15611: 소득 구간별 임대료표의 「… 140% 적용」)
+RANGE_BEFORE_CHARS = 15
+# 「1구간 (~30%)」「~180%」처럼 물결표를 붙인 값은 구간 머리 칸의 경계입니다(2026-11-09 bmc-75: 임대조건 소득 구간 머리 칸이 소득 기준 5개의 예외 의심으로 보류)
+BRACKET_BOUND = re.compile(r"[~∼〜]\s*$")
 
 
 def _values(text: str, unit: str) -> list[tuple[int, float, str]]:
@@ -68,14 +75,19 @@ def _suspect(atoms: list[dict[str, Any]], known: set[float], sources: SourceBund
             for pos, value, _ in found:
                 if value != base:
                     continue
-                if RANGE_TABLE in text[pos : pos + AFTER_CHARS]:
+                if RANGE_TABLE in text[pos : pos + AFTER_CHARS] or RANGE_TABLE in text[max(pos - RANGE_BEFORE_CHARS, 0) : pos]:
                     # "70%이하까지 | 73.5%초과 77%이하 …"는 재계약 임대료 할증 구간표라 가산 기준이 아닙니다
                     # (실측: 대구도시공사 매입임대, LH 국민임대 — 할증표 때문에 소득 기준마다 예외 누락 의심이 붙음)
                     continue
                 nearby = [
                     (p, raw)
                     for p, v, raw in found
-                    if pos < p <= pos + AFTER_CHARS and v not in known and RATIO[0] <= v / base <= RATIO[1] and not ALLOCATION.search(text[pos:p])
+                    if pos < p <= pos + AFTER_CHARS
+                    and v not in known
+                    and RATIO[0] <= v / base <= RATIO[1]
+                    and not ALLOCATION.search(text[pos:p])
+                    and not PAYMENT.search(text[pos:p])
+                    and not BRACKET_BOUND.search(text[max(p - 3, 0) : p])
                 ]
                 if nearby and (best is None or len(nearby) > best[0]):
                     best = (len(nearby), text, pos, nearby)
@@ -130,6 +142,60 @@ def check_unconditioned_tiers(candidate: dict[str, Any]) -> list[Finding]:
                     "모든 조건이 함께 적용되어 가장 낮은 값이 모든 가구에 적용됩니다",
                 )
             )
+    return findings + _looser_subgroup_limits(candidate, {f.target for f in findings})
+
+
+def _top_uppers(expression: Any) -> list[tuple[Any, str, float]]:
+    """조건식 맨 위(원자 하나 또는 ALL의 원자들)의 소득·자산 상한 (주체, 기준, 값). ANY·NOT 안의 상한은 함께 적용되는 상한이 아니라 뺍니다."""
+    if not isinstance(expression, dict):
+        return []
+    kind = expression.get("kind")
+    children = [c for c in expression.get("children") or [] if isinstance(c, dict) and c.get("kind") == "ATOMIC"]
+    atoms = [expression] if kind == "ATOMIC" else children if kind == "ALL" else []
+    return [
+        (atom.get("subject"), atom["attribute"], float(atom["value"]))
+        for atom in atoms
+        if atom.get("attribute") in TIER_ATTRIBUTES and atom.get("operator") in ("LTE", "LT") and isinstance(atom.get("value"), int | float)
+    ]
+
+
+def _looser_subgroup_limits(candidate: dict[str, Any], done: set[str]) -> list[Finding]:
+    """대상이 다른 조건 대상의 일부(진부분집합)인데 같은 기준의 상한만 더 느슨한 조건. 모든 조건이 함께 적용되어 느슨한 상한은 쓰이지 않으며,
+    가산·완화 단계를 그 경우(맞벌이·출생자녀 수 등) 없이 따로 넣은 것입니다(2026-11-09 유료 측정 dudc-8934: 신혼부부·예비신혼부부·한부모가족의
+    「100% 이하(맞벌이 120%)」와 따로 신혼부부·예비신혼부부 「140% 이하」(원문 「출산자녀 2인 이상 20% 가산」, 경우는 적용 대상 글에만) — 대상 목록이
+    달라 위 묶음으로는 못 견줌). 느슨한 쪽만 보류합니다(기본 조건은 맞을 수 있음)."""
+    entries = []
+    for index, item in enumerate(candidate["eligibility"]):
+        rule = item["rule"]
+        if rule["status"] != "STRUCTURED" or any(a.get("attribute") in TIER_SPLITTERS for a in _atoms(rule["expression"])):
+            continue
+        scope = item.get("scope") or {}
+        place = (scope.get("level"), tuple(sorted(scope.get("supplyGroupIds") or [])), tuple(sorted(scope.get("locationIds") or [])))
+        for subject, attribute, value in _top_uppers(rule["expression"]):
+            entries.append((index, place, frozenset(scope.get("targetGroups") or []), subject, attribute, value))
+    findings = []
+    for index, place, targets, subject, attribute, value in entries:
+        if not targets or f"/eligibility/{index}" in done:
+            continue
+        wider = [
+            (other_targets, other_value)
+            for other, other_place, other_targets, other_subject, other_attribute, other_value in entries
+            if other != index and (other_place, other_subject, other_attribute) == (place, subject, attribute)
+            and (targets < other_targets or not other_targets) and other_value < value  # 대상 없는 조건은 모든 신청자
+        ]  # fmt: skip
+        if wider:
+            group, strict = wider[0]
+            shown = "·".join(sorted(group)) or "모두"
+            findings.append(
+                Finding(
+                    "V5",
+                    "TIER_CONDITION_MISSING",
+                    f"/eligibility/{index}",
+                    f"{attribute} 상한 {value:g}이(가) 이 대상을 포함하는 조건({shown})의 상한 {strict:g}보다 느슨한데 따로 있어, 모든 조건이 함께 적용되면 "
+                    "쓰이지 않습니다. 가산·완화 단계면 그 경우(맞벌이·출생자녀 수 등)를 발동 조건으로 한 기본 조건의 예외(REPLACE)로 옮깁니다",
+                )
+            )
+            done.add(f"/eligibility/{index}")
     return findings
 
 
@@ -264,6 +330,12 @@ def check_missing_exceptions(candidate: dict[str, Any], sources: SourceBundle) -
                 node = exception.get(key) or {}
                 expression = node.get("expression") if key == "when" else node
                 known |= {float(a["value"]) for a in _atoms(expression) if isinstance(a["value"], int | float)}
+    # 선정 규칙(가점·순위)이 쓰는 값도 빠진 예외가 아닙니다. 가점 규칙은 조건식 없이 글로 남기도 해서 원문 글의 값도 셉니다
+    # (2026-11-09 23건 jbdc-16011: 가점표 「가구 소득 … 80% 이하인 경우 : 1점」이 신생아·일반 공급 소득 100% 조건 3개의 예외 의심으로 보류)
+    for rule in candidate.get("selectionRules") or []:
+        known |= {float(a["value"]) for a in _atoms((rule.get("rule") or {}).get("expression")) if isinstance(a.get("value"), int | float)}
+        written = rule.get("originalText") or ""
+        known |= {value for unit in ("PERCENT", "KRW") for _, value, _ in _values(written, unit)}
     for index, item in enumerate(candidate["eligibility"]):
         rule = item["rule"]
         # 예외가 이미 있는 조건도 봅니다. 남은 값(known에 없는 값)이 있으면 가산 구간 일부가 빠진 것입니다

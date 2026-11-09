@@ -31,7 +31,7 @@ from langchain_core.tools import StructuredTool
 
 from mujuthaek_extraction.model.strict_schema import _collapse, _inline, _inline_all, _reachable, _refs, _retarget
 from mujuthaek_extraction.rules.base import call_schema
-from mujuthaek_extraction.v2.tools.write import SectionContext, add
+from mujuthaek_extraction.v2.tools.write import SectionContext, add, tuck_evidence
 
 TOOL_DEPTH = 2  # 도구 정의에 펼치는 조건식 단계(V1 엄격 모드는 strict_schema.MAX_DEPTH 3단계)
 
@@ -83,13 +83,13 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
     if section == "notice":
 
         def run_notice(item: dict[str, Any], runtime: ToolRuntime[SectionContext, Any], **unknown: Any) -> str:
-            return unknown_args(unknown) if unknown else add(runtime.context, section, [item])
+            return _add(runtime.context, section, [item], unknown)
 
         schema = {"type": "object", "properties": {"item": item}, "required": ["item"]}
         return StructuredTool.from_function(func=run_notice, name="add_notice", description="공고(notice) 항목 하나를 넣습니다.", args_schema=schema)
 
     def run(items: list[dict[str, Any]], runtime: ToolRuntime[SectionContext, Any], **unknown: Any) -> str:
-        return unknown_args(unknown) if unknown else add(runtime.context, section, items)
+        return _add(runtime.context, section, items, unknown)
 
     schema = {"type": "object", "properties": {"items": {"type": "array", "items": item}}, "required": ["items"]}
     description = (
@@ -97,6 +97,16 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
         "값이 있는 칸만 적고 근거 evidence를 붙입니다."
     )
     return StructuredTool.from_function(func=run, name=f"add_{section}", description=description, args_schema=schema)
+
+
+def _add(context: SectionContext, section: str, items: Any, unknown: dict[str, Any]) -> str:
+    """도구 인자 → 넣기. 근거를 항목 밖에 적었으면(맨 위 evidence·목록에 낀 「evidence:[」) 항목 안으로 바로잡아 넣고(write.tuck_evidence),
+    옮길 곳을 정하지 못한 맨 위 근거나 다른 모르는 인자가 있으면 예전처럼 아무것도 넣지 않습니다."""
+    stray = unknown.pop("evidence") if set(unknown) == {"evidence"} else None
+    items, stray, tucked = tuck_evidence(context.document, items, stray)
+    if stray is not None:
+        unknown["evidence"] = stray
+    return unknown_args(unknown) if unknown else add(context, section, items, tucked)
 
 
 def unknown_args(unknown: dict[str, Any]) -> str:

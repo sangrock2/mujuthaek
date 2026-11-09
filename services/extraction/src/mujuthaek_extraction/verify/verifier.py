@@ -61,6 +61,9 @@ NOTE_CODES = {
     # 원문 서류 표 행을 어느 서류도 인용하지 않음(consistency, 2026-10-23). 빠진 값이지 틀린 값이 아니라 표시만 하고,
     # AI 재확인에는 보냅니다(recheck.RECHECK_NOTE_CODES: 서류 섹션 전체를 다시 읽어 빠진 서류만 더함)
     "DOCUMENT_OMISSION_SUSPECTED",
+    # 날짜가 적힌 일정 단계(「계약체결: 2027. 1. 20.」)로 시작·끝나는 일정이 없음(consistency, 2026-11-09). 빠진 값이라 표시만 하고,
+    # V2 일정 담당에게는 「확인할 것」으로 알립니다
+    "SCHEDULE_OMISSION_SUSPECTED",
     # 원문 자격 기준표 행의 기준값(소득 %·자산 금액)을 어느 자격 조건·예외도 쓰지 않음(consistency, 2026-11-07). 빠진 값이라 표시만 하고,
     # V2 자격 담당에게는 「확인할 것」으로 알립니다(담당 검증 결과는 이 메모도 보여 줌)
     "CRITERIA_TABLE_OMISSION_SUSPECTED",
@@ -75,6 +78,9 @@ NOTE_CODES = {
     "AI_OUTPUT_FIELD_CLEARED",
     # 공급표 전환안의 부호와 숫자가 어긋나 숫자(기본 요금 대비 보증금·월세 증감)로 방향을 고침(supply_tables, 2026-10-24). 고친 값이라 표시만
     "CONVERSION_DIRECTION_CORRECTED",
+    # 마침표 뒤 세 자리라 모호한 금액(「18,400.000」)을 같은 요금안의 보증금(분양가) = 계약금 + 잔금으로 정해 읽음(assembler, 2026-11-09).
+    # 계산으로 확인한 값이라 표시만
+    "AMOUNT_READ_BY_PARTS",
     # 행 이름 칸이 없어 읽지 못한 가격표(supply_tables, 2026-11-07). 빠진 값이지 틀린 값이 아니라 읽은 가격은 게시하고 검수 대기열에만 올립니다
     "SUPPLY_PRICE_TABLE_UNREAD",
 }
@@ -379,6 +385,20 @@ def notice_field_of(notice: dict[str, Any], quote: str) -> str | None:
     return fields.pop() if len(fields) == 1 else None
 
 
+# 원문에서 찾지 못한 긴 인용(표 칸을 이어 붙인 글 등)이 제목·기관·날짜·수량을 담지 않으면 소개 글(description)을 받치는 인용이라 그 칸만 보류합니다.
+# 2026-11-09 유료 확인 sh-311005: 구조 호출이 「용도 다세대주택 (도시형 생활주택) 근린생활시설 * 무주택자로 … 소득의 120% 이하에 해당하는…」처럼
+# 표의 여러 칸을 이은 인용 하나를 만들어 공고 전체(찾은 값 140개)가 검수로 감. 짧은 인용은 제목의 일부일 수 있어 그대로 둡니다
+DESCRIPTION_QUOTE_MIN_CHARS = 20
+CORE_IN_QUOTE = re.compile(r"\d{4}\s*[.년\-/]\s*\d{1,2}|\d+\s*(?:세대|호|가구|명|실)(?![가-힣])")
+
+
+def _description_quote(notice: dict[str, Any], quote: str) -> bool:
+    flat = _flat(quote)
+    if len(flat) < DESCRIPTION_QUOTE_MIN_CHARS or CORE_IN_QUOTE.search(quote):
+        return False
+    return not any(_flat(value) and _flat(value) in flat for value in (notice.get("title"), notice.get("publisher")))
+
+
 def narrow_notice_issues(candidate: dict[str, Any]) -> None:
     notice = candidate.get("notice") if isinstance(candidate.get("notice"), dict) else {}
     for issue in candidate["quality"]["reviewIssues"]:
@@ -386,6 +406,8 @@ def narrow_notice_issues(candidate: dict[str, Any]) -> None:
             continue
         quoted = QUOTED.search(issue.get("description") or "")
         field = notice_field_of(notice, quoted[1]) if quoted else None
+        if field is None and quoted and issue.get("code") == "EVIDENCE_QUOTE_NOT_FOUND" and _description_quote(notice, quoted[1]):
+            field = "description"
         if field:
             issue["target"] = f"/notice/{field}"
 
