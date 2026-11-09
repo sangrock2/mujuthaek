@@ -1115,6 +1115,31 @@ def _unlisted_submissions(documents: list[dict[str, Any]], text: str) -> list[st
     return [name for name in found if not any(normalize(name) in normalize(other) and name != other for other in found)]
 
 
+# 서류 이름이 여럿 든 서류 표 행(앞 표 칸에 합쳐진 다음 표 포함)을 묶음 서류 하나(「소득세납부 입증서류 (아래 <표9> 참고)」)가 인용하면 행은 인용된
+# 것으로 보여 그 안의 서류가 빠져도 안 잡혔음(2026-11-09 유료 측정 jbdc-16011: <표9>의 재직증명서·건강보험자격득실확인서 등 서류 8개가 빠짐).
+# 서류 이름이 MULTI_NAMES개 이상 든 행(표 하나가 통째로 든 행)에서 이름 MISSING_NAMES개 이상이 서류 목록에 없을 때만 봅니다. 목록 이름은
+# 괄호 속 예시까지 봅니다(「본인 신분증(주민등록증, 운전면허증 …)」). 저장 결과 892개 실행: 이 경계에서 걸린 것은 <표9>를 놓친 jbdc-16011
+# 실행(이름 10개 중 10개 빠짐)뿐이고, 경계를 낮추면 「주민등록등본」(목록은 「주민등록표등본」)·「임신확인서」 같은 다른 이름·예시가 수백 번 걸림
+ROW_DOCUMENT_NAME = re.compile(
+    r"[가-힣A-Za-z0-9]{2,20}?(?:증명서|확인서|증명원|확인원|등본|초본|신분증|동의서|신청서|위임장|명세서|영수증|각서|서약서|확약서|진단서|등록증)"
+)
+MULTI_NAMES = 6
+MISSING_NAMES = 4
+
+
+def _unlisted_row_names(documents: list[dict[str, Any]], rows: list[str]) -> list[str]:
+    names = [n for n in (normalize(str(d.get("name") or "")) for d in documents) if len(n) >= 3]
+    missed: list[str] = []
+    for row in rows:
+        found = list(dict.fromkeys(match[0] for match in ROW_DOCUMENT_NAME.finditer(row)))
+        if len(found) < MULTI_NAMES:
+            continue
+        absent = [name for name in found if len(normalize(name)) >= 4 and not any(normalize(name) in n or n in normalize(name) for n in names)]
+        if len(absent) >= MISSING_NAMES:
+            missed += [name for name in absent if name not in missed]
+    return missed
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -1139,6 +1164,13 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
     if submitted:  # 글로 내라고 한 서류도 원문이 이름을 적은 서류라 하나만 빠져도 알립니다
         shown = ", ".join(f"「{name}」" for name in submitted[:3])
         parts.append(f"원문 글에서 내라고 한 서류 {len(submitted)}개가 서류 목록에 없습니다: {shown}{' …' if len(submitted) > 3 else ''}")
+    listed = _unlisted_row_names(documents, rows)
+    if listed:
+        shown = ", ".join(f"「{name}」" for name in listed[:4])
+        parts.append(
+            f"서류 이름이 여럿 든 표 행의 서류 {len(listed)}개가 서류 목록에 없습니다(묶음 서류 하나로 인용하지 않고 이름마다 넣음): "
+            f"{shown}{' …' if len(listed) > 4 else ''}"
+        )
     attachments = _unhandled_attachments(documents, rows)
     if attachments:  # 행 누락보다 먼저 적습니다(V2 담당에게 가는 설명은 앞부분만 감)
         shown = ", ".join(f"「{item}」" for item in attachments[:2])

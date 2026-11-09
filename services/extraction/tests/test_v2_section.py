@@ -455,6 +455,49 @@ def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypa
     assert len(failed) == 1 + retry.RETRIES  # 처음 + 재시도, 시도마다 최악 비용을 예산에 셈
 
 
+def test_finishing_with_an_omission_warning_left_is_sent_back_once_with_only_those_warnings():
+    # 2026-11-09 유료 측정 jbdc-16011: 자격 담당이 기준표 21행 누락 메모(확인할 것)를 「소득표 일부는 가점 기준」으로 보고 끝냄.
+    # 끝내기를 한 번 거두고 빠진 것 의심만 모아 행마다 정하게 하고, 두 번째 끝내기는 받음
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    omission = {
+        "code": "SCHEDULE_OMISSION_SUSPECTED",
+        "target": "/quality/coverage/schedules",
+        "description": "날짜가 적힌 단계가 일정에 없어요: 「서류심사 (7.10.」",
+    }
+    suspect = {"code": "EXCEPTION_SUSPECTED", "target": "/schedules/0", "item": "apply", "description": "기준값 뒤에 다른 기준값이 있어요."}
+
+    def agent_run(*turns, issues, calls=8):
+        draft = SectionDraft(("schedules",))
+        context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+        context.check = lambda: list(issues)
+        agent = create_agent(
+            ToolCallingFake(messages=iter([*turns, AIMessage(content="불리면 안 됨")])),
+            tools=[add_tool("schedules", ("text",)), *WRITE_TOOLS],
+            middleware=[VerifyMiddleware(calls)],
+            context_schema=SectionContext,
+        )
+        result = agent.invoke({"messages": [HumanMessage("일정 담당")]}, context=context)
+        humans = [m.content for m in result["messages"] if m.type == "human"][1:]
+        return draft, humans, [m for m in result["messages"] if m.type == "ai"]
+
+    def finish(summary):
+        return AIMessage(content="", tool_calls=[call("finish", summary=summary)])
+
+    add = AIMessage(content="", tool_calls=[call("add_schedules", items=[schedule]), call("finish", summary="다 넣었어요.")])
+    # 넣기·끝내기 → 새 문제라 검증 결과로 거둠 → 끝내기 → 빠진 것 의심만 모아 한 번 더 거둠 → 이유를 적은 끝내기는 받음
+    reason = "「서류심사」는 공고 일정표가 아니라 내부 절차라 넣지 않아요."
+    draft, humans, said = agent_run(add, finish("확인했어요."), finish(reason), issues=[omission, suspect])
+    assert len(said) == 3 and humans[0].startswith("# 검증 결과") and humans[1].startswith("# 끝내기 전 확인") and draft.finished == reason
+    assert "SCHEDULE_OMISSION_SUSPECTED" in humans[1] and "EXCEPTION_SUSPECTED" not in humans[1]  # 그 메모만
+    # 빠진 것 의심이 없으면 확인할 것만 남은 끝내기는 그대로 받음(한 번 더 거두지 않음)
+    draft, humans, said = agent_run(add, finish("확인했어요."), issues=[suspect])
+    assert len(said) == 2 and len(humans) == 1 and draft.finished == "확인했어요."
+    # 호출 상한까지 두 차례가 남지 않았거나(두 번 부른 뒤 상한 3번), 상한을 모르는 해결 담당이면 빠진 것 의심이 남아도 받음
+    for calls in (3, None):
+        draft, humans, said = agent_run(add, finish("확인했어요."), issues=[omission, suspect], calls=calls)
+        assert len(said) == 2 and len(humans) == 1 and draft.finished == "확인했어요."
+
+
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
     # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
     monkeypatch.setenv("EXTRACTION_ENGINE", "v2")

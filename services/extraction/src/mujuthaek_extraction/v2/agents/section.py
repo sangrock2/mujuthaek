@@ -95,7 +95,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     calls = MODEL_CALLS.get(spec.name, MAX_MODEL_CALLS)
     limit = ModelCallLimitMiddleware(run_limit=calls, exit_behavior="end")
     model = chat(spec.name, max_output_tokens=spec.max_output_tokens)  # V1 섹션 호출과 같은 출력 한도(첫 차례에 다 넣음)
-    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware(), CutCallMiddleware()])
+    agent = _agent(model, spec.name, state, documents, [limit, VerifyMiddleware(calls), CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
     try:

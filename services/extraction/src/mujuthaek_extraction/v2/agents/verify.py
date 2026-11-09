@@ -15,6 +15,8 @@
 
 끝내기(finish): 담당이 마지막 고치기와 같은 차례에 finish를 부르면, 그 차례 도구가 실행된 뒤 새 문제(앞서 알리지 않은 것)가 없으면 모델을 다시
 부르지 않고 끝냅니다. 새 문제가 있거나, 한 번만 알린 「고칠 것」이 남았으면 끝내기를 거두고 알립니다(「다시」로 한 번 더 알린 뒤에는 끝냄).
+빠진 것 의심(OMISSION_CODES)이 남은 끝내기도 한 번 거두고 그 메모만 모아 행마다 정하게 합니다(2026-11-09, 두 번째 끝내기는 받음). 섹션 담당만,
+호출 상한까지 두 차례가 남을 때만 거둡니다(해결 담당은 경고 항목 하나만 고치므로 거두지 않음).
 「끝났어요」만 답하는 마지막 차례가 없어집니다(2026-11-06 네 번째 실행: 그 차례가 담당마다 하나씩 들고, 캐시를 못 읽으면 앞부분 6만 토큰을 다시 씀).
 """
 
@@ -25,7 +27,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import hook_config
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 ISSUES_SHOWN = 20
 # 형식·계약·근거 오류: 원문과 상관없이 객관적인 결함이라 고침(그대로 두면 값이 빠지거나 사람 확인으로 감). 근거를 바꾸는 고치기는 값을 바꾸지 않음.
@@ -103,7 +105,10 @@ HOW_TO = {
         "기준표의 행마다 기준값이 조건에 있어야 합니다. 행의 대상(계층·공급유형·공급방식)이 다르면 대상마다 조건을 두고, 한 대상 안에서 가구원 수·"
         "자녀 수·출생자녀 수·맞벌이 여부에 따라 바뀌는 값은 그 대상의 기본 기준 조건에 행마다 exceptions(REPLACE, effectExpression은 그 행의 기준값, "
         "발동 조건을 다 표현할 수 없으면 when.status UNSTRUCTURED)로 넣고 그 표 행을 예외의 evidence로 인용합니다(예외 originalText를 비우면 "
-        "그 근거 행의 원문으로 채움). 가점·임대조건처럼 신청 자격이 아닌 표이거나 이번 모집에 적용하지 않는 표면 그대로 둡니다."
+        "그 근거 행의 원문으로 채움). 가점·임대조건처럼 신청 자격이 아닌 표이거나 이번 모집에 적용하지 않는 표면 그대로 둡니다. "
+        # 2026-11-09 유료 측정 jbdc-16011: 자격 담당이 공급단계·맞벌이별 소득표 21행 누락 메모를 「소득표 일부는 가점 기준」이라며 넘기고 끝냄
+        "이 검사는 배점·임대조건·할증 표를 빼고 본 것입니다. 가점 표인지는 행에 점수(○점) 칸이 있는지로 가립니다: 소득 %·자산 금액 칸만 있는 "
+        "공급유형·공급단계·맞벌이별 행은 신청 자격 기준입니다."
     ),
     "CRITERIA_GROUP_OMISSION_SUSPECTED": (
         "적힌 대상(공급유형·계층)마다 조건을 따로 만들고 scope.targetGroups에 그 대상 이름을 적습니다. 그 대상의 기준표 행 가운데 대부분 가구에 "
@@ -128,15 +133,39 @@ END_GUIDE = (
     "원문에 없는 값은 report_missing으로 적습니다. set_coverage(PARTIAL)는 원문에 있는데 넣지 못한 항목이 있을 때만 씁니다(섹션 전체가 사람 확인으로 감). "
     "고치는 차례에 finish도 함께 부르고, 고칠 것이 없으면 finish만 부릅니다."
 )
+# 빠진 것 의심(원문 행·단계·대상·서류 이름이 어느 항목에도 없음)은 「확인할 것」이라 담당이 한 번 보고 넘기면 그대로 끝났음(2026-11-09 유료 측정
+# jbdc-16011: 자격 담당이 기준표 21행 누락 메모를 「소득표 일부는 가점 기준」으로 보고 끝냄 — 그 행은 공급단계·맞벌이별 소득 기준).
+# 끝내기를 한 번 거두고 그 메모만 모아 행마다 정하게 합니다. 두 번째 끝내기는 받습니다(담당 판단, 이유는 끝내기 요약에)
+OMISSION_CODES = frozenset(
+    {
+        "SECTION_OMISSION_SUSPECTED",
+        "SCORING_OMISSION_SUSPECTED",
+        "LIST_OMISSION_SUSPECTED",
+        "ELIGIBILITY_OMISSION_SUSPECTED",
+        "DOCUMENT_OMISSION_SUSPECTED",
+        "SCHEDULE_OMISSION_SUSPECTED",
+        "CRITERIA_TABLE_OMISSION_SUSPECTED",
+    }
+)
+OMISSION_GUIDE = (
+    "끝내기 전에 정할 것: 원문에 있는데 어느 항목도 쓰지 않은 것으로 보이는 행·단계·대상·서류입니다. 하나씩 원문을 다시 보고, 맡은 섹션의 내용"
+    "(신청 자격 기준·제출 서류·일정 단계)이면 넣습니다. 아니면(머리글·안내 문장·배점표처럼 맡은 섹션이 아닌 것) 넣지 않는 이유를 finish 요약에 "
+    "하나씩 짧게 적고 다시 finish를 부릅니다. 경고를 없애려고 원문에 없는 값을 넣지 않습니다."
+)
+# 끝내기를 거두면 담당은 넣는 차례와 다시 끝내는 차례가 들 수 있음: 호출 상한까지 두 차례가 남을 때만 거둠. 상한에 끊기면 넣은 항목은 두고
+# 섹션 전체가 사람 확인으로 감(2026-11-09 유료 측정: 자격 담당 23개 중 2개가 상한 10번에 닿음)
+GATE_CALLS = 2
 
 
 class VerifyMiddleware(AgentMiddleware):
-    def __init__(self) -> None:
+    def __init__(self, calls: int | None = None) -> None:
         super().__init__()
+        self.calls = calls  # 담당의 모델 호출 상한. 없으면 빠진 것 의심으로 끝내기를 거두지 않음(해결 담당: 경고 항목 하나만 고침)
         self.seen = 0  # 마지막으로 알린 초안 판(SectionDraft.version)
         self.issues: list[dict[str, Any]] = []  # 그 판의 검증 결과
         self.reported: set[tuple[str, str, str]] = set()  # 앞서 알린 문제(코드·위치·항목)
         self.repeated: set[tuple[str, str, str]] = set()  # 「다시」로 한 번 더 알린 문제
+        self.gated: set[tuple[str, str, str]] = set()  # 끝내기 전에 모아 알린 빠진 것 의심
 
     @hook_config(can_jump_to=["end"])
     def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
@@ -156,8 +185,14 @@ class VerifyMiddleware(AgentMiddleware):
         # bmc-106: 거절된 소득·자산·자동차 조건 3개의 고치기가 모두 실패한 차례에 finish도 불러 28값이 빠짐, 23건 중 5개 담당이 같은 꼴).
         # 「다시」로 한 번 더 알리고 끝내기를 거둡니다. 「다시」로 알린 뒤에도 남으면 끝냄(고칠 것 안내대로 두 번 고쳐 보고 둠)
         unsettled = [issue for issue in issues if must_fix(issue) and issue_key(issue) not in self.repeated and not _chosen(issue, draft)]
+        room = self.calls is not None and self.calls - _model_calls(state) >= GATE_CALLS
+        missing = [issue for issue in issues if str(issue.get("code")) in OMISSION_CODES and issue_key(issue) not in self.gated] if room else []
+        if draft.finished and not fresh and not unsettled and not missing:
+            return {"jump_to": "end"}  # 끝내기를 불렀고 새 문제·다시 알릴 고칠 것·정하지 않은 빠진 것 의심이 없음: 모델을 다시 부르지 않음
         if draft.finished and not fresh and not unsettled:
-            return {"jump_to": "end"}  # 끝내기를 불렀고 새 문제·다시 알릴 고칠 것이 없음: 모델을 다시 부르지 않음
+            draft.finished = None  # 빠진 것 의심만 남은 끝내기: 거두고 그 메모만 모아 알림(한 번)
+            self.gated |= {issue_key(issue) for issue in missing}
+            return {"messages": [HumanMessage(omission_report(draft, missing))]}
         draft.finished = None  # 새 문제가 있거나 고칠 것이 남았으면 끝내기를 거두고 알림
         marked = [{**issue, "다시": True} if issue_key(issue) in self.reported else issue for issue in issues]
         self.repeated |= {issue_key(issue) for issue in issues if issue_key(issue) in self.reported}
@@ -187,8 +222,24 @@ def report(draft: Any, issues: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def omission_report(draft: Any, issues: list[dict[str, Any]]) -> str:
+    """끝내기 전에 한 번: 정하지 않은 빠진 것 의심만 모아 보여 주는 글(검증 결과 대신)."""
+    counts = {section: len(draft.items.get(section, [])) for section in draft.sections}
+    lines = ["# 끝내기 전 확인(빠진 것 의심)", f"맡은 섹션 항목 수: {json.dumps(counts, ensure_ascii=False)}", OMISSION_GUIDE]
+    lines += [json.dumps(issue, ensure_ascii=False) for issue in issues[:ISSUES_SHOWN]]
+    hints = [f"- {code}: {HOW_TO[code]}" for code in dict.fromkeys(str(issue.get("code")) for issue in issues) if code in HOW_TO]
+    if hints:
+        lines += ["## 고치는 법", *hints]
+    return "\n".join(lines)
+
+
 def must_fix(issue: dict[str, Any]) -> bool:
     return str(issue.get("code") or "").startswith(MUST_FIX)
+
+
+def _model_calls(state: Any) -> int:
+    """이 대화에서 모델을 부른 횟수: 호출마다 모델 답이 하나 붙음(잘린 넣기를 살리는 미들웨어는 답을 바꿔 끼울 뿐 더하지 않음)."""
+    return sum(isinstance(message, AIMessage) for message in state.get("messages") or [])
 
 
 def _chosen(issue: dict[str, Any], draft: Any) -> bool:

@@ -623,6 +623,26 @@ def document_omission(text, names):
     return found[0] if found else None
 
 
+def test_documents_of_a_whole_table_merged_into_one_row_are_checked_by_name():
+    # 2026-11-09 유료 측정 jbdc-16011: 앞 표 마지막 칸에 합쳐진 <표9>(재직증명서·건강보험자격득실확인서 …)를 묶음 서류 「소득세납부 입증서류
+    # (아래 <표9> 참고)」 하나가 인용해, 행은 인용된 것으로 보여 서류 8개가 빠져도 안 잡혔음
+    row = (
+        "| 공통 | ※ 직인 날인 서류만 인정합니다. <표9> 소득세납부 입증 제출서류 ① 재직증명서 근로자 ② 건강보험자격득실확인서 ① 사업자등록증 "
+        "자영업자 ② 원천징수영수증 ③ 소득금액증명원 ④ 납부증명서 | 세무서 |"
+    )
+    text = TABLE + "\n" + "\n".join(["5. 제출서류", "[표 9-1]", "| 구 분 | 제 출 서 류 | 발급처 |", row])
+    umbrella = "소득세납부 입증서류 (아래 <표9> 참고)"
+
+    def note(*names):
+        found = document_omission(text, list(names))
+        return found.description if found else ""
+
+    assert "서류 이름이 여럿 든 표 행의 서류 6개가 서류 목록에 없습니다" in note(umbrella) and "「재직증명서」" in note(umbrella)
+    listed = [umbrella, "재직증명서", "건강보험자격득실확인서", "사업자등록증 사본", "원천징수영수증 또는 소득금액증명원", "납부증명서"]
+    assert "여럿 든 표 행" not in note(*listed)  # 이름마다 넣었으면(이름을 품은 서류 포함) 없음
+    assert "여럿 든 표 행" not in note(umbrella, "재직증명서", "건강보험자격득실확인서", "사업자등록증")  # 빠진 이름이 3개면 다른 이름일 수 있어 보지 않음
+
+
 def test_attached_evidence_listed_in_a_cited_document_row_is_checked_too():
     # 2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행 비고 칸의 「- 비상장주식 : 증권사 조회내역 …」을 V2 서류 담당이 두 공고에서 나누지 않음.
     # 그 행은 상위 서류가 인용해 행 누락으로는 잡히지 않았습니다
