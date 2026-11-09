@@ -124,6 +124,11 @@ def test_missing_and_misplaced_fields_and_condition_kinds_are_told_how_to_fix():
         "/exceptions/0: 'originalText' 칸이 필요합니다(이 예외에 evidence를 붙이면 비워 둬도 그 근거의 원문으로 채움)"
     ]
     assert found(lambda item: item["scope"].update(supplyGroups=["a"])) == ["/scope: 이 자리에 없는 칸입니다: supplyGroups(형식에 없는 칸이라 적지 않음)"]
+    # 예외가 없다고 한 항목에 넣은 예외(2026-11-09 유료 확인 jbdc-16011·23건 측정 gh-808): 목록 값 전체 대신 비우거나 조건 칸을 바꾸라고
+    assert found(lambda item: item.update(exceptionsStatus="NONE_IN_SOURCE")) == [
+        "/exceptions: exceptionsStatus가 NONE_IN_SOURCE·NOT_REVIEWED 중 하나이면 이 목록은 비워야 합니다(지금 1개): "
+        "넣은 것이 맞으면 exceptionsStatus를 바꿉니다"
+    ]
 
 
 def test_quotes_handed_to_the_assembler_are_widened_until_they_occur_once_in_the_source():

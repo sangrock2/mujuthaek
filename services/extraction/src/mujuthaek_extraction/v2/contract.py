@@ -30,8 +30,10 @@ ORIGINAL_TEXT_SECTIONS = ("eligibility", "selectionRules")  # 항목에 원문 �
 SCOPE_DEFAULTS = {"supplyCategory": "ALL", "resolution": "RESOLVED"}  # 적용 범위에서 생략하면 채우는 값
 # 형식 오류 가운데 영어 원문 대신 고치는 법으로 알리는 것. 저장 기록 401개 담당이 받은 원문 오류: 필수 칸 없음 65번, 칸 위치 틀림 40여 번
 # (rule 안에 적은 exceptionsStatus·exceptions, 항목 바로 아래 적은 reason), 조건 하나(ATOMIC)에 넣은 children 12번. 2026-11-09 유료 확인
-# jbdc-16011 자격 담당은 「{'kind': 'ATOMIC', 'children': …」로 시작해 240자에서 잘린 오류를 두 번 받고 그 항목을 뺌
-EXPLAINED = ("required", "additionalProperties", "oneOf", "anyOf")
+# jbdc-16011 자격 담당은 「{'kind': 'ATOMIC', 'children': …」로 시작해 240자에서 잘린 오류를 두 번 받고 그 항목을 뺌.
+# 목록 상한(maxItems)도 원문이 목록 값 전체를 앞에 적어 잘림: 예외가 없다고 한(exceptionsStatus NONE_IN_SOURCE) 항목에 예외를 넣어 「… 이면
+# [{'id': …」만 받음(2026-11-09 유료 확인 jbdc-16011·23건 측정 gh-808, 저장 기록 402개 담당 중 3번)
+EXPLAINED = ("required", "additionalProperties", "oneOf", "anyOf", "maxItems")
 EXPRESSION_KINDS = ("ATOMIC", "ALL", "ANY", "NOT")
 EXPRESSION_HINT = (
     "조건식 형식: 조건 하나는 kind ATOMIC(attribute·operator·value, children 없음), 여러 조건은 kind ALL(모두)·ANY(하나라도)에 "
@@ -217,7 +219,10 @@ def _reason(root: dict[str, Any], leaf: Any, section: str, documents: tuple[str,
         node = _walk(root, path[:at])
         condition = _condition(node.get("if")) if isinstance(node, dict) else None
         if condition:
-            return f"{condition}이면 {_consequence(leaf, section, documents)}"[:240]
+            consequence = _consequence(leaf, section, documents)
+            if leaf.validator == "maxItems" and leaf.validator_value == 0:  # 넣은 것이 맞으면 목록이 아니라 조건 칸이 틀림
+                consequence += f": 넣은 것이 맞으면 {'·'.join(node['if']['properties'])}를 바꿉니다"
+            return f"{condition}이면 {consequence}"[:240]
     if leaf.validator in EXPLAINED:
         return _consequence(leaf, section, documents)[:240]
     return leaf.message[:240]
@@ -272,6 +277,9 @@ def _consequence(leaf: Any, section: str, documents: tuple[str, ...]) -> str:
         return f"값은 {', '.join(str(v) for v in value)} 중 하나여야 합니다"
     if leaf.validator == "minItems":
         return f"{value}개 이상 넣어야 합니다"
+    if leaf.validator == "maxItems":
+        count = len(leaf.instance) if isinstance(leaf.instance, list) else 0
+        return f"이 목록은 비워야 합니다(지금 {count}개)" if value == 0 else f"{value}개까지 넣을 수 있습니다(지금 {count}개)"
     if leaf.validator == "type":
         return f"{value} 형식이어야 합니다"
     return leaf.message
