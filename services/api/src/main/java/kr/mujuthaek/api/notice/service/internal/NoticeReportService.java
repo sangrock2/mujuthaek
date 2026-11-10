@@ -28,7 +28,6 @@ import kr.mujuthaek.api.notice.repository.NoticeReportRepository;
 import kr.mujuthaek.api.notice.repository.NoticeReportRepository.Report;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 
@@ -405,8 +404,8 @@ public class NoticeReportService {
     return detail(id);
   }
 
-  /** 탈퇴한 회원의 제보를 지워요 (요구사항 3-16). */
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  /** 탈퇴한 회원의 제보를 지워요 (요구사항 3-16). 탈퇴 트랜잭션에 함께 들어가요(커밋 직전에 불림). */
+  @Transactional
   public int forget(UUID reporterId) {
     return reports.deleteByReporter(reporterId);
   }

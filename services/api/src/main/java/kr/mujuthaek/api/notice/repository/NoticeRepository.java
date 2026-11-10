@@ -627,9 +627,16 @@ public class NoticeRepository {
                 + " v.payload -> 'notice' -> 'notice' ->> 'publisher' as publisher,"
                 + " array(select r.sigungu_code from notice.notice_regions r"
                 + " where r.notice_id = n.id) as regions,"
+                // 단지 이름은 보류하지 않은 위치에서만 (들어온 공고 쪽 NoticeContent.complexNames와 같은 규칙). 예전엔 이 쪽만 보류한
+                // 이름까지 넣어, 확인 전 이름 하나로 다른 공고가 자동으로 합쳐질 수 있었어요(2026-11-10 코드 검토)
                 + " array(select distinct coalesce(l->>'complexName', l->>'buildingName')"
-                + " from jsonb_array_elements(v.payload->'notice'->'locations') l"
-                + " where coalesce(l->>'complexName', l->>'buildingName') is not null) as names"
+                + " from jsonb_array_elements(v.payload->'notice'->'locations') with ordinality as e(l, i)"
+                + " where coalesce(l->>'complexName', l->>'buildingName') is not null"
+                + " and not exists (select 1 from jsonb_array_elements("
+                + "coalesce(v.payload->'heldItems', '[]'::jsonb)) h"
+                + " where h->>'target' = '/locations/' || (i - 1)"
+                + " or '/locations/' || (i - 1) like (h->>'target') || '/%'"
+                + " or h->>'target' like '/locations/' || (i - 1) || '/%')) as names"
                 + " from notice.notices n join notice.notice_versions v"
                 + " on v.notice_id = n.id and v.version = n.current_version"
                 // 기관은 정식 명칭·약칭 표기가 달라 DuplicateRule에서 비교해요

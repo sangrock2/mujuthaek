@@ -535,8 +535,11 @@ public class NoticeQueryService {
         row.detailUrl());
   }
 
-  /** 정책 신청 상태 (판정 목록 openPolicies와 같은 규칙: 마감일을 모르면 상시일 때만 열림). */
-  private static String policyStatus(NoticeQueries.PolicySummaryRow row, LocalDate today) {
+  /**
+   * 정책 신청 상태 (판정 목록 openPolicies와 같은 규칙: 마감일을 모르면 상시이거나 신청 기간 안내(「예산 소진 시까지」)가 있을 때만 열림). 안내만 있는
+   * 정책을 UNKNOWN으로 두어, openPolicies에는 열린 정책인데 새 정책 알림이 가지 않았어요(2026-11-10 코드 검토).
+   */
+  static String policyStatus(NoticeQueries.PolicySummaryRow row, LocalDate today) {
     if (row.applyEnd() != null && row.applyEnd().isBefore(today)) {
       return "CLOSED";
     }
@@ -544,7 +547,10 @@ public class NoticeQueryService {
       return "UPCOMING";
     }
     if (row.applyEnd() == null) {
-      return row.applyAlways() ? "ALWAYS" : "UNKNOWN";
+      if (row.applyAlways()) {
+        return "ALWAYS";
+      }
+      return row.applyNote() != null ? "APPLYING" : "UNKNOWN";
     }
     return "APPLYING";
   }

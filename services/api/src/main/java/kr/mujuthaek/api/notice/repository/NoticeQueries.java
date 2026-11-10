@@ -270,7 +270,10 @@ public class NoticeQueries {
                 rs.getString(8)));
   }
 
-  /** 정책 요약 한 줄 (알림·관심 정책). organization은 출처 안내의 기관 이름(없으면 null). */
+  /**
+   * 정책 요약 한 줄 (알림·관심 정책). organization은 출처 안내의 기관 이름(없으면 null). applyNote는 마감일 대신 적힌 신청 기간 안내(「예산
+   * 소진 시까지」, 없으면 null).
+   */
   public record PolicySummaryRow(
       UUID rawPolicyId,
       int version,
@@ -281,7 +284,8 @@ public class NoticeQueries {
       LocalDate applyEnd,
       boolean applyAlways,
       List<String> regionCodes,
-      String detailUrl) {}
+      String detailUrl,
+      String applyNote) {}
 
   /** 이 공고에 합쳐진 공고 ID들 (합치기는 한 단계로 펴서 저장해요: 합쳐진 공고에 다시 합친 공고도 남은 공고를 가리킴). */
   public List<UUID> mergedFrom(UUID noticeId) {
@@ -294,7 +298,7 @@ public class NoticeQueries {
   private static final String POLICY_SUMMARY_COLUMNS =
       """
       select raw_policy_id, raw_version, field, title, info ->> 'organization', apply_start,
-             apply_end, apply_always, region_codes, detail_url
+             apply_end, apply_always, region_codes, detail_url, info ->> 'applyNote'
       from notice.policy_judgments
       """;
 
@@ -322,7 +326,10 @@ public class NoticeQueries {
         (rs, i) -> policySummaryRow(rs));
   }
 
-  /** 마감일이 dates 중 하나이고 오늘 신청할 수 있는 정책 (검수 대기·아직 시작 전은 빼요). 마감일 순. */
+  /**
+   * 마감일이 dates 중 하나이고 오늘 신청할 수 있는 정책 (검수 대기·아직 시작 전·중복으로 숨긴 정책은 빼요). 마감일 순. 숨긴 정책을 빼지 않아 관리자가 숨긴 중복
+   * 정책에도 D-3·D-1 알림이 갔어요(2026-11-10 코드 검토, 다른 정책 조회는 #157에서 뺐음).
+   */
   public List<PolicySummaryRow> openPoliciesClosingOn(
       java.util.Collection<LocalDate> dates, LocalDate today) {
     if (dates.isEmpty()) {
@@ -331,7 +338,7 @@ public class NoticeQueries {
     return jdbc.query(
         POLICY_SUMMARY_COLUMNS
             + """
-             where review_status <> 'IN_REVIEW' and apply_end in (:dates)
+             where review_status <> 'IN_REVIEW' and hidden_at is null and apply_end in (:dates)
                and (apply_start is null or apply_start <= :today)
              order by apply_end, raw_policy_id
             """,
@@ -351,7 +358,8 @@ public class NoticeQueries {
         rs.getObject(7, LocalDate.class),
         rs.getBoolean(8),
         List.of((String[]) rs.getArray(9).getArray()),
-        rs.getString(10));
+        rs.getString(10),
+        rs.getString(11));
   }
 
   /** 판정용 공고 한 줄 (맞춤 목록). payload는 현재 버전의 판정 틀·원문(notice) 부분만. */

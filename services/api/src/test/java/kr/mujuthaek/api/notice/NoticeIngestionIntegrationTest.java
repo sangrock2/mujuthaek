@@ -32,6 +32,7 @@ import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.NoticeSummaryResponse;
 import kr.mujuthaek.api.notice.mapper.ExtractionEvent;
 import kr.mujuthaek.api.notice.repository.ExtractionResultRepository;
+import kr.mujuthaek.api.notice.repository.NoticeRepository;
 import kr.mujuthaek.api.notice.service.NoticeField;
 import kr.mujuthaek.api.notice.service.NoticeForJudgment;
 import kr.mujuthaek.api.notice.service.NoticeQueryService;
@@ -118,6 +119,7 @@ class NoticeIngestionIntegrationTest {
   @Autowired NoticeAreaScoreService areaScores;
   @Autowired NoticeBackfillService backfill;
   @Autowired PolicyDuplicateService duplicates;
+  @Autowired NoticeRepository repository;
   @MockitoSpyBean ExtractionResultRepository results;
 
   @BeforeEach
@@ -829,6 +831,16 @@ class NoticeIngestionIntegrationTest {
             query.findOpenPoliciesClosingOn(List.of(today.plusDays(3), today.plusDays(1)), today))
         .extracting(PolicySummary::policyId)
         .containsExactly(startupId);
+    // 2026-11-10 코드 검토: 관리자가 중복으로 숨긴 정책에도 D-3·D-1 알림이 갔음 → 숨긴 정책은 빼요
+    jdbc.sql("update notice.policy_judgments set hidden_at = now() where raw_policy_id = :id")
+        .param("id", startupId)
+        .update();
+    assertThat(
+            query.findOpenPoliciesClosingOn(List.of(today.plusDays(3), today.plusDays(1)), today))
+        .isEmpty();
+    jdbc.sql("update notice.policy_judgments set hidden_at = null where raw_policy_id = :id")
+        .param("id", startupId)
+        .update();
 
     clock.set("2026-10-23T09:00");
     assertThat(query.findPolicySummary(startupId).orElseThrow().status()).isEqualTo("CLOSED");
@@ -1672,6 +1684,36 @@ class NoticeIngestionIntegrationTest {
     merges.reject(third, kept);
     merges.reject(third, merged);
     assertThat(ingestion.mergeDuplicates()).isZero(); // 같은 공고가 아니라고 표시한 쌍도
+  }
+
+  @Test
+  void 보류한_단지_이름은_같은_공고_판별에_쓰지_않는다() {
+    // 2026-11-10 코드 검토: 들어온 공고는 보류한 위치의 이름을 빼는데 저장된 공고 쪽은 넣어, 확인 전 이름 하나로 다른 공고가 자동으로 합쳐질 수 있었음
+    ingestion.apply(body(fixture()));
+    UUID kept = onlyNotice();
+    String held =
+        fixture()
+            .path("payload")
+            .path("notice")
+            .path("locations")
+            .get(0)
+            .path("complexName")
+            .asString();
+    jdbc.sql(
+            "update notice.notice_versions set payload = jsonb_set(payload, '{heldItems}',"
+                + " coalesce(payload->'heldItems', '[]'::jsonb) || '[{\"target\": \"/locations/0/complexName\","
+                + " \"extent\": \"ITEM\", \"codes\": [\"API_MISMATCH\"], \"description\": \"확인 필요\"}]'::jsonb)"
+                + " where notice_id = :id")
+        .param("id", kept)
+        .update();
+
+    List<String> names =
+        repository.findOpenIdentities().stream()
+            .filter(peer -> peer.noticeId().equals(kept))
+            .findFirst()
+            .orElseThrow()
+            .complexNames();
+    assertThat(names).hasSize(1).doesNotContain(held);
   }
 
   @Test
