@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* 무주택자들 디자인 토큰 (.design/design-tokens.css와 같은 값). 색은 이 토큰으로만 써요. */
+@theme {
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* 브랜드 */
+  --color-brand: #087f5b;
+  --color-brand-strong: #066649;
+  --color-brand-soft: #e6f6ef;
+  --color-brand-deep: #0e2a20;
+  --color-brand-deep-text: #b5d3c4;
+  --color-brand-deep-text-2: #a7e3c9;
+  --color-brand-deep-text-3: #ddf2e8;
+
+  /* 글자 */
+  --color-text: #191f28;
+  --color-text-sub: #4e5968;
+  --color-text-tertiary: #6b7684;
+  --color-text-body-long: #333d4b;
+
+  /* 바탕 · 선 */
+  --color-bg: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-fill: #f2f4f6;
+  --color-line: #e5e8eb;
+  --color-line-soft: #f2f4f6;
+  --color-row-selected: #f3fbf7;
+  --color-placeholder-bg: #e9edf1;
+  --color-placeholder-icon: #8b95a1;
+  --color-off: #b0b8c1;
+  --color-check-off: #d1d6db;
+
+  /* 판정 · 상태 */
+  --color-ok-bg: #e6f6ef;
+  --color-ok-text: #066649;
+  --color-check-bg: #fef3c7;
+  --color-check-text: #92400e;
+  --color-rank-bg: #0e2a20;
+  --color-rank-text: #ffffff;
+  --color-neutral-bg: #f2f4f6;
+  --color-neutral-text: #4e5968;
+  --color-danger-bg: #fdecec; /* 관리자 전용 */
+  --color-danger-text: #b42318; /* 관리자 전용 */
+  --color-danger-line: #f4b4ae; /* 관리자 전용 */
+  --color-danger-link: #c0362c; /* 회원 탈퇴 */
+  --color-warn-dot: #d97706; /* 관리자 */
+  --color-lowconf-bg: #fffbeb;
+  --color-lowconf-line: #f5c451;
+
+  /* 지도 그림 */
+  --color-map-road: #eef1f4;
+  --color-map-road-2: #e4e8ec;
+  --color-map-park: #e1f0e6;
+  --color-map-park-2: #d7ebdd;
+  --color-map-water: #cfe3f3;
+  --color-map-water-2: #dce9f3;
+
+  /* 간편 로그인 (로고 없이 색만) */
+  --color-kakao-bg: #fee500;
+  --color-kakao-text: #191919;
+  --color-naver-bg: #03c75a;
+  --color-naver-text: #0b1f12;
+
+  /* 글꼴 */
+  --font-sans: var(--font-pretendard), "Pretendard", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --tracking-body: -0.01em;
+  --tracking-title: -0.03em;
+  --tracking-h1: -0.04em;
+  --tracking-logo: -0.045em;
+
+  /* 둥글기 */
+  --radius-tag: 6px;
+  --radius-badge: 8px;
+  --radius-sm: 12px;
+  --radius-control: 14px;
+  --radius-tile: 16px;
+  --radius-card: 24px;
+  --radius-card-lg: 28px;
+  --radius-pill: 999px;
+
+  /* 그림자 */
+  --shadow-seg: 0 1px 3px rgba(25, 31, 40, 0.1);
+  --shadow-float: 0 6px 20px rgba(25, 31, 40, 0.06);
+
+  /* 화면 폭 */
+  --breakpoint-lg: 1024px;
+}
+
+:root {
+  --header-h: 68px;
+  --m-header-h: 56px;
+  --content-max: 1200px;
+}
+
+@layer base {
+  body {
+    /* 디자인은 브라우저 기본 줄간격(normal)을 써요 */
+    line-height: normal;
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    letter-spacing: var(--tracking-body);
+  }
+
+  a {
+    color: var(--color-brand);
+  }
+  a:hover {
+    color: var(--color-brand-strong);
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font-family: inherit;
+    /* 브라우저 기본처럼 폼 요소는 자간을 물려받지 않아요 (디자인 기준) */
+    letter-spacing: normal;
+  }
+
+  input[type="checkbox"],
+  input[type="range"] {
+    accent-color: var(--color-brand);
+  }
+
+  :where(a, button, input, select, textarea, summary):focus-visible {
+    outline: 3px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * 선택 칸: Safari는 기본 모양(select)에 높이·여백을 적용하지 않아 납작해져요.
+ * 기본 모양을 끄고 ▾를 직접 그려요. 레이어 밖에 둬서 Tailwind 여백(px-…)보다 오른쪽 여백이 우선해요.
+ * ▾ 색은 --color-text-tertiary(#6b7684)
+ */
+select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%236b7684' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 18px;
+  padding-right: 38px;
+}
