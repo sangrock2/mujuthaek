@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import kr.mujuthaek.api.notice.service.NoticeQueryService;
 import kr.mujuthaek.api.user.service.NotificationPreference;
 import kr.mujuthaek.api.user.service.UserNotificationQueryService;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -24,10 +25,13 @@ import org.springframework.stereotype.Component;
 class UserRecipientFinder implements RecipientFinder {
 
   private final UserNotificationQueryService users;
+  private final NoticeQueryService notices;
   private final Properties properties;
 
-  UserRecipientFinder(UserNotificationQueryService users, Properties properties) {
+  UserRecipientFinder(
+      UserNotificationQueryService users, NoticeQueryService notices, Properties properties) {
     this.users = users;
+    this.notices = notices;
     this.properties = properties;
   }
 
@@ -43,9 +47,19 @@ class UserRecipientFinder implements RecipientFinder {
         users.newNoticeAudience(field, regionCodes, nationwide, noticeType), "NEW_NOTICE");
   }
 
+  /**
+   * 관심 등록한 회원. 공고는 이 공고에 합쳐진 공고에 관심 등록한 회원도 넣어요 (관심은 합쳐진 공고 ID에 그대로 남아요. 예전엔 남은 공고 ID로만 찾아 그 회원들이
+   * 마감·정정·후속 알림을 못 받았어요, 2026-11-10 코드 검토).
+   */
   @Override
   public List<Recipient> forFavorite(String targetType, UUID targetId, String type) {
-    return recipients(users.favoriteAudience(targetType, targetId), type);
+    List<UUID> audience = new ArrayList<>(users.favoriteAudience(targetType, targetId));
+    if (NoticeNotificationService.TARGET.equals(targetType)) {
+      for (UUID merged : notices.mergedFrom(targetId)) {
+        audience.addAll(users.favoriteAudience(targetType, merged));
+      }
+    }
+    return recipients(audience, type);
   }
 
   @Override

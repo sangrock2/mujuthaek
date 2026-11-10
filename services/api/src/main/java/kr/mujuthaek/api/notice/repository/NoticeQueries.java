@@ -283,6 +283,14 @@ public class NoticeQueries {
       List<String> regionCodes,
       String detailUrl) {}
 
+  /** 이 공고에 합쳐진 공고 ID들 (합치기는 한 단계로 펴서 저장해요: 합쳐진 공고에 다시 합친 공고도 남은 공고를 가리킴). */
+  public List<UUID> mergedFrom(UUID noticeId) {
+    return jdbc.query(
+        "select id from notice.notices where merged_into = :id order by id",
+        new MapSqlParameterSource("id", noticeId),
+        (rs, i) -> rs.getObject(1, UUID.class));
+  }
+
   private static final String POLICY_SUMMARY_COLUMNS =
       """
       select raw_policy_id, raw_version, field, title, info ->> 'organization', apply_start,

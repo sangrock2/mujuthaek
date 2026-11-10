@@ -43,6 +43,10 @@ class NoticeChatRoomsTest {
 
     assertThat(rooms.find(merged)).contains(new ChatRoom(kept, LocalDate.of(2026, 10, 31)));
     assertThat(rooms.find(UUID.randomUUID())).isEmpty();
+
+    // 2026-11-10 코드 검토: 합치기 전 메시지는 합쳐진 공고 ID에 남아 있어 방이 그 ID도 함께 읽어요(예전엔 기록이 사라짐)
+    when(notices.mergedFrom(kept)).thenReturn(List.of(merged));
+    assertThat(rooms.find(merged).orElseThrow().noticeIds()).containsExactly(kept, merged);
   }
 
   @Test

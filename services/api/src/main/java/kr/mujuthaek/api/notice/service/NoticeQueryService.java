@@ -555,6 +555,15 @@ public class NoticeQueryService {
   }
 
   /**
+   * 이 공고(남은 공고)에 합쳐진 공고 ID들. 합쳐도 관심 등록·채팅 메시지는 합쳐진 공고 ID에 그대로 남아요(합치기를 되돌릴 수 있게 옮기지 않음). 그래서 알림
+   * 대상·채팅 목록은 남은 공고 ID와 이 ID들을 함께 봐요 (2026-11-10 코드 검토: 남은 공고 ID로만 찾아 합쳐진 공고의 관심 회원이 마감·정정 알림을 못 받고
+   * 채팅 기록이 사라졌음).
+   */
+  public List<UUID> mergedFrom(UUID noticeId) {
+    return queries.mergedFrom(noticeId);
+  }
+
+  /**
    * 공고에 가장 최근 붙이거나 바뀐 후속 안내 하나 (알림 담당 요청: NoticeUpdated(followUps)를 받았을 때 어떤 글인지). 그 이벤트를 받는 트랜잭션
    * 안에서 부르면 이벤트의 글이에요. 후속 안내가 없으면 빈 값. noticeId는 합친(남은) 공고 ID로 물으세요(findSummary의 noticeId).
    */

@@ -456,12 +456,16 @@ public class NoticeIngestionService {
 
   private PublicationPolicy.Published published(CurrentVersion current, ExtractionEvent event) {
     Optional<SourceVersion> fromPost = notices.latestFromPost(event.rawPostId());
+    // 반영한 정정은 기준 출처의 정정뿐이에요(다른 출처의 정정은 잇기만 함). 그것만 세야 기준 출처의 새 버전이 굳지 않아요
+    UUID base = notices.baseRoot(current.noticeId()).orElse(null);
     return new PublicationPolicy.Published(
         fromPost.map(SourceVersion::rawVersion).orElse(null),
         fromPost.map(SourceVersion::reviewStatus).orElse(null),
         current.contentHash(),
-        notices.hasCorrection(current.noticeId()),
-        notices.latestOtherCorrectionPostedOn(current.noticeId(), event.rawPostId()).orElse(null));
+        notices.hasCorrection(current.noticeId(), base),
+        notices
+            .latestOtherCorrectionPostedOn(current.noticeId(), event.rawPostId(), base)
+            .orElse(null));
   }
 
   /**

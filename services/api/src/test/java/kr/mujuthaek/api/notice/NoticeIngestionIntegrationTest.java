@@ -1696,6 +1696,18 @@ class NoticeIngestionIntegrationTest {
     ((ObjectNode) next.path("payload").path("notice").path("notice")).put("title", "다른 출처에서 고친 제목");
     assertThat(ingestion.apply(body(next))).isEqualTo(IngestionOutcome.KEPT_BASE_SOURCE);
     assertThat(query.detail(kept).header().title()).isNotEqualTo("다른 출처에서 고친 제목");
+
+    // 2026-11-10 코드 검토: 기준이 아닌 출처의 정정은 잇기만 하고 반영하지 않으니, 기준 출처의 새 버전을 「정정 반영됨」으로 막으면 안 돼요
+    // (예전엔 그 정정을 세어 기준 출처의 수정이 KEPT_CORRECTION으로 막혀 공고가 옛 값으로 굳었음)
+    assertThat(ingestion.apply(body(correctionOf(duplicate.deepCopy(), "2026-11-06"))))
+        .isEqualTo(IngestionOutcome.KEPT_BASE_SOURCE);
+    ObjectNode baseNext = withRawVersion(fixture(), 2);
+    baseNext.put("eventId", UUID.randomUUID().toString());
+    ((ObjectNode) baseNext.path("payload")).put("title", "기준 출처에서 고친 제목");
+    ((ObjectNode) baseNext.path("payload").path("notice").path("notice"))
+        .put("title", "기준 출처에서 고친 제목");
+    assertThat(ingestion.apply(body(baseNext))).isEqualTo(IngestionOutcome.NEW_VERSION);
+    assertThat(query.detail(kept).header().title()).isEqualTo("기준 출처에서 고친 제목");
   }
 
   @Test

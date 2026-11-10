@@ -130,7 +130,9 @@ public record CompletedNotice(
   /**
    * 공고의 접수 기간 [시작, 끝]. 공고 전체 접수 일정이 하나면 그 기간(schedule)이고, 순위·대상별로 여러 개라 schedule이 없으면 검증된 접수
    * 구간(applicationWindows)의 가장 이른 시작 ~ 가장 늦은 끝이에요. 끝을 모르는 구간이 하나라도 있으면 끝은 null이에요(2026-10-26 원문 대조:
-   * 1·2순위 접수가 따로 있는 공고는 기간이 비어 「일정 확인」으로 보였음).
+   * 1·2순위 접수가 따로 있는 공고는 기간이 비어 「일정 확인」으로 보였음). 확인 전까지 보류한 접수 일정은 접수 구간에서 빠지므로, 원문 접수 일정 수보다 구간이 적으면
+   * 더 늦은 접수가 있을 수 있어 끝은 null이에요(2026-11-10 코드 검토: 보류한 2순위 10/05~10/07을 빼고 마감 10/03으로 보여 D-day·마감
+   * 알림이 앞당겨졌음. 접수 상태는 statusWindows가 보류 구간을 날짜 모르는 구간으로 넣어 이미 맞았음).
    */
   static LocalDate[] applyPeriod(JsonNode p) {
     LocalDate start = date(p.path("schedule").path("applyStartOn"));
@@ -139,7 +141,7 @@ public record CompletedNotice(
     if (start != null || end != null || !windows.isArray() || windows.isEmpty()) {
       return new LocalDate[] {start, end};
     }
-    boolean endKnown = true;
+    boolean endKnown = windows.size() >= applicationSchedules(p.path("notice").path("schedules"));
     for (JsonNode w : windows) {
       LocalDate s = date(w.path("applyStartOn"));
       LocalDate e = date(w.path("applyEndOn"));
@@ -153,6 +155,20 @@ public record CompletedNotice(
       }
     }
     return new LocalDate[] {start, endKnown ? end : null};
+  }
+
+  /** 원문 일정 중 접수(APPLICATION) 일정 수 (보류·검수 대상 포함). */
+  private static int applicationSchedules(JsonNode schedules) {
+    int count = 0;
+    for (JsonNode s : schedules) {
+      for (JsonNode kind : s.path("kinds")) {
+        if ("APPLICATION".equals(kind.asString())) {
+          count++;
+          break;
+        }
+      }
+    }
+    return count;
   }
 
   private static LocalDate date(JsonNode node) {

@@ -52,6 +52,22 @@ class CompletedNoticeApplyPeriodTest {
   }
 
   @Test
+  void 보류해_빠진_접수_일정이_있으면_끝은_비운다() {
+    // 2026-11-10 코드 검토: 보류한 2순위(10/05~10/07)가 접수 구간에서 빠져 마감이 10/03으로 보였고 마감 알림도 앞당겨졌음
+    assertThat(
+            period(
+                """
+                {"schedule":null,
+                 "applicationWindows":[{"priorityRank":1,"applyStartOn":"2026-10-01","applyEndOn":"2026-10-03"}],
+                 "notice":{"schedules":[
+                   {"id":"rank1","kinds":["APPLICATION"]},
+                   {"id":"rank2","kinds":["APPLICATION"]},
+                   {"id":"winners","kinds":["WINNER_ANNOUNCEMENT"]}]}}
+                """))
+        .containsExactly(LocalDate.of(2026, 10, 1), null);
+  }
+
+  @Test
   void 접수_구간이_없으면_비어_있다() {
     assertThat(period("{}")).containsExactly(null, null);
     assertThat(period("{\"applicationWindows\":[]}")).containsExactly(null, null);

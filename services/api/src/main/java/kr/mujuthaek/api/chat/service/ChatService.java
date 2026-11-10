@@ -90,7 +90,7 @@ public class ChatService {
     CursorQuery query = CursorQuery.of(cursor, size == null ? DEFAULT_PAGE_SIZE : size, SORT);
     UUID before = query.after() == null ? null : query.after().id();
     return CursorPageResponse.from(
-        messages.page(room.noticeId(), before, query.fetchSize(), viewer),
+        messages.page(room.noticeIds(), before, query.fetchSize(), viewer), // 합쳐진 공고의 메시지도
         query.size(),
         row -> ChatMessageMapper.toResponse(row, viewer),
         row -> CursorKey.of(SORT, null, row.id()));
@@ -111,7 +111,7 @@ public class ChatService {
       MessageRow parent =
           messages
               .find(request.parentId(), null)
-              .filter(p -> p.noticeId().equals(room.noticeId()))
+              .filter(p -> room.noticeIds().contains(p.noticeId())) // 합치기 전 메시지에도 답장
               .filter(p -> p.status() == MessageStatus.VISIBLE)
               .orElseThrow(messageNotFound());
       if (parent.parentId() != null) {
@@ -202,7 +202,7 @@ public class ChatService {
     SseEmitter emitter = hub.subscribe(room.noticeId());
     UUID after = eventId(lastEventId);
     if (after != null) {
-      for (MessageRow row : messages.after(room.noticeId(), after, RESUME_LIMIT)) {
+      for (MessageRow row : messages.after(room.noticeIds(), after, RESUME_LIMIT)) {
         hub.send(emitter, ChatEvent.created(ChatMessageMapper.toResponse(row, null)));
       }
     }
