@@ -451,6 +451,22 @@ def test_pdf_is_read_by_file_type_not_by_name(reader, monkeypatch, name):
     assert result.material.files[0].file_type == "pdf" and result.context.forced_review == ()
 
 
+def test_notice_body_from_text_is_kept_when_only_the_unit_list_is_a_pdf(reader, monkeypatch):
+    # 2026-11-10 코드 검토: 공고문이 HWP이고 목록만 PDF면 목록 PDF 글자가 원문을 통째로 바꿔 수집 글자의 공고 본문(자격 등)이 빠졌음
+    monkeypatch.setattr(adapter, "read_pdf", lambda data: fake_pdf())
+    files = [
+        {"name": "모집공고.hwp", "downloadUrl": "https://x.kr/f", "sha256": PDF_SHA, **fields("hwp", "NOTICE_DOC"), "s3Key": "raw/x/a.hwp"},
+        pdf_file("주택목록.pdf", **fields("pdf", "UNIT_LIST")),
+    ]
+    result = build_intake(make_event(files=files), reader)
+    text = result.material.text
+    assert result.ready and result.material.text_document_id == "pdf-text"
+    assert text.startswith(make_event()["payload"]["text"]) and "=== 첨부 주택목록.pdf ===\n" in text and PDF_BODY.strip() in text
+    assert [code for code, _ in result.context.forced_review] == ["PDF_MISSING"] and "HWP" in result.context.forced_review[0][1]
+    document = next(d for d in result.context.documents if d["id"] == "pdf-text")
+    assert document["name"].startswith("수집 원문 텍스트 + ") and document["sha256"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def test_previous_event_format_reads_extension_despite_trailing_space(reader):
     result = build_intake(make_event(files=[{"name": "모집공고문.PDF  ", "downloadUrl": "https://x.kr/f", "sha256": PDF_SHA}]), reader)
     assert [(f.file_type, f.role) for f in result.raw.files] == [("pdf", "NOTICE_DOC")]

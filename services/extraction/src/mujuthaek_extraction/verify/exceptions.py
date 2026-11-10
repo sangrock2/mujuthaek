@@ -62,15 +62,17 @@ def _atoms(expression: dict[str, Any] | None):
         yield from _atoms(child)
 
 
-def _suspect(atoms: list[dict[str, Any]], known: set[float], sources: SourceBundle) -> str | None:
+def _suspect(atoms: list[dict[str, Any]], known: set[float], sources: SourceBundle, excused: dict[str, list[tuple[int, int]]] | None = None) -> str | None:
     """기준값 바로 뒤에 비슷한 크기의 다른 기준값이 있으면 그 설명을, 없으면 None을 돌려줍니다. known: 이미 조건식에 쓰인 값.
+    excused: 원문 글자마다 빠진 예외로 보지 않는 구간(선정 규칙의 근거·글 자리, _selection_spans).
 
     기준값이 여러 곳에 나오면 다른 값이 가장 많이 붙어 있는 곳(가산 표일 가능성이 높은 곳)을 보여 줍니다.
     """
     best: tuple[int, str, int, list[tuple[int, str]]] | None = None
     for atom in atoms:
         base = float(atom["value"])
-        for text in sources.texts.values():
+        for source_id, text in sources.texts.items():
+            skip = (excused or {}).get(source_id, [])
             found = _values(text, atom["unit"])
             for pos, value, _ in found:
                 if value != base:
@@ -88,6 +90,7 @@ def _suspect(atoms: list[dict[str, Any]], known: set[float], sources: SourceBund
                     and not ALLOCATION.search(text[pos:p])
                     and not PAYMENT.search(text[pos:p])
                     and not BRACKET_BOUND.search(text[max(p - 3, 0) : p])
+                    and not any(a <= p < b for a, b in skip)
                 ]
                 if nearby and (best is None or len(nearby) > best[0]):
                     best = (len(nearby), text, pos, nearby)
@@ -330,12 +333,10 @@ def check_missing_exceptions(candidate: dict[str, Any], sources: SourceBundle) -
                 node = exception.get(key) or {}
                 expression = node.get("expression") if key == "when" else node
                 known |= {float(a["value"]) for a in _atoms(expression) if isinstance(a["value"], int | float)}
-    # 선정 규칙(가점·순위)이 쓰는 값도 빠진 예외가 아닙니다. 가점 규칙은 조건식 없이 글로 남기도 해서 원문 글의 값도 셉니다
-    # (2026-11-09 23건 jbdc-16011: 가점표 「가구 소득 … 80% 이하인 경우 : 1점」이 신생아·일반 공급 소득 100% 조건 3개의 예외 의심으로 보류)
-    for rule in candidate.get("selectionRules") or []:
-        known |= {float(a["value"]) for a in _atoms((rule.get("rule") or {}).get("expression")) if isinstance(a.get("value"), int | float)}
-        written = rule.get("originalText") or ""
-        known |= {value for unit in ("PERCENT", "KRW") for _, value, _ in _values(written, unit)}
+    # 선정 규칙(가점·순위)의 원문 자리에 있는 값도 빠진 예외가 아닙니다(2026-11-09 23건 jbdc-16011: 가점표 「가구 소득 … 80% 이하인 경우 :
+    # 1점」이 신생아·일반 공급 소득 100% 조건 3개의 예외 의심으로 보류). 값을 공고 전체에서 지우면 같은 숫자의 진짜 가산 기준까지 경고가
+    # 꺼져서(2026-11-10 코드 검토: 「100% 이하(맞벌이 120% 이하)」 + 가점 「120% 이하인 경우 1점」 → 경고 없이 게시) 그 자리만 뺍니다
+    excused = _selection_spans(candidate, sources)
     for index, item in enumerate(candidate["eligibility"]):
         rule = item["rule"]
         # 예외가 이미 있는 조건도 봅니다. 남은 값(known에 없는 값)이 있으면 가산 구간 일부가 빠진 것입니다
@@ -343,7 +344,28 @@ def check_missing_exceptions(candidate: dict[str, Any], sources: SourceBundle) -
         if rule["status"] != "STRUCTURED":
             continue
         atoms = [a for a in _atoms(rule["expression"]) if a["unit"] in ("KRW", "PERCENT") and isinstance(a["value"], int | float)]
-        description = _suspect(atoms, known, sources)
+        description = _suspect(atoms, known, sources, excused)
         if description:
             findings.append(Finding("V5", "EXCEPTION_SUSPECTED", f"/eligibility/{index}", description))
     return findings
+
+
+SELECTION_TEXT_MIN_CHARS = 6  # 원문에서 자리를 찾는 선정 규칙 글의 최소 길이(띄어쓰기 뺀 글자 수, 짧은 글은 다른 곳과 우연히 겹침)
+
+
+def _selection_spans(candidate: dict[str, Any], sources: SourceBundle) -> dict[str, list[tuple[int, int]]]:
+    """선정 규칙(가점·순위)이 원문에서 차지하는 자리: 근거 위치와, 원문 글(originalText)이 원문에 있는 곳(띄어쓰기는 무시). 원문 글자마다."""
+    spans: dict[str, list[tuple[int, int]]] = {}
+    located = {e["id"]: e for e in candidate.get("evidence") or [] if (e.get("locator") or {}).get("kind") == "TEXT_RANGE"}
+    for rule in candidate.get("selectionRules") or []:
+        for evidence_id in rule.get("evidenceIds") or []:
+            evidence = located.get(evidence_id)
+            if evidence:
+                spans.setdefault(evidence["sourceId"], []).append((evidence["locator"]["start"], evidence["locator"]["end"]))
+        written = "".join(str(rule.get("originalText") or "").split())
+        if len(written) < SELECTION_TEXT_MIN_CHARS:
+            continue
+        pattern = re.compile(r"\s*".join(map(re.escape, written)))
+        for source_id, text in sources.texts.items():
+            spans.setdefault(source_id, []).extend(match.span() for match in pattern.finditer(text))
+    return spans

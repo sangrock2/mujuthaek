@@ -900,6 +900,31 @@ def test_reference_rent_prose_and_schedule_tables_are_not_criteria_tables():
     assert criteria_omission(TABLE + "\n" + tables, [income]) is None
 
 
+def test_a_disputed_image_row_is_held_even_when_the_same_words_appear_outside_the_reading():
+    # 2026-11-10 코드 검토: 그림 표 줄이 두 판독에서 다른데(70%·100%), 본문 다른 대상 문장에 같은 글이 있어 그림 근거에서 빠지고 보류 없이 게시됨
+    row = "| 신혼부부 | 월평균소득 70% 이하 |"
+    head = "=== 그림 판독 공고.pdf 3쪽 (AI가 그림 속 글자를 옮김) ===\n"
+    disputed = "=== 그림 판독 불일치 공고.pdf 3쪽 ===\n불일치 줄: " + row.replace("|", "¦")
+    text = f"청년 계층: 월평균소득 70% 이하\n--- 1쪽 ---\n{head}{row}\n{disputed}"
+    at = text.index(row)
+    evidence = [{"id": "ev", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": at, "end": at + len(row)}, "quote": "월평균소득 70% 이하"}]
+    income = {"category": "INCOME", "rule": {"status": "STRUCTURED", "expression": None}, "scope": scope(), "evidenceIds": ["ev"]}
+    candidate = {
+        "evidence": evidence,
+        "notice": {"counts": [], "evidenceIds": []},
+        "locations": [],
+        "supplyGroups": [],
+        "schedules": [],
+        "eligibility": [income],
+        "selectionRules": [],
+        "requiredDocuments": [],
+        "quality": {"coverage": {s: {"status": "EXTRACTED"} for s in ("eligibility", "requiredDocuments", "schedules")}, "missingFields": []},
+    }
+    found = {(f.code, f.target) for f in check_consistency(candidate, SourceBundle(texts={"pdf-text": text}, pdfs={"file-1": b"pdf"}))}
+    assert ("IMAGE_READING_DISAGREES", "/eligibility/0") in found
+    assert ("EVIDENCE_FROM_IMAGE", "/eligibility/0") not in found  # 그림 근거 표시는 지금처럼 그림 밖 글로 판단
+
+
 def test_image_quotes_also_written_outside_the_reading_are_not_image_evidence():
     # 2026-11-09 23건 sh-311005: 표지 그림의 제목 글을 공고 근거로 써 공고 전체가 검수로 감. 같은 제목이 게시글 제목(그림 밖 글)에 있음
     head = "=== 그림 판독 공고.pdf 1쪽 (AI가 그림 속 글자를 옮김) ===\n"

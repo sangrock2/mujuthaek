@@ -26,6 +26,7 @@ import kr.mujuthaek.api.eligibility.rule.Judgment.PrintedRow;
 import kr.mujuthaek.api.eligibility.rule.Judgment.Residence;
 import kr.mujuthaek.api.eligibility.rule.Judgment.Savings;
 import kr.mujuthaek.api.eligibility.rule.Judgment.WelfareStatus;
+import kr.mujuthaek.api.eligibility.rule.frame.RegionCodes;
 
 /**
  * 판정 틀의 조건 하나를 판정해요 (MET · NOT_MET · UNKNOWN).
@@ -44,9 +45,18 @@ public final class CriterionJudge {
   /** 판정 틀의 수급 상태 중 판정 입력으로 알 수 있는 것과 그 입력 값. */
   private static final Map<String, String> WELFARE_INPUTS =
       Map.of(
-          "LIVELIHOOD_BENEFIT", "BASIC_LIVELIHOOD",
           "NEAR_POOR", "NEAR_POOR",
           "SINGLE_PARENT", "SINGLE_PARENT");
+
+  /**
+   * 기초생활보장 급여 중 하나만 되는 상태. 입력 BASIC_LIVELIHOOD(기초생활수급자)는 생계·의료·주거·교육급여 중 무엇을 받는지 가리지 못해, 수급자면 확인
+   * 필요이고 수급자가 아니면 이 급여도 아니에요. 생계급여 조건을 수급자 입력만으로 충족 처리하면 주거급여만 받는 사람이 영구임대 「생계·의료급여 수급자」 조건에서 지원
+   * 가능이 됐어요(2026-11-10 코드 검토). 의료급여는 기초생활보장 밖의 수급권자(국가유공자 등)도 있어 입력으로 알 수 없어요.
+   */
+  private static final Set<String> BASIC_LIVELIHOOD_BENEFITS =
+      Set.of("LIVELIHOOD_BENEFIT", "HOUSING_BENEFIT", "EDUCATION_BENEFIT");
+
+  private static final String BASIC_LIVELIHOOD = "BASIC_LIVELIHOOD";
 
   private static final Set<String> TARGET_GROUP_STATUSES =
       Set.of("UNIVERSITY_STUDENT", "JOB_SEEKER");
@@ -125,22 +135,14 @@ public final class CriterionJudge {
           null,
           null);
     }
-    Status where = NOT_MET;
-    for (String code : c.regionCodes()) {
-      String prefix = regionPrefix(code);
-      if (prefix.length() <= 5 && a.regionCode().startsWith(prefix)) {
-        where = MET;
-        break;
-      }
-      if (prefix.length() > 5 && a.regionCode().equals(prefix.substring(0, 5))) {
-        where = UNKNOWN; // 동 단위 조건은 시군구만으로 알 수 없어요
-      }
-    }
-    if (where == NOT_MET) {
+    // 판정 틀 엔진과 같은 비교: 동 단위 조건·시도만 넣은 사용자·일반구가 있는 시(수원시 ↔ 장안구)
+    Verdict where = RegionCodes.withinAny(a.regionCode(), c.regionCodes());
+    if (where == Verdict.NOT_MET) {
       return item(c, "RESIDENCE", label, NOT_MET, "공고 지역에 살고 있지 않아요", List.of(), null, null);
     }
-    if (where == UNKNOWN) {
-      return item(c, "RESIDENCE", label, UNKNOWN, "읍·면·동까지 확인이 필요해요", List.of(), null, null);
+    if (where == Verdict.UNKNOWN) {
+      return item(
+          c, "RESIDENCE", label, UNKNOWN, "공고 지역에 드는지 더 자세한 주소로 확인이 필요해요", List.of(), null, null);
     }
     if (c.minMonths() != null) {
       return item(
@@ -522,7 +524,11 @@ public final class CriterionJudge {
         "자격 · " + String.join(", ", c.anyOf().stream().map(CriterionJudge::statusName).toList());
     boolean answerable = true;
     for (String status : c.anyOf()) {
-      if (WELFARE_INPUTS.containsKey(status)) {
+      if (BASIC_LIVELIHOOD_BENEFITS.contains(status)) {
+        if (a.welfareStatuses() == null || a.welfareStatuses().contains(BASIC_LIVELIHOOD)) {
+          answerable = false; // 수급자여도 어느 급여인지 몰라요
+        }
+      } else if (WELFARE_INPUTS.containsKey(status)) {
         if (a.welfareStatuses() == null) {
           answerable = false;
         } else if (a.welfareStatuses().contains(WELFARE_INPUTS.get(status))) {
@@ -639,20 +645,6 @@ public final class CriterionJudge {
       }
     }
     return c.percent() + added;
-  }
-
-  /** 법정동코드 10자리에서 0으로 채운 하위 단계를 뺀 앞부분 (1100000000 → 11, 1144000000 → 11440). */
-  static String regionPrefix(String code) {
-    if (!code.substring(8).equals("00")) {
-      return code;
-    }
-    if (!code.substring(5, 8).equals("000")) {
-      return code.substring(0, 8);
-    }
-    if (!code.substring(2, 5).equals("000")) {
-      return code.substring(0, 5);
-    }
-    return code.substring(0, 2);
   }
 
   private static String statusName(String status) {

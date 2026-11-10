@@ -68,6 +68,20 @@ class CriterionJudgeTest {
     var withMonths = new Judgment.Residence(B, List.of("1100000000"), 12);
     assertThat(judge(withMonths, applicant().region("11440").build()).status()).isEqualTo(UNKNOWN);
     assertThat(judge(withMonths, applicant().region("41111").build()).status()).isEqualTo(NOT_MET);
+    // 일반구가 있는 시(2026-11-10 코드 검토): 수원시(41110)의 구는 앞부분이 4111x라 앞부분 일치만으로는 불충족이 됐음
+    var suwon = new Judgment.Residence(B, List.of("4111000000"), null);
+    assertThat(judge(suwon, applicant().region("41111").build()).status()).isEqualTo(MET);
+    assertThat(judge(suwon, applicant().region("41280").build()).status()).isEqualTo(NOT_MET);
+    var jangan = new Judgment.Residence(B, List.of("4111100000"), null);
+    assertThat(judge(jangan, applicant().region("41110").build()).status()).isEqualTo(UNKNOWN);
+    assertThat(judge(jangan, applicant().region("41000").build()).status()).isEqualTo(UNKNOWN);
+    assertThat(judge(jangan, applicant().region("41113").build()).status()).isEqualTo(NOT_MET);
+    assertThat(
+            judge(
+                    new Judgment.Residence(B, List.of("1111000000"), null),
+                    applicant().region("11140").build())
+                .status())
+        .isEqualTo(NOT_MET); // 끝자리 0인 보통 구(종로구·중구)는 앞 네 자리가 달라 그대로
   }
 
   @Test
@@ -365,6 +379,17 @@ class CriterionJudgeTest {
     assertThat(judge(c, Applicant.empty()).status()).isEqualTo(UNKNOWN);
     var disabled = new Judgment.WelfareStatus(B, List.of("DISABLED", "NEAR_POOR"));
     assertThat(judge(disabled, applicant().welfare().build()).status()).isEqualTo(UNKNOWN);
+    // 기초생활수급자 입력은 생계·의료·주거·교육급여 중 무엇인지 몰라 생계급여 조건은 확인 필요(2026-11-10 코드 검토: 충족으로 판정했음)
+    assertThat(judge(c, applicant().welfare("BASIC_LIVELIHOOD").build()).status())
+        .isEqualTo(UNKNOWN);
+    var housing = new Judgment.WelfareStatus(B, List.of("HOUSING_BENEFIT"));
+    assertThat(judge(housing, applicant().welfare("BASIC_LIVELIHOOD").build()).status())
+        .isEqualTo(UNKNOWN);
+    assertThat(judge(housing, applicant().welfare("NEAR_POOR").build()).status())
+        .isEqualTo(NOT_MET);
+    var medical = new Judgment.WelfareStatus(B, List.of("MEDICAL_BENEFIT"));
+    assertThat(judge(medical, applicant().welfare().build()).status())
+        .isEqualTo(UNKNOWN); // 기초생활보장 밖 수급권자도 있음
     var student = new Judgment.WelfareStatus(B, List.of("UNIVERSITY_STUDENT"));
     assertThat(judge(student, applicant().targetGroups("UNIVERSITY_STUDENT").build()).status())
         .isEqualTo(MET);
@@ -439,14 +464,6 @@ class CriterionJudgeTest {
                 new Judgment.Option("외국인 부모가 대리 신청하는 한부모가족", List.of(youth))));
     assertThat(judge(longOne, Applicant.empty()).label())
         .isEqualTo("다음 중 하나 · 자녀가 있고 같은 세대별 주민등록표등본에 자녀가 등재된 미성년 세대주 외 2가지");
-  }
-
-  @Test
-  void regionPrefix() {
-    assertThat(CriterionJudge.regionPrefix("1100000000")).isEqualTo("11");
-    assertThat(CriterionJudge.regionPrefix("1144000000")).isEqualTo("11440");
-    assertThat(CriterionJudge.regionPrefix("1144012000")).isEqualTo("11440120");
-    assertThat(CriterionJudge.regionPrefix("1144012012")).isEqualTo("1144012012");
   }
 
   @Test

@@ -651,11 +651,14 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
             ranges.setdefault(source_id, []).append((head.start(), len(text) if following < 0 else following))
     if not ranges:
         return
-    from_image = {
+    located = {
         e["id"]
         for e in candidate.get("evidence") or []
         if e["locator"]["kind"] == "TEXT_RANGE" and any(a <= e["locator"]["start"] < b for a, b in ranges.get(e["sourceId"], []))
     }
+    # 두 번 읽어 다른 줄(판독 불일치)은 그림 밖에 같은 글이 있어도 봅니다: 그 글은 다른 대상의 문장일 수 있음(2026-11-10 코드 검토: 그림 표
+    # 「신혼부부 | 월평균소득 70% 이하」가 불일치인데 본문 「청년 계층: 월평균소득 70% 이하」 때문에 그림 근거에서 빠져 보류 없이 게시됨)
+    _check_disputed_reading(candidate, sources, located, find)
     # 그림 판독 글자를 근거로 했어도 같은 글이 그림 밖 원문 글자나 수집기가 읽은 게시글 제목(원본 참조 sourceTitle)에도 있으면 판독에 기대지
     # 않은 값입니다(띄어쓰기를 빼고 비교, 짧은 글은 우연히 겹칠 수 있어 그대로 그림 근거). 2026-11-09 23건 sh-311005: 표지 그림의
     # 「에어스페이스 신림3호점」을 공고 제목 근거로 써 공고 전체(찾은 값 138개)가 검수로 감. 첨부 PDF가 있으면 원문은 PDF 글자뿐이고
@@ -663,10 +666,9 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
     outside = [normalize(piece) for source_id, text in sources.texts.items() for piece in _outside(text, ranges.get(source_id, []))]
     outside += [normalize(str(ref.get("sourceTitle") or "")) for ref in candidate.get("sourceReferences") or [] if isinstance(ref, dict)]
     quotes = {e["id"]: normalize(e.get("quote") or "") for e in candidate.get("evidence") or []}
-    from_image = {i for i in from_image if len(quotes.get(i, "")) < IMAGE_QUOTE_MIN_CHARS or not any(quotes[i] in text for text in outside)}
+    from_image = {i for i in located if len(quotes.get(i, "")) < IMAGE_QUOTE_MIN_CHARS or not any(quotes[i] in text for text in outside)}
     if not from_image:
         return
-    _check_disputed_reading(candidate, sources, from_image, find)
     if _evidence_ids(candidate["notice"]) & from_image:
         find("V8", "EVIDENCE_FROM_IMAGE", "/notice", "공고 정보의 근거가 AI가 그림에서 옮긴 글자입니다. 원문 그림과 맞는지 확인하세요.")
     for index, item in enumerate(candidate["eligibility"]):

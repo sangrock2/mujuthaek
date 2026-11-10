@@ -205,13 +205,17 @@ def build_intake(
         for file, parsed in pdf_documents:
             if document["id"] == file.document_id:
                 document["pageCount"] = parsed.page_count
+    # 공고문(NOTICE_DOC)은 PDF로 읽지 못했는데(HWP·스캔본·S3에 없음) 목록 PDF는 읽힌 경우: 예전엔 목록 PDF 글자가 원문을 통째로 바꿔
+    # 수집 글자에 있던 공고 본문(자격·일정·서류)이 빠졌습니다(2026-11-10 코드 검토). 수집 글자를 본문으로 두고 읽힌 PDF를 뒤에 붙입니다
+    notices = {index for index, file in enumerate(raw.files) if file.role == "NOTICE_DOC"}
+    text_led = bool(pdf_documents) and bool(notices) and not any(int(file.document_id.split("-")[1]) - 1 in notices for file, _ in pdf_documents)
     pdf_text = None
     if pdf_documents:
         rendered = [
-            parsed.render(table_labels) if len(pdf_documents) == 1 else f"=== 첨부 {file.name} ===\n{parsed.render(table_labels)}"
+            parsed.render(table_labels) if len(pdf_documents) == 1 and not text_led else f"=== 첨부 {file.name} ===\n{parsed.render(table_labels)}"
             for file, parsed in pdf_documents
         ]
-        pdf_text = "\n".join(rendered)
+        pdf_text = "\n".join([text, *rendered] if text_led else rendered)
 
     # 공급주택목록 엑셀이 있으면 원문 뒤에 붙여 AI가 주택별 공급 묶음으로 옮깁니다. 없으면 공고문 표에서 읽습니다(사용자 결정 2026-10-16).
     sheets: list[str] = []
@@ -247,10 +251,11 @@ def build_intake(
             forced.append((code, f"공급주택목록({', '.join(affected)})을 끝까지 읽지 못했습니다. 원본 목록과 추출 결과를 대조해야 합니다."))
     if pdf_text is None and not text.strip():
         issue("SOURCE_TEXT_EMPTY", review, "/payload/text", "추출할 원문(PDF·수집 글자)이 없습니다.")
-    if require_pdf and pdf_text is None:
-        if any(i.code == "NOTICE_DOC_NOT_PDF" for i in issues) and not any(d["kind"] == "PDF" for d in file_documents):
+    if require_pdf and (pdf_text is None or text_led):
+        has_pdf = any(d["kind"] == "PDF" for d in file_documents)
+        if any(i.code == "NOTICE_DOC_NOT_PDF" for i in issues) and (text_led or not has_pdf):
             forced.append(("PDF_MISSING", "공고문이 PDF가 아니라(HWP 등) 수집 글자로 추출했습니다. 원문 공고문으로 확인해야 합니다."))
-        elif not any(d["kind"] == "PDF" for d in file_documents):
+        elif not has_pdf:
             forced.append(("PDF_MISSING", "공고 PDF가 첨부 목록에 없어 수집 글자로 추출했습니다. 원문 PDF로 확인해야 합니다."))
         elif any(i.code == "ATTACHMENT_NOT_STORED" for i in issues):
             forced.append(
@@ -331,7 +336,8 @@ def build_intake(
             {
                 "id": PDF_TEXT_DOCUMENT_ID,
                 "kind": "TEXT",
-                "name": "첨부 PDF·엑셀에서 읽은 글자 (쪽·표 구분)" if sheets else "첨부 PDF에서 읽은 글자 (쪽·표 구분)",
+                "name": ("수집 원문 텍스트 + " if text_led else "")
+                + ("첨부 PDF·엑셀에서 읽은 글자 (쪽·표 구분)" if sheets else "첨부 PDF에서 읽은 글자 (쪽·표 구분)"),
                 "sha256": sha256_hex(attachment_text.encode("utf-8")),
                 "originalUrl": None,
                 "pageCount": None,

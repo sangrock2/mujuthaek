@@ -21,7 +21,7 @@ public final class RegionCodes {
   }
 
   /** 사용자 지역이 조건 지역 목록 중 하나 안에 있는지. */
-  static Verdict withinAny(String userCode, List<String> conditionCodes) {
+  public static Verdict withinAny(String userCode, List<String> conditionCodes) {
     List<Verdict> verdicts = new ArrayList<>();
     for (String code : conditionCodes) {
       verdicts.add(within(userCode, code));
@@ -36,11 +36,26 @@ public final class RegionCodes {
     if (user.isEmpty() || condition.isEmpty()) {
       return Verdict.UNKNOWN;
     }
-    if (user.startsWith(condition)) {
+    if (user.startsWith(condition) || cityHasDistrict(condition, user)) {
       return Verdict.MET;
     }
-    // 사용자 코드가 더 짧고 조건이 그 안의 지역이면 (예: 사용자 "경기", 조건 "수원") 더 자세한 주소가 있어야 알 수 있어요
-    return condition.startsWith(user) ? Verdict.UNKNOWN : Verdict.NOT_MET;
+    // 사용자 코드가 더 짧고 조건이 그 안의 지역이면 (예: 사용자 "경기", 조건 "수원") 더 자세한 주소가 있어야 알 수 있어요.
+    // 일반구가 있는 시만 넣었는데 조건이 그 시의 구여도 같아요 (사용자 "수원시", 조건 "장안구")
+    return condition.startsWith(user) || cityHasDistrict(user, condition)
+        ? Verdict.UNKNOWN
+        : Verdict.NOT_MET;
+  }
+
+  /**
+   * 일반구가 있는 시(시군구 코드 끝자리가 0, 예: 수원시 41110)와 그 시의 구·동(앞 네 자리가 같고 시군구 끝자리가 0이 아님, 예: 장안구 41111). 구는
+   * 시의 코드 범위 안에서 붙어 앞부분이 시와 달라요: 앞부분 일치만 보면 「수원시 거주」 조건에 장안구 주민이 불충족이 됐어요(2026-11-10 코드 검토).
+   */
+  static boolean cityHasDistrict(String city, String place) {
+    return city.length() == 5
+        && city.charAt(4) == '0'
+        && place.length() >= 5
+        && place.charAt(4) != '0'
+        && place.startsWith(city.substring(0, 4));
   }
 
   /** 0으로 채운 하위 단계를 뺀 앞부분. 예: 1100000000 → 11, 4311100000 → 43111, 52730 → 52730. */
