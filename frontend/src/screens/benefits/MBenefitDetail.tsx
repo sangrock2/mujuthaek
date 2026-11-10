@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { ReportButton } from "@/components/report/ReportButton";
 import { MBackHeader, MBottomActions } from "@/components/layout/MBackHeader";
 import { MPage } from "@/components/layout/Responsive";
@@ -63,6 +65,22 @@ export function MBenefitDetail({ id }: { id: string }) {
             <div className="rounded-control bg-check-bg text-check-text px-[14px] py-[12px] text-[14px] leading-[1.5] font-semibold">
               <span className="font-extrabold">함께 못 받는 혜택</span> · {b.overlap}
             </div>
+          )}
+          {b.budget && (
+            <Link
+              href={routes.loans}
+              className="rounded-control bg-brand-soft text-text hover:text-text flex min-h-[56px] items-center justify-between gap-[10px] px-[14px] py-[12px] no-underline"
+            >
+              <span className="flex flex-col gap-[2px]">
+                <span className="text-brand-strong text-[15px] font-extrabold">
+                  대출 자격 확인하기
+                </span>
+                <span className="text-text-sub text-[13px]">
+                  정확한 소득 · 순자산으로 상품마다 받을 수 있는지 봐요
+                </span>
+              </span>
+              <ChevronRight size={18} className="text-brand-strong flex-none" aria-hidden />
+            </Link>
           )}
         </section>
 

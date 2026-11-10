@@ -900,13 +900,20 @@ public final class NoticeDetailMapper {
     return out;
   }
 
-  private static boolean within(LocalDate today, String starts, String ends) {
+  /**
+   * 오늘이 이 일정 안인지(화면의 「진행 중」). 날짜가 하나뿐이면 그날 하루로 봐요: 예전엔 없는 쪽을 끝없이 열린 것으로 봐서 「12/2 당첨자 발표」가 그날 전 내내
+   * 진행 중으로 보였어요(2026-11-11). 시작일 없이 「~까지」만 적힌 마감도 마감 당일만 진행 중이에요(진행 중이라고 말하지 않는 쪽이 안전해서요).
+   */
+  static boolean within(LocalDate today, String starts, String ends) {
     LocalDate from = day(starts);
     LocalDate to = day(ends);
     if (from == null && to == null) {
       return false;
     }
-    return (from == null || !today.isBefore(from)) && (to == null || !today.isAfter(to));
+    if (from == null || to == null) {
+      return today.equals(from == null ? to : from);
+    }
+    return !today.isBefore(from) && !today.isAfter(to);
   }
 
   /** "2026-10-01" 또는 "2026-10-01T10:00:00+09:00"의 날짜. */

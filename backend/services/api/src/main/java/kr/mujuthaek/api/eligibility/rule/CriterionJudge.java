@@ -416,13 +416,24 @@ public final class CriterionJudge {
               null,
               null);
         }
-        boolean ok = Periods.fullMonths(a.marriedOn(), ref) < c.maxYears() * 12;
+        // 혼인 연월만 알아서 그 달 1일(가장 긴 기간)과 말일(가장 짧은 기간)을 다 봐요: 둘 다 기준 안이면 충족, 둘 다 넘으면 불충족,
+        // 갈리면 확인 필요(혜택 판정 BenefitJudge.newlywed와 같은 규칙). 예전엔 1일로만 봐서 경계 달이면 기준 안인 사람도
+        // 「혼인 기간이 기준을 넘어요」가 됐어요(2026-11-11)
+        int limit = c.maxYears() * 12;
+        Status within =
+            Periods.fullMonths(a.marriedOn(), ref) < limit
+                ? MET
+                : Periods.shortestFullMonths(a.marriedOn(), ref) >= limit ? NOT_MET : UNKNOWN;
         return item(
             c,
             "MARRIAGE",
             label,
-            ok ? MET : NOT_MET,
-            ok ? null : "혼인 기간이 기준을 넘어요",
+            within,
+            switch (within) {
+              case MET -> null;
+              case NOT_MET -> "혼인 기간이 기준을 넘어요";
+              default -> Bands.BOUNDARY;
+            },
             List.of(),
             null,
             null);

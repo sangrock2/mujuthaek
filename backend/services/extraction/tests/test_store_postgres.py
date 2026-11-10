@@ -849,3 +849,46 @@ def test_review_api_pool_reuses_connections_and_caps_concurrency():
         assert 1 <= len(seen) <= 2  # 연결 두 개를 돌려 써요
     finally:
         pool.close()
+
+
+def test_extraction_stats_count_notices_by_last_job_and_sum_costs_in_the_period(store):
+    """관리자 「추출 비용·품질」(2026-11-11): 공고(원본·버전)는 기간의 마지막 작업 상태로, 비용은 다시 처리한 작업까지 더해 셉니다."""
+    from test_trace_view import usage
+
+    def saved(post_suffix, status, cost, **extra):
+        event = raw_event() | {"eventId": str(uuid.uuid4())}
+        event["payload"] = event["payload"] | {"rawPostId": f"01929a3e-0000-7000-8000-00000000{post_suffix}"}
+        return store.save(event, Outcome(status, cost_usd=cost, **extra))
+
+    saved("0b01", "FAILED", 0.02)
+    first = saved("0b01", "COMPLETED", 0.05, usage=usage())  # 실패 뒤 다시 처리해 게시
+    saved("0b02", "PARTIAL", 0.03)
+    saved("0b03", "IN_REVIEW", 0.01)
+    old = saved("0b04", "COMPLETED", 0.5)
+    store.conn.execute("update extraction_jobs set created_at = now() - interval '20 days' where id = %s", (old,))
+
+    stats = store.extraction_stats(7)
+    assert stats["notices"] == 3 and stats["jobs"] == 4 and stats["costUsd"] == pytest.approx(0.11)
+    assert stats["costPerNotice"] == {"avgUsd": pytest.approx(0.0367), "maxUsd": pytest.approx(0.07)}
+    groups = {g["group"]: g["notices"] for g in stats["statuses"]["groups"]}
+    assert groups == {"AUTO": 1, "PARTIAL": 1, "REVIEW": 1, "FAILED": 0, "OTHER": 0}
+    assert stats["statuses"]["publishedWithoutReviewRatio"] == pytest.approx(0.6667)
+    assert len(stats["daily"]) == 7 and stats["daily"][-1]["jobs"] == 4 and stats["daily"][-1]["notices"] == 3
+    assert stats["topJobs"][0]["jobId"] == first and stats["topJobs"][0]["costUsd"] == pytest.approx(0.05)
+    assert stats["usage"]["jobs"] == 4 and stats["usage"]["v2Jobs"] == 1 and stats["usage"]["truncated"] is False
+    assert stats["usage"]["resolver"]["adopted"] == 1
+
+    month = store.extraction_stats(30)
+    assert month["notices"] == 4 and month["topJobs"][0]["jobId"] == old
+
+    class Session:
+        def __enter__(self):
+            return store
+
+        def __exit__(self, *exc):
+            return False
+
+    service = ReviewService(lambda: Session(), new_event)
+    status, body = service.extraction_stats("7")
+    assert status == 200 and body["notices"] == 3
+    assert service.extraction_stats("91")[0] == 400

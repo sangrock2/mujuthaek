@@ -74,6 +74,7 @@ export const PERMISSION_PRESETS: { label: string; items: AdminPermission[] }[] =
 /** 관리자 화면 경로별로 필요한 권한 (하나라도 있으면). 없는 경로(개요)는 관리자 누구나 */
 export const ROUTE_PERMISSIONS: Record<string, AdminPermission[]> = {
   [routes.adminReview]: ["NOTICE_REVIEW", "BENEFIT_REVIEW"],
+  [routes.adminExtraction]: ["NOTICE_REVIEW"],
   [routes.adminSources]: ["SOURCES"],
   [routes.adminCriteria]: ["CRITERIA"],
   [routes.adminReports]: ["REPORTS", "CHAT"],

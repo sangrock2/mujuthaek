@@ -73,8 +73,31 @@ class SubscriptionScoreTest {
     assertThat(points(new ScoreInputBuilder().dependents(9), 1)).isEqualTo(35);
     assertThat(points(new ScoreInputBuilder().subscription(2026, 6, 1), 2)).isEqualTo(1); // 4개월
     assertThat(points(new ScoreInputBuilder().subscription(2026, 1, 1), 2)).isEqualTo(2); // 9개월
-    assertThat(points(new ScoreInputBuilder().subscription(2025, 10, 1), 2)).isEqualTo(3); // 1년
+    assertThat(points(new ScoreInputBuilder().subscription(2025, 9, 1), 2)).isEqualTo(3); // 1년
     assertThat(points(new ScoreInputBuilder().subscription(2000, 1, 1), 2)).isEqualTo(17);
+  }
+
+  @Test
+  void monthOnlyDatesNeverRaiseTheScoreButSayWhenTheDayCouldAddPoints() {
+    // 2026-11-11: 연월은 그 달 말일로 세요. 기준일 2026-10-22에 「2025년 10월 가입」은 23일 뒤 가입이면 아직 1년 전이라 2점
+    // (예전엔 1일로 세어 3점이었어요). 1일 가입이면 3점이라 그 가능성을 이유에 적어요
+    var item =
+        SubscriptionScore.calculate(new ScoreInputBuilder().subscription(2025, 10, 1).build(), REF)
+            .items()
+            .get(2);
+    assertThat(item.points()).isEqualTo(2);
+    assertThat(item.reason()).isEqualTo("1년 미만 · 날짜에 따라 3점일 수 있어요");
+
+    // 무주택 기간도 같아요: 2021년 11월부터 무주택(만 30세 지난 미혼) → 2026-10-22 기준 말일로는 4년(10점), 1일로는 4년(10점) 같음
+    var steady =
+        new ScoreInputBuilder().birth(1980, 1, 1).marital("SINGLE").homelessSince(2021, 11).build();
+    assertThat(SubscriptionScore.calculate(steady, REF).items().get(0).points()).isEqualTo(10);
+    // 2021년 10월부터면: 말일(10/31)로는 4년(10점), 1일(10/1)로는 5년(12점) → 낮은 쪽과 가능성
+    var boundary =
+        new ScoreInputBuilder().birth(1980, 1, 1).marital("SINGLE").homelessSince(2021, 10).build();
+    var homeless = SubscriptionScore.calculate(boundary, REF).items().get(0);
+    assertThat(homeless.points()).isEqualTo(10);
+    assertThat(homeless.reason()).isEqualTo("4년 이상 · 날짜에 따라 12점일 수 있어요");
   }
 
   @Test
