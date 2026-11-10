@@ -24,7 +24,7 @@ from collections import Counter
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from mujuthaek_extraction.assemble.ai_output import SECTIONS
 from mujuthaek_extraction.assemble.details import CLEARED, KST, document_name_key, times_in
@@ -593,70 +593,49 @@ class RecheckAnswer:
     rejected: tuple[tuple[str, str], ...] = ()
 
 
-class RecheckStrategy(Protocol):
-    """다시 볼 항목의 고친 답을 받는 방법입니다. 받은 답을 채택할지는 전략이 아니라 adopt(같은 검증기)가 정합니다.
-    운영은 묶음(BATCH) 하나입니다(항목마다 도구를 쓰던 에이전트 전략은 2026-11-10 걷어냄). 시험은 정해 둔 답을 내는 전략을 꽂습니다."""
-
-    def answer(
-        self,
-        rules: FieldRules,
-        material: ExtractionMaterial,
-        model: ExtractionModel,
-        parts: list[dict[str, Any]],
-        targets: list[dict[str, Any]],
-        sections: list[str],
-        **run_options: Any,
-    ) -> RecheckAnswer: ...
-
-
-class BatchStrategy:
-    """다시 볼 항목을 한 번의 호출로 묶어 묻습니다(2026-10-15부터의 방식)."""
-
-    def answer(
-        self,
-        rules: FieldRules,
-        material: ExtractionMaterial,
-        model: ExtractionModel,
-        parts: list[dict[str, Any]],
-        targets: list[dict[str, Any]],
-        sections: list[str],
-        **run_options: Any,
-    ) -> RecheckAnswer:
-        call = CallSpec(
-            name="recheck",
-            sections=tuple(s for s in SECTIONS if s in sections),
-            instructions=INSTRUCTIONS
-            + "\n\n# 다시 확인할 항목\n"
-            + json.dumps(targets, ensure_ascii=False, indent=1),  # 줄 단위로(한 줄이 너무 길면 모델이 읽지 못함)
-            uses_structure=True,
-            max_output_tokens=48_000,  # 실측: 큰 공고(인천 4358)에서 24,000토큰으로 잘림(내용 6.7만 자, 반복 아님). 정상 종료 최대 14,261
-        )
-        one_call = FieldRules(rules.field, rules.prompt_version, rules.prompt_path, (call,))
-        run = run_extraction(one_call, material, model, structure=structure_summary(parts[0]), **run_options)
-        if run.failed_calls:
-            reason = "재확인 호출 실패: " + "; ".join(why for _, why in run.failed_calls)
-            return RecheckAnswer(None, run, targets, sections, (("전체", reason),))
-        # 수정 호출 뒤에도 형식 위반이 남은 응답(extract가 첫 응답을 살려 넘김)은 고친 결과가 아니므로 섞지 않습니다(검토 2026-10-16)
-        schema = one_call.build_request(call, material, structure_summary(parts[0])).output_schema
-        response = run.parts[0]
-        if schema_errors(response, schema) is None:
-            return RecheckAnswer(response, run, targets, sections)
-        # 형식 위반이 있는 섹션만 빼고 나머지 섹션은 시험합니다(2026-10-24 다섯 번째 채점: 재확인 5건 중 2건이 일부 형식 위반으로 통째 버려짐).
-        # 인용 목록처럼 섹션 밖 칸이 틀렸으면 모두 버립니다
-        broken = _broken_sections(response, schema)
-        if broken is None or not set(sections) - broken:
-            return RecheckAnswer(None, run, targets, sections, (("전체", "재확인 응답 형식 위반"),))
-        kept = [section for section in sections if section not in broken]
-        return RecheckAnswer(
-            {key: value for key, value in response.items() if key not in broken},
-            run,
-            [t for t in targets if t["section"] not in broken],
-            kept,
-            tuple((section, "재확인 응답 형식 위반") for section in sections if section in broken),
-        )
-
-
-BATCH = BatchStrategy()
+def ask_batch(
+    rules: FieldRules,
+    material: ExtractionMaterial,
+    model: ExtractionModel,
+    parts: list[dict[str, Any]],
+    targets: list[dict[str, Any]],
+    sections: list[str],
+    **run_options: Any,
+) -> RecheckAnswer:
+    """다시 볼 항목을 한 번의 호출로 묶어 고친 답을 받습니다(2026-10-15부터의 방식). 받은 답을 채택할지는 adopt(같은 검증기)가 정합니다.
+    항목마다 도구를 쓰던 재확인 에이전트는 2026-11-10 걷어내 이 방식 하나입니다."""
+    call = CallSpec(
+        name="recheck",
+        sections=tuple(s for s in SECTIONS if s in sections),
+        instructions=INSTRUCTIONS
+        + "\n\n# 다시 확인할 항목\n"
+        + json.dumps(targets, ensure_ascii=False, indent=1),  # 줄 단위로(한 줄이 너무 길면 모델이 읽지 못함)
+        uses_structure=True,
+        max_output_tokens=48_000,  # 실측: 큰 공고(인천 4358)에서 24,000토큰으로 잘림(내용 6.7만 자, 반복 아님). 정상 종료 최대 14,261
+    )
+    one_call = FieldRules(rules.field, rules.prompt_version, rules.prompt_path, (call,))
+    run = run_extraction(one_call, material, model, structure=structure_summary(parts[0]), **run_options)
+    if run.failed_calls:
+        reason = "재확인 호출 실패: " + "; ".join(why for _, why in run.failed_calls)
+        return RecheckAnswer(None, run, targets, sections, (("전체", reason),))
+    # 수정 호출 뒤에도 형식 위반이 남은 응답(extract가 첫 응답을 살려 넘김)은 고친 결과가 아니므로 섞지 않습니다(검토 2026-10-16)
+    schema = one_call.build_request(call, material, structure_summary(parts[0])).output_schema
+    response = run.parts[0]
+    if schema_errors(response, schema) is None:
+        return RecheckAnswer(response, run, targets, sections)
+    # 형식 위반이 있는 섹션만 빼고 나머지 섹션은 시험합니다(2026-10-24 다섯 번째 채점: 재확인 5건 중 2건이 일부 형식 위반으로 통째 버려짐).
+    # 인용 목록처럼 섹션 밖 칸이 틀렸으면 모두 버립니다
+    broken = _broken_sections(response, schema)
+    if broken is None or not set(sections) - broken:
+        return RecheckAnswer(None, run, targets, sections, (("전체", "재확인 응답 형식 위반"),))
+    kept = [section for section in sections if section not in broken]
+    return RecheckAnswer(
+        {key: value for key, value in response.items() if key not in broken},
+        run,
+        [t for t in targets if t["section"] not in broken],
+        kept,
+        tuple((section, "재확인 응답 형식 위반") for section in sections if section in broken),
+    )
 
 
 def recheck_problems(
@@ -665,18 +644,17 @@ def recheck_problems(
     model: ExtractionModel,
     parts: list[dict[str, Any]],
     evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
-    strategy: RecheckStrategy = BATCH,
     scope: Collection[str] | None = None,
     **run_options: Any,
 ) -> RecheckResult:
     """evaluate: 응답 조각들 → 결합·검증 결과. 처음 결과와 재확인 결과를 같은 함수로 판단합니다.
-    순서: 다시 볼 항목 고르기(select_targets, scope 섹션만) → 고친 답 받기(strategy) → 채택 판단(adopt)."""
+    순서: 다시 볼 항목 고르기(select_targets, scope 섹션만) → 고친 답 받기(ask_batch) → 채택 판단(adopt)."""
     first = evaluate(parts)
     targets, sections = select_targets(parts, first, scope)
     if not targets:
         return RecheckResult(parts, first, [], False, None)
     rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
-    answer = strategy.answer(rules, material, model, parts, targets, sections, **run_options)
+    answer = ask_batch(rules, material, model, parts, targets, sections, **run_options)
     if answer.response is None:
         return RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
     return adopt(parts, first, answer, rechecked, evaluate)

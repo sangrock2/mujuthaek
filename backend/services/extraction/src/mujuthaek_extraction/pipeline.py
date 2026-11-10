@@ -40,7 +40,7 @@ from mujuthaek_extraction.model.base import ExtractionModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel, extract_with_fallback
 from mujuthaek_extraction.publish import completed_payload
-from mujuthaek_extraction.recheck import BATCH, RecheckResult, lost_by_recheck, recheck_problems
+from mujuthaek_extraction.recheck import RecheckResult, lost_by_recheck, recheck_problems
 from mujuthaek_extraction.rules import discover
 from mujuthaek_extraction.rules.base import FieldRules
 from mujuthaek_extraction.usage import MeteredModel, UsageRecorder
@@ -321,7 +321,7 @@ def recheck_step(
     V2에서는 구조 섹션만 재확인하고, 비교 측정(11/05)에서 묶음보다 비용이 약 6배였음."""
     evaluate = lambda parts: evaluate_parts(parts, material, context, rt) or first  # noqa: E731
     with rt.usage.stage("recheck"):
-        recheck = recheck_problems(rules, material, extracted.recheck_model, extracted.run.parts, evaluate, strategy=BATCH, scope=scope)
+        recheck = recheck_problems(rules, material, extracted.recheck_model, extracted.run.parts, evaluate, scope=scope)
     repairs = [f"재확인 {'채택' if recheck.accepted else '미채택'}: {', '.join(recheck.rechecked)}"] if recheck.rechecked else []
     # 섹션별 채택·거절 이유를 작업 기록(usage.recheck)과 로그에 남깁니다(2026-10-24: 평가에서 어느 섹션을 왜 버렸는지 볼 수 있게)
     if recheck.adopted_sections:

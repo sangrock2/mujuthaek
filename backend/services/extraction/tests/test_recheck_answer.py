@@ -1,25 +1,36 @@
-"""재확인 답 받기 전략: 어떤 전략이 답을 내도 채택은 같은 검증기(adopt)가 정합니다. 녹화 응답만 씁니다."""
+"""재확인 답 받기: 어떤 답을 받아도 채택은 같은 검증기(adopt)가 정합니다. 녹화 응답만 씁니다."""
 
 import json
 
+import pytest
 from helpers import to_ai
 from test_recheck import answer, setup
 
+from mujuthaek_extraction import recheck
 from mujuthaek_extraction.model import RecordedModel
-from mujuthaek_extraction.recheck import BATCH, RecheckAnswer, recheck_problems, select_targets
+from mujuthaek_extraction.recheck import RecheckAnswer, recheck_problems, select_targets
 from mujuthaek_extraction.rules.housing_notice import RULES
 
 
 class FixedAnswer:
-    """정해 둔 답을 그대로 돌려주는 전략(모델을 부르지 않음)."""
+    """정해 둔 답을 그대로 돌려주는 답 받기(모델을 부르지 않음). recheck.ask_batch 자리에 꽂습니다."""
 
     def __init__(self, response):
         self.response = response
         self.seen = None
 
-    def answer(self, rules, material, model, parts, targets, sections, **run_options):
+    def __call__(self, rules, material, model, parts, targets, sections, **run_options):
         self.seen = (targets, sections)
         return RecheckAnswer(self.response, None, targets, sections)
+
+
+@pytest.fixture
+def ask(monkeypatch):
+    def use(fake):
+        monkeypatch.setattr(recheck, "ask_batch", fake)
+        return fake
+
+    return use
 
 
 def test_targets_are_the_problem_items():
@@ -29,40 +40,33 @@ def test_targets_are_the_problem_items():
     assert [t["id"] for t in targets] == [data["eligibility"][1]["id"]]
 
 
-def test_a_scope_limits_the_recheck_to_the_problems_of_those_sections():
+def test_a_scope_limits_the_recheck_to_the_problems_of_those_sections(ask):
     # V2: 담당 섹션은 담당이 검증 미들웨어로 스스로 고치므로 구조 단계 섹션(공고·위치·공급)의 문제만 다시 봄
     data, source, parts, evaluate = setup()
     assert select_targets(parts, evaluate(parts), ("notice", "locations", "supplyGroups")) == ([], [])
-    skipped = FixedAnswer(_fixed_answer(data))
-    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=skipped, scope=("supplyGroups",))
+    skipped = ask(FixedAnswer(_fixed_answer(data)))
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, scope=("supplyGroups",))
     assert skipped.seen is None and not result.rechecked and result.parts == parts
-    asked = FixedAnswer(_fixed_answer(data))
-    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=asked, scope=("eligibility",))
+    asked = ask(FixedAnswer(_fixed_answer(data)))
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, scope=("eligibility",))
     assert asked.seen is not None and result.accepted
 
 
-def test_worse_answer_from_any_strategy_is_not_adopted():
+def test_a_worse_answer_is_not_adopted(ask):
     data, source, parts, evaluate = setup()
     item = json.loads(json.dumps(parts[0]["eligibility"][1]))
     item["quoteRefs"] = ["nowhere"]  # 근거를 더 잃은 답
-    strategy = FixedAnswer(json.loads(answer(item, [{"ref": "nowhere", "documentId": "text1", "text": "원문에 전혀 없는 문장"}])))
-    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=strategy)
-    assert strategy.seen is not None and not result.accepted
+    fixed = ask(FixedAnswer(json.loads(answer(item, [{"ref": "nowhere", "documentId": "text1", "text": "원문에 전혀 없는 문장"}]))))
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate)
+    assert fixed.seen is not None and not result.accepted
     assert result.parts == parts  # 처음 결과 그대로
 
 
-def test_strategy_without_answer_keeps_first_result():
-    class NoAnswer:
-        def answer(self, rules, material, model, parts, targets, sections, **run_options):
-            return RecheckAnswer(None, None, targets, sections, (("전체", "답 없음"),))
-
+def test_no_answer_keeps_first_result(ask):
+    ask(lambda rules, material, model, parts, targets, sections, **run_options: RecheckAnswer(None, None, targets, sections, (("전체", "답 없음"),)))
     data, source, parts, evaluate = setup()
-    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate, strategy=NoAnswer())
+    result = recheck_problems(RULES, source.material, RecordedModel({}), parts, evaluate)
     assert not result.accepted and result.parts == parts and result.rejected == (("전체", "답 없음"),)
-
-
-def test_batch_is_the_default_strategy():
-    assert recheck_problems.__defaults__[0] is BATCH
 
 
 def _fixed_answer(data):
