@@ -18,6 +18,9 @@
                                      (kind NOTICE·BENEFIT, action APPROVED·EDITED_APPROVED·REJECTED·REOPENED, by 처리한 관리자, note)
   GET  /reviews/stats?days=7         처리 통계(최근 days일·오늘): 그대로 승인·고쳐서 승인·반려 수, 처리까지 걸린 시간 중앙값(분)
   GET  /costs?month=2026-10          분야별 유료 AI 호출 수·비용과 월 상한 대비 비율(한국 시간 달, month 없으면 이번 달, cost_alert.py)
+  GET  /stats/extraction?days=30     관리자 「추출 비용·품질」(extraction_stats.py): 최근 days일(1~90, 한국 시간)의 처리 공고 수, 상태 묶음별 비율
+                                     (검수 없이 게시 비율), 공고당 평균·최대 비용, 담당별 비용 비중, 캐시 읽기 비율, 멈춤·넣기 거절·해결 담당 채택,
+                                     하루 추이, 비용이 큰 작업
 
 혜택(주거·이주 정책) 검수 (2026-10-25): 확인 필요(needsReview) 정제 결과와 정책 제보로 다시 연 결과. 결과는 이미 발행돼 있고
 (policy.extracted, quality.needsReview=true), 처리하면 고친 결과를 reprocess=true(알림 없음)로 다시 발행합니다.
@@ -52,6 +55,7 @@ from urllib.parse import parse_qs, urlparse
 
 from mujuthaek_extraction.assemble.details import upgrade_stored
 from mujuthaek_extraction.contracts import tools
+from mujuthaek_extraction.extraction_stats import MAX_DAYS as MAX_STATS_DAYS
 from mujuthaek_extraction.publish import approved_payload
 from mujuthaek_extraction.store import REVIEW_REASON_SQL, SUPERSEDED, superseded_message
 from mujuthaek_extraction.trace_view import trace_view
@@ -181,6 +185,17 @@ class ReviewService:
             return 400, {"error": "month는 YYYY-MM 형식입니다."}
         with self.store_session() as store:
             return 200, store.monthly_costs(month, self.monthly_budget_usd)
+
+    def extraction_stats(self, days: str | None) -> tuple[int, Any]:
+        """추출 비용·품질 집계. days는 1~90(기본 30)."""
+        try:
+            value = 30 if days is None else int(days)
+        except ValueError:
+            value = 0
+        if not 1 <= value <= MAX_STATS_DAYS:
+            return 400, {"error": f"days는 1~{MAX_STATS_DAYS} 사이 정수입니다."}
+        with self.store_session() as store:
+            return 200, store.extraction_stats(value)
 
     def activity(self, days: str | None, limit: str | None) -> tuple[int, Any]:
         """처리 기록. days는 1~90(기본 30), limit은 1~1000(기본 300)."""
@@ -493,6 +508,8 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
                 return self._send(*service.activity(query.get("days", [None])[0], query.get("limit", [None])[0]))
             if url.path == "/reviews/stats":
                 return self._send(*service.stats(parse_qs(url.query).get("days", [None])[0]))
+            if url.path == "/stats/extraction":
+                return self._send(*service.extraction_stats(parse_qs(url.query).get("days", [None])[0]))
             if url.path == "/costs":
                 return self._send(*service.costs(parse_qs(url.query).get("month", [None])[0]))
             if url.path == "/benefit-reviews":

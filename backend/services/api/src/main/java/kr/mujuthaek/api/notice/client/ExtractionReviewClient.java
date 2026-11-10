@@ -151,6 +151,15 @@ public class ExtractionReviewClient {
     return call(() -> http.get().uri("/reviews/{id}/trace", jobId).retrieve().body(JsonNode.class));
   }
 
+  /**
+   * 추출 비용·품질 집계(추출 GET /stats/extraction, extraction_stats.py): 최근 days일(한국 시간)의 처리 공고 수·상태 묶음별
+   * 비율·공고당 비용·담당별 비용 비중·캐시 읽기 비율·멈춤·넣기 거절·해결 담당 채택·하루 추이·비용이 큰 작업.
+   */
+  public JsonNode extractionStats(int days) {
+    return call(
+        () -> http.get().uri("/stats/extraction?days={d}", days).retrieve().body(JsonNode.class));
+  }
+
   /** 처리 통계(최근 days일·오늘). */
   /** 처리 기록 (추출 GET /reviews/activity): 공고·혜택 검수 승인·반려·다시 열기, 최근 순. */
   public JsonNode activity(int days) {

@@ -8,6 +8,7 @@ import {
   Database,
   ExternalLink,
   Flag,
+  Gauge,
   History,
   Users,
   LayoutDashboard,
@@ -45,6 +46,7 @@ const menu: MenuItem[] = [
     icon: ClipboardCheck,
     count: { keys: ["reviewPending"], tone: "wait" },
   },
+  { href: routes.adminExtraction, label: "추출 비용·품질", icon: Gauge },
   {
     href: routes.adminReports,
     label: "제보·신고",
