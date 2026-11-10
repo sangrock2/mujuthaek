@@ -17,6 +17,7 @@ import java.util.UUID;
  * @param applyEnd 신청 마감일 (상시거나 모르면 null)
  * @param regionCodes 지원 지역 5자리 (시도 전체는 xx000). 전국이면 빈 목록
  * @param detailUrl 수집한 정책 원문 주소 (모르면 null)
+ * @param applyNote 마감일 대신 적힌 신청 기간 안내(「예산 소진 시까지」, 없으면 null). 알림 문구가 마감일이 없을 때 써요
  */
 public record PolicySummary(
     UUID policyId,
@@ -28,4 +29,5 @@ public record PolicySummary(
     LocalDate applyStart,
     LocalDate applyEnd,
     List<String> regionCodes,
-    String detailUrl) {}
+    String detailUrl,
+    String applyNote) {}

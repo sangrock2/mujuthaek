@@ -153,13 +153,19 @@ public final class NoticeContract {
         detail,
         Set.of("AUTO_PASSED", "PARTIALLY_PASSED")
             .contains(payload.path("reviewStatus").asString()));
+    // 바꾸기 전 규칙(표시 메모로도 접수 일정을 뺌)으로 만든 이벤트도 받아요: 그 규칙의 추출이 이미 보낸 이벤트·다시 보내는 이벤트가 바꾼 뒤 api에서
+    // 막히지 않게(2026-11-10 재검토). 받은 값을 그대로 쓰므로 그 이벤트의 기간은 예전처럼 비어 있을 수 있어요
     if (payload.has("schedule")
-        && !sameValue(payload.path("schedule"), NoticeProjection.schedule(detail, approved))) {
+        && !sameValue(payload.path("schedule"), NoticeProjection.schedule(detail, approved))
+        && !sameValue(
+            payload.path("schedule"), NoticeProjection.legacySchedule(detail, approved))) {
       fail("EVENT_SCHEDULE_CONFLICT", "/payload/schedule");
     }
     if (payload.has("applicationWindows")
         && !sameValue(
-            payload.path("applicationWindows"), NoticeProjection.windows(detail, approved))) {
+            payload.path("applicationWindows"), NoticeProjection.windows(detail, approved))
+        && !sameValue(
+            payload.path("applicationWindows"), NoticeProjection.legacyWindows(detail, approved))) {
       fail("EVENT_WINDOWS_CONFLICT", "/payload/applicationWindows");
     }
   }

@@ -196,6 +196,7 @@ class FavoriteServiceTest {
                     null,
                     end,
                     List.of(),
+                    null,
                     null)));
 
     var items = service.list(user, null, null, null).items();
@@ -224,7 +225,8 @@ class FavoriteServiceTest {
   }
 
   private static PolicySummary policy(UUID id, String field) {
-    return new PolicySummary(id, 2, field, "t", null, "APPLYING", null, null, List.of(), null);
+    return new PolicySummary(
+        id, 2, field, "t", null, "APPLYING", null, null, List.of(), null, null);
   }
 
   private static BenefitSummary benefit(UUID id, String field, String status) {

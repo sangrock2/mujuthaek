@@ -178,6 +178,7 @@ class ReportAnsweredNotificationServiceTest {
                     null,
                     null,
                     List.of(),
+                    null,
                     null)));
 
     service.onAnswered(
@@ -205,6 +206,7 @@ class ReportAnsweredNotificationServiceTest {
                     null,
                     null,
                     List.of(),
+                    null,
                     null)));
 
     service.onAnswered(

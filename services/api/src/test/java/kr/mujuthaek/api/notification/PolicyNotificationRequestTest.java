@@ -118,6 +118,18 @@ class PolicyNotificationRequestTest {
   }
 
   @Test
+  void aPolicyOpenUntilTheBudgetRunsOutSaysSoInTheNewPolicyAlert() {
+    // 2026-11-10 재검토: 마감일 대신 「예산 소진 시까지」만 있는 정책은 알림 문구에 신청 기간 정보가 하나도 없었음
+    ObjectNode policy = policy("STARTUP_SUPPORT", 2, null);
+    ((ObjectNode) policy.path("payload")).put("applyNote", "예산 소진 시까지");
+
+    apply(policy);
+
+    assertThat(onlyRequest().path("body").asString())
+        .isEqualTo("관심 조건에 맞는 새 창업지원 소식이에요. 창업진흥원 · 예산 소진 시까지");
+  }
+
+  @Test
   void spaceRecruitmentLinksToSpacesAndMatchesRegion() {
     Instant now = Instant.now();
     UUID seoul = member();

@@ -93,6 +93,55 @@ public final class NoticeContent {
     return changed;
   }
 
+  /** 정정이 통째로 바꾸면 안 되는 핵심 섹션(공급·자격·위치). */
+  private static final List<String> CORE_SECTIONS =
+      List.of("supplyGroups", "eligibility", "locations");
+
+  /**
+   * 지금 공개된 버전에는 쓸 항목이 있는데 정정 결과에는 없는(비었거나 모두 보류) 핵심 섹션. 「당첨자 발표일 변경」 같은 짧은 정정 안내는 바뀐 일정만 있어, 통째로 새
+   * 버전으로 바꾸면 공급·자격·위치가 사라지고 원공고로 되돌릴 수도 없었어요(2026-11-10 재검토).
+   */
+  public static List<String> droppedCoreSections(
+      JsonNode previousSnapshot, JsonNode previousHeldItems, ExtractionEvent current) {
+    return droppedCoreSections(
+        previousSnapshot, previousHeldItems, current.notice(), current.heldItems());
+  }
+
+  static List<String> droppedCoreSections(
+      JsonNode previousSnapshot, JsonNode previousHeldItems, JsonNode detail, JsonNode heldItems) {
+    List<String> dropped = new ArrayList<>();
+    for (String section : CORE_SECTIONS) {
+      if (usable(previousSnapshot.path(section), previousHeldItems, section) > 0
+          && (detail == null || usable(detail.path(section), heldItems, section) == 0)) {
+        dropped.add(section);
+      }
+    }
+    return dropped;
+  }
+
+  /** 섹션 항목 중 통째로 보류하지 않은 것의 수(칸 하나만 보류한 항목은 셈). */
+  private static int usable(JsonNode items, JsonNode heldItems, String section) {
+    if (!items.isArray()) {
+      return 0;
+    }
+    int count = 0;
+    for (int i = 0; i < items.size(); i++) {
+      String pointer = "/" + section + "/" + i;
+      boolean whole = false;
+      for (JsonNode held : heldItems == null ? List.<JsonNode>of() : heldItems) {
+        String target = held.path("target").asString("");
+        if (!target.isEmpty() && (pointer.equals(target) || pointer.startsWith(target + "/"))) {
+          whole = true;
+          break;
+        }
+      }
+      if (!whole) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   /** 비교에 쓰는 부분. 받을 때마다 달라지는 칸은 빼요. */
   private static Map<String, JsonNode> comparableParts(ExtractionEvent event) {
     Map<String, JsonNode> parts = new TreeMap<>();

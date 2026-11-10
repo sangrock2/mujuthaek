@@ -138,7 +138,13 @@ public record CompletedNotice(
     LocalDate start = date(p.path("schedule").path("applyStartOn"));
     LocalDate end = date(p.path("schedule").path("applyEndOn"));
     JsonNode windows = p.path("applicationWindows");
-    if (start != null || end != null || !windows.isArray() || windows.isEmpty()) {
+    // 원문 접수 일정이 여럿이면 공고 전체 일정(schedule) 하나로 정하지 않아요: 범위 미정·위치·공급 묶음 범위의 다른 접수 일정이 더 늦을 수 있는데
+    // 전체 일정만 보고 마감일을 앞당겼어요(2026-11-10 재검토. 접수 상태는 모든 접수 일정으로 계산해 이미 맞았음)
+    boolean several = applicationSchedules(p.path("notice").path("schedules")) > 1;
+    if (several && windows.isArray() && !windows.isEmpty()) {
+      start = null;
+      end = null;
+    } else if (start != null || end != null || !windows.isArray() || windows.isEmpty()) {
       return new LocalDate[] {start, end};
     }
     boolean endKnown = windows.size() >= applicationSchedules(p.path("notice").path("schedules"));

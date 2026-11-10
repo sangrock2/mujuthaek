@@ -532,7 +532,8 @@ public class NoticeQueryService {
         row.applyStart(),
         row.applyEnd(),
         row.regionCodes(),
-        row.detailUrl());
+        row.detailUrl(),
+        row.applyNote());
   }
 
   /**

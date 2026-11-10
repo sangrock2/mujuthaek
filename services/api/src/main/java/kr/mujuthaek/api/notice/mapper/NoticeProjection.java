@@ -105,13 +105,21 @@ public final class NoticeProjection {
   }
 
   private static boolean blocked(JsonNode detail, int index, boolean approved) {
+    return blocked(detail, index, approved, false);
+  }
+
+  /**
+   * 접수 기간에서 뺄 일정. 보류와 겹치면 빼고, 검수 이슈는 그 일정 자신이나 그 안을 가리킬 때만 빼요(계약 application_items). 표시 메모로는 빼지
+   * 않아요: 메모는 값이 틀렸다는 신호가 아닌데, 인용 하나가 짧다는 메모로 하나뿐인 접수 일정이 빠져 마감일을 잃었어요(2026-11-10 재검토). withNotes는
+   * 바꾸기 전 규칙(메모로도 뺌)으로 만든 이벤트를 받을 때만 써요(NoticeContract).
+   */
+  private static boolean blocked(JsonNode detail, int index, boolean approved, boolean withNotes) {
     String pointer = "/schedules/" + index;
     JsonNode quality = detail.path("quality");
     if (NoticeContent.held(quality.path("heldItems"), pointer)) return true;
-    // 검수 이슈·표시 메모는 그 일정 자신이나 그 안을 가리킬 때만 빼요(계약 application_items). 섹션 전체 메모로 모든 일정을 빼지 않아요
     if (!approved
         && (within(quality.path("reviewIssues"), pointer)
-            || within(quality.path("notes"), pointer))) return true;
+            || (withNotes && within(quality.path("notes"), pointer)))) return true;
     return false;
   }
 
@@ -162,10 +170,14 @@ public final class NoticeProjection {
   }
 
   private static List<JsonNode> items(JsonNode detail, boolean approved) {
+    return items(detail, approved, false);
+  }
+
+  private static List<JsonNode> items(JsonNode detail, boolean approved, boolean withNotes) {
     List<JsonNode> result = new ArrayList<>();
     JsonNode schedules = detail.path("schedules");
     for (int i = 0; i < schedules.size(); i++) {
-      if (application(schedules.get(i)) && !blocked(detail, i, approved))
+      if (application(schedules.get(i)) && !blocked(detail, i, approved, withNotes))
         result.add(schedules.get(i));
     }
     return result;
@@ -188,13 +200,22 @@ public final class NoticeProjection {
   }
 
   public static JsonNode schedule(JsonNode detail, boolean approved) {
+    return schedule(detail, approved, false);
+  }
+
+  /** 바꾸기 전 규칙(표시 메모로도 일정을 뺌)으로 만든 공고 전체 접수 기간. 그 규칙으로 만든 이벤트를 받을 때만 써요(NoticeContract). */
+  public static JsonNode legacySchedule(JsonNode detail, boolean approved) {
+    return schedule(detail, approved, true);
+  }
+
+  private static JsonNode schedule(JsonNode detail, boolean approved, boolean withNotes) {
     List<JsonNode> whole = new ArrayList<>();
     for (JsonNode s : detail.path("schedules")) {
       if (application(s)
           && "NOTICE".equals(s.path("scope").path("level").asString())
           && "RESOLVED".equals(s.path("scope").path("resolution").asString())) whole.add(s);
     }
-    if (whole.size() != 1 || !items(detail, approved).contains(whole.getFirst()))
+    if (whole.size() != 1 || !items(detail, approved, withNotes).contains(whole.getFirst()))
       return NODES.nullNode();
     LocalDate start = day(whole.getFirst().path("startsAt")),
         end = day(whole.getFirst().path("endsAt"));
@@ -234,8 +255,17 @@ public final class NoticeProjection {
   }
 
   public static ArrayNode windows(JsonNode detail, boolean approved) {
+    return windows(detail, approved, false);
+  }
+
+  /** 바꾸기 전 규칙(표시 메모로도 일정을 뺌)으로 만든 접수 구간. 그 규칙으로 만든 이벤트를 받을 때만 써요(NoticeContract). */
+  public static ArrayNode legacyWindows(JsonNode detail, boolean approved) {
+    return windows(detail, approved, true);
+  }
+
+  private static ArrayNode windows(JsonNode detail, boolean approved, boolean withNotes) {
     ArrayNode result = NODES.arrayNode();
-    for (JsonNode s : items(detail, approved)) {
+    for (JsonNode s : items(detail, approved, withNotes)) {
       ObjectNode window = dates(NODES.objectNode(), day(s.path("startsAt")), day(s.path("endsAt")));
       window.set("scheduleId", s.path("id"));
       window.set("label", s.path("rawLabel"));

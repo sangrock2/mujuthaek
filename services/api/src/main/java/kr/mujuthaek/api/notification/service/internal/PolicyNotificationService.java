@@ -117,6 +117,9 @@ public class PolicyNotificationService {
       sb.append(sb.isEmpty() ? " " : " · ")
           .append(NotificationRequests.monthDay(p.applyEnd()))
           .append(" 마감");
+    } else if (p.applyEnd() == null && p.applyNote() != null && !p.applyNote().isBlank()) {
+      // 마감일 대신 신청 기간 안내만 있는 정책(「예산 소진 시까지」): 그 안내를 적어요(2026-11-10 재검토: 신청 기간 정보 없이 나갔음)
+      sb.append(sb.isEmpty() ? " " : " · ").append(p.applyNote().strip());
     }
     return sb.toString();
   }

@@ -68,6 +68,20 @@ class CompletedNoticeApplyPeriodTest {
   }
 
   @Test
+  void 접수_일정이_여럿이면_전체_일정_하나로_마감일을_정하지_않는다() {
+    // 2026-11-10 재검토: 공고 전체 접수 일정이 하나면 그 기간만 보고, 범위가 다른 더 늦은 접수(06/12~06/17)를 보지 않아 마감일이 앞당겨졌음
+    assertThat(
+            period(
+                """
+                {"schedule":{"applyStartOn":"2026-06-01","applyEndOn":"2026-06-10"},
+                 "applicationWindows":[{"applyStartOn":"2026-06-01","applyEndOn":"2026-06-10"},
+                                       {"applyStartOn":"2026-06-12","applyEndOn":"2026-06-17"}],
+                 "notice":{"schedules":[{"id":"all","kinds":["APPLICATION"]},{"id":"site","kinds":["APPLICATION"]}]}}
+                """))
+        .containsExactly(LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 17));
+  }
+
+  @Test
   void 접수_구간이_없으면_비어_있다() {
     assertThat(period("{}")).containsExactly(null, null);
     assertThat(period("{\"applicationWindows\":[]}")).containsExactly(null, null);
