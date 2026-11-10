@@ -123,15 +123,44 @@ class PushChannelTest {
     assertThat(bad.code()).isEqualTo("PUSH_400");
 
     sender.plan("https://fcm.googleapis.com/key", 403);
-    sender.plan("https://fcm.googleapis.com/never", 201);
+    sender.plan("https://fcm.googleapis.com/key2", 401);
     DeliveryException key =
-        catchDelivery(
-            address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/never"));
-    assertThat(key.code()).isEqualTo("PUSH_403");
-    assertThat(key.permanent()).isTrue();
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/key2"));
+    assertThat(key.code()).startsWith("PUSH_40");
+    assertThat(key.permanent()).isTrue(); // 모든 기기가 키를 거절: 다시 보내도 같아요
+  }
+
+  @Test
+  void oneDeviceRefusingTheKeyDoesNotFailWhatOthersReceivedOrMustRetry() throws Exception {
+    // 2026-11-10 코드 검토: 기기 하나의 401·403이 다른 기기의 수신·재시도를 보기 전에 묶음 전체를 영구 실패로 던졌음
+    // (계약 web-push.draft.md 「한 대라도 받았으면 SENT」)
+    sender.plan("https://fcm.googleapis.com/key", 403);
+    sender.plan("https://fcm.googleapis.com/ok", 201);
+    channel.send(
+        user,
+        address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/ok"),
+        one(NotificationType.CORRECTED)); // 받은 기기가 있어 보낸 것
+
+    sender.plan("https://fcm.googleapis.com/busy", 503);
+    DeliveryException retry =
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/busy"));
+    assertThat(retry.permanent()).isFalse(); // 잠깐 막힌 기기는 다시 보내요
+    assertThat(retry.remainingAddress().orElseThrow()).contains("/busy").doesNotContain("/key");
+  }
+
+  @Test
+  void aDeviceThatReceivedEarlierKeepsTheRowSentWhenTheRestLaterFail() throws Exception {
+    // 2026-11-10 코드 검토: 1차에 A가 받고 B가 503 → 2차에 B가 410이면 ALL_EXPIRED로 FAILED였음
+    sender.plan("https://fcm.googleapis.com/a", 201);
+    sender.plan("https://fcm.googleapis.com/b", 503);
+    DeliveryException first =
+        catchDelivery(address("https://fcm.googleapis.com/a", "https://fcm.googleapis.com/b"));
+    assertThat(first.delivered()).isTrue();
+
+    sender.plan("https://fcm.googleapis.com/b", 410);
+    channel.send(user, first.remainingAddress().orElseThrow(), one(NotificationType.CORRECTED));
     assertThat(sender.endpoints())
-        .as("기기는 동시에 보내서 다른 기기에도 보내 봐요")
-        .contains("https://fcm.googleapis.com/never");
+        .containsOnlyOnce("https://fcm.googleapis.com/a"); // 받은 기기에 다시 보내지 않음
   }
 
   @Test

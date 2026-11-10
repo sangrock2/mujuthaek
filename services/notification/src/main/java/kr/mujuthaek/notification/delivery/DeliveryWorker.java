@@ -188,6 +188,16 @@ public class DeliveryWorker {
           first.channel(),
           code,
           attempts);
+    } else if (e.delivered()) {
+      // 기기 한 대라도 받았으면 보낸 것이에요(계약 web-push.draft.md). 남은 기기의 재시도를 다 써도 실패로 적지 않아요
+      // (2026-11-10 코드 검토: 받은 줄이 FAILED로 남아 발송 통계 실패 수가 부풀었음)
+      tx.executeWithoutResult(s -> deliveries.markSent(ids(group), null, schedule.now()));
+      log.info(
+          "일부 받을 곳은 받아 보낸 것으로 적어요: userId={}, channel={}, error={}, attempts={}",
+          first.userId(),
+          first.channel(),
+          code,
+          attempts);
     } else {
       tx.executeWithoutResult(s -> deliveries.markFailed(ids(group), code, true));
       log.warn(

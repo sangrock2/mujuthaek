@@ -260,6 +260,20 @@ public class DeliveryFlowTest {
   }
 
   @Test
+  void aRowSomeDeviceReceivedIsSentEvenWhenTheOthersRunOutOfRetries() {
+    // 2026-11-10 코드 검토: b가 받았는데 a가 재시도를 다 쓰면 줄이 FAILED로 남아 발송 통계 실패가 부풀었음(계약: 한 대라도 받았으면 SENT)
+    push.statuses.put(device("a").endpoint(), new ArrayDeque<>(List.of(503, 503, 503, 503)));
+    request(NotificationType.CORRECTED, "NOTICE:X:CORRECTED:3", pushTo("a", "b"));
+
+    for (String at :
+        List.of("2026-10-23T10:00", "2026-10-23T10:02", "2026-10-23T10:08", "2026-10-23T10:40")) {
+      clock.set(at);
+      worker.runOnce();
+    }
+    assertThat(status(Channel.PUSH)).containsExactly("SENT");
+  }
+
+  @Test
   void deliveryFailsWhenEveryDeviceIsGone() {
     push.statuses.put(device("a").endpoint(), new ArrayDeque<>(List.of(410)));
     push.statuses.put(device("b").endpoint(), new ArrayDeque<>(List.of(404)));

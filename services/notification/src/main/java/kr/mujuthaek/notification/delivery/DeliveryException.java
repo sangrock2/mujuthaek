@@ -14,6 +14,7 @@ public class DeliveryException extends Exception {
   private final boolean permanent;
   private final String remainingAddress;
   private final Duration retryAfter;
+  private final boolean delivered;
 
   public DeliveryException(String code, boolean permanent, Throwable cause) {
     super(code, cause);
@@ -21,6 +22,7 @@ public class DeliveryException extends Exception {
     this.permanent = permanent;
     this.remainingAddress = null;
     this.retryAfter = null;
+    this.delivered = false;
   }
 
   public DeliveryException(String code, boolean permanent) {
@@ -34,11 +36,25 @@ public class DeliveryException extends Exception {
    * @param retryAfter 발송 서비스가 기다리라고 한 시간 (429 Retry-After). 없으면 null
    */
   public DeliveryException(String code, String remainingAddress, Duration retryAfter) {
+    this(code, remainingAddress, retryAfter, false);
+  }
+
+  /**
+   * @param delivered 받을 곳 하나라도 이미 받았는지 (웹 푸시 기기 한 대 이상). 그러면 남은 곳의 재시도를 다 써도 보낸 것(SENT)으로 적어요
+   */
+  public DeliveryException(
+      String code, String remainingAddress, Duration retryAfter, boolean delivered) {
     super(code);
     this.code = code;
     this.permanent = false;
     this.remainingAddress = remainingAddress;
     this.retryAfter = retryAfter;
+    this.delivered = delivered;
+  }
+
+  /** 받을 곳 하나라도 이미 받았는지 */
+  public boolean delivered() {
+    return delivered;
   }
 
   public String code() {

@@ -109,6 +109,7 @@ class PushChannel implements NotificationChannel {
   public String send(UUID userId, String address, List<OutgoingNotification> notifications)
       throws DeliveryException {
     List<PushDevice> devices = read(address);
+    boolean deliveredBefore = deliveredBefore(address); // 앞 차례에 다른 기기가 이미 받았는지(다시 보낼 기기만 남긴 받을 곳)
     OutgoingNotification first = notifications.getFirst();
     byte[] payload = payload(notifications);
     if (payload.length > WebPushCrypto.MAX_PLAINTEXT_BYTES) {
@@ -162,14 +163,18 @@ class PushChannel implements NotificationChannel {
         log.warn("푸시 서비스가 요청을 거절했어요: host={}, status={}", host, status);
       }
     }
+    // 한 대라도 받았으면 보낸 것이에요(계약 web-push.draft.md). 예전엔 기기 하나의 401·403이 다른 기기의 재시도·수신을 보기 전에 묶음
+    // 전체를 영구 실패로 던졌고, 앞 차례에 받은 기기가 있어도 남은 기기가 죽으면 FAILED였어요(2026-11-10 코드 검토)
+    boolean anyDelivered = deliveredBefore || delivered > 0;
+    if (!remaining.isEmpty()) {
+      throw new DeliveryException(
+          retryCode, write(remaining, anyDelivered), retryAfter, anyDelivered);
+    }
+    if (anyDelivered) {
+      return null; // 푸시 서비스는 메시지 ID를 따로 주지 않아요 (Location 헤더뿐)
+    }
     if (authCode != null) {
       throw new DeliveryException(authCode, true); // 키 설정 오류: 다시 보내도 모두 실패해요
-    }
-    if (!remaining.isEmpty()) {
-      throw new DeliveryException(retryCode, write(remaining), retryAfter);
-    }
-    if (delivered > 0) {
-      return null; // 푸시 서비스는 메시지 ID를 따로 주지 않아요 (Location 헤더뿐)
     }
     throw new DeliveryException(failCode != null ? failCode : "ALL_EXPIRED", true);
   }
@@ -285,12 +290,34 @@ class PushChannel implements NotificationChannel {
     return json.writeValueAsString(devices);
   }
 
+  /**
+   * 다시 보낼 받을 곳. 이미 받은 기기가 있으면 {"delivered":true,"devices":[...]}로 그 사실을 남겨, 다음 차례가 남은 기기만 실패해도 보낸
+   * 것으로 적어요. 없으면 예전처럼 기기 목록 그대로.
+   */
+  private String write(List<PushDevice> devices, boolean delivered) {
+    if (!delivered) {
+      return write(devices);
+    }
+    Map<String, Object> wrapped = new LinkedHashMap<>();
+    wrapped.put("delivered", true);
+    wrapped.put("devices", devices);
+    return json.writeValueAsString(wrapped);
+  }
+
   private List<PushDevice> read(String address) throws DeliveryException {
     try {
+      if (address.stripLeading().startsWith("{")) {
+        return json.readValue(json.readTree(address).path("devices").toString(), DEVICES);
+      }
       return json.readValue(address, DEVICES);
     } catch (JacksonException e) {
       throw new DeliveryException("PUSH_ADDRESS_UNREADABLE", true);
     }
+  }
+
+  private boolean deliveredBefore(String address) {
+    return address.stripLeading().startsWith("{")
+        && json.readTree(address).path("delivered").asBoolean(false);
   }
 
   private static Duration longer(Duration current, Duration other) {
