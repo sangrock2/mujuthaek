@@ -149,6 +149,22 @@ class PushChannelTest {
   }
 
   @Test
+  void aKeyRefusalIsNotHiddenByAnotherDeviceThatKeepsFailingToConnect() {
+    // 2026-11-10 재검토: 기기가 모두 키를 거절하는데 한 대가 연결 오류면 재시도로 가고, 재시도를 다 쓰면 PUSH_IO로 남아 VAPID 키 문제가 가려졌음
+    sender.plan("https://fcm.googleapis.com/key", 403);
+    sender.failWithIo("https://fcm.googleapis.com/io");
+    DeliveryException first =
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/io"));
+    assertThat(first.permanent()).isFalse(); // 연결 오류 기기는 다시 보내요
+    assertThat(first.code()).isEqualTo("PUSH_403");
+    assertThat(first.remainingAddress().orElseThrow()).contains("/io").doesNotContain("/key");
+
+    DeliveryException second = catchDelivery(first.remainingAddress().orElseThrow());
+    assertThat(second.code()).isEqualTo("PUSH_403"); // 키를 거절한 기기를 다시 보내지 않아도 다음 차례에 알아요
+    assertThat(channel.deliveredBefore(second.remainingAddress().orElseThrow())).isFalse();
+  }
+
+  @Test
   void aDeviceThatReceivedEarlierKeepsTheRowSentWhenTheRestLaterFail() throws Exception {
     // 2026-11-10 코드 검토: 1차에 A가 받고 B가 503 → 2차에 B가 410이면 ALL_EXPIRED로 FAILED였음
     sender.plan("https://fcm.googleapis.com/a", 201);
@@ -156,6 +172,8 @@ class PushChannelTest {
     DeliveryException first =
         catchDelivery(address("https://fcm.googleapis.com/a", "https://fcm.googleapis.com/b"));
     assertThat(first.delivered()).isTrue();
+    assertThat(channel.deliveredBefore(first.remainingAddress().orElseThrow()))
+        .isTrue(); // 작업기가 예상 못한 오류 때 묻는 표시
 
     sender.plan("https://fcm.googleapis.com/b", 410);
     channel.send(user, first.remainingAddress().orElseThrow(), one(NotificationType.CORRECTED));

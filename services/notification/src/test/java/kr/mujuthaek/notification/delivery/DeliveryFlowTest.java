@@ -274,6 +274,24 @@ public class DeliveryFlowTest {
   }
 
   @Test
+  void aRowSomeDeviceReceivedStaysSentWhenALaterRetryHitsAnUnexpectedError() {
+    // 2026-11-10 재검토: 남은 기기를 다시 보내다 예상 못한 오류가 나면 「이미 받음」 표시를 잃어, 재시도를 다 쓰면 FAILED였음
+    push.statuses.put(device("a").endpoint(), new ArrayDeque<>(List.of(503)));
+    request(NotificationType.CORRECTED, "NOTICE:X:CORRECTED:4", pushTo("a", "b"));
+    worker.runOnce(); // b는 받고 a는 다시
+
+    push.onSend =
+        () -> {
+          throw new IllegalStateException("예상 못한 오류");
+        };
+    for (String at : List.of("2026-10-23T10:02", "2026-10-23T10:08", "2026-10-23T10:40")) {
+      clock.set(at);
+      worker.runOnce();
+    }
+    assertThat(status(Channel.PUSH)).containsExactly("SENT");
+  }
+
+  @Test
   void deliveryFailsWhenEveryDeviceIsGone() {
     push.statuses.put(device("a").endpoint(), new ArrayDeque<>(List.of(410)));
     push.statuses.put(device("b").endpoint(), new ArrayDeque<>(List.of(404)));

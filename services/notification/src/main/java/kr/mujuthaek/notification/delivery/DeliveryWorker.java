@@ -165,7 +165,9 @@ public class DeliveryWorker {
       fail(group, e);
     } catch (RuntimeException e) {
       log.warn("발송 중 예상하지 못한 오류: userId={}, channel={}", first.userId(), first.channel(), e);
-      fail(group, new DeliveryException(e.getClass().getSimpleName(), false));
+      // 앞 차례에 받은 곳이 있으면(받을 곳의 표시) 그 사실을 잃지 않아요: 재시도를 다 써도 보낸 것으로 적어요
+      boolean deliveredBefore = channel.deliveredBefore(latest.address());
+      fail(group, new DeliveryException(e.getClass().getSimpleName(), null, null, deliveredBefore));
     }
   }
 
