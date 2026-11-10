@@ -1430,3 +1430,75 @@ def test_an_update_writes_to_the_item_where_it_is_now_even_if_an_earlier_item_wa
     answer = json.loads(write.update_item.func("eligibility", "e4", {"description": "고침"}, SimpleNamespace(context=context)))
     assert answer == {"ok": "eligibility/e4 고침"}
     assert draft.items["eligibility"] == [{"id": "e4", "description": "고침"}, {"id": "e5", "description": "자산"}]
+
+
+def _same_turn(monkeypatch, name, calls):
+    """한 차례의 도구가 동시에 도는 것을 흉내: 두 호출이 모두 고칠 항목을 읽은 뒤(name 함수 앞)에야 쓰게 하고 답을 돌려줍니다."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from mujuthaek_extraction.v2.tools import write
+
+    barrier, real = threading.Barrier(len(calls)), getattr(write, name)
+
+    def after_both_read(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(write, name, after_both_read)
+    with ThreadPoolExecutor(len(calls)) as pool:
+        return [json.loads(answer) for answer in pool.map(lambda run: run(), calls)]
+
+
+def test_two_fixes_of_the_same_item_in_one_turn_keep_one_and_tell_the_other_to_fix_again(monkeypatch):
+    # 2026-11-10 재검토: 고칠 항목을 잠금 밖에서 읽어, 같은 항목을 고치는 두 호출이 둘 다 「고침」으로 답하고 앞 고침이 사라짐
+    from mujuthaek_extraction.v2.tools import write
+
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    assert json.loads(write.add(context, "schedules", [schedule]))["added"] == ["apply"]
+    runtime = SimpleNamespace(context=context)
+    fixes = [
+        lambda label=label: write.update_item.func("schedules", "apply", {"description": label}, runtime) for label in ("신청 기간이에요.", "접수 기간이에요.")
+    ]
+    answers = _same_turn(monkeypatch, "_apply", fixes)
+    assert sorted(answer.get("error", "ok") for answer in answers) == ["CHANGED_MEANWHILE", "ok"]
+    kept = ("신청 기간이에요.", "접수 기간이에요.")[next(i for i, answer in enumerate(answers) if "ok" in answer)]
+    assert len(draft.items["schedules"]) == 1 and draft.items["schedules"][0]["description"] == kept
+
+    # 넣을 때 거절된 항목을 같은 차례에 두 번 고쳐도 한 번만 넣음
+    later = {**schedule, "id": "later", "evidence": ["p9.9"]}
+    assert json.loads(write.add(context, "schedules", [later]))["failed"][0]["id"] == "later"
+    monkeypatch.undo()
+    fixes = [lambda: write.update_item.func("schedules", "later", {"evidence": ["p1.2"]}, runtime) for _ in range(2)]
+    answers = _same_turn(monkeypatch, "_apply", fixes)
+    assert sorted(answer.get("error", "ok") for answer in answers) == ["CHANGED_MEANWHILE", "ok"]
+    assert [row["id"] for row in draft.items["schedules"]] == ["apply", "later"] and draft.pending == {} and draft.rejected == {}
+
+
+def test_the_same_id_added_twice_in_one_turn_is_added_once(monkeypatch):
+    # 2026-11-10 재검토: 같은 id 검사가 잠금 밖이라, 한 차례에 같은 항목을 두 번 넣으면 둘 다 들어감
+    from mujuthaek_extraction.v2.tools import write
+
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    answers = _same_turn(monkeypatch, "_problems", [lambda: write.add(context, "schedules", [schedule]) for _ in range(2)])
+    assert sorted(len(answer["added"]) for answer in answers) == [0, 1]
+    assert "이미 있는 id" in next(answer for answer in answers if not answer["added"])["failed"][0]["errors"][0]
+    assert [row["id"] for row in draft.items["schedules"]] == ["apply"]
+
+
+def test_a_section_left_with_items_refused_when_added_goes_to_review():
+    # 2026-11-10 재검토: 거절된 항목(소득 상한 등)을 끝내 넣지 못하고 끝난 섹션이 「다 넣음」으로 남아 그 기준이 조용히 빠진 채 게시됨
+    draft = SectionDraft(("eligibility", "schedules", "documents"))
+    draft.items["eligibility"] = [{"id": "age"}]
+    draft.rejected[("eligibility", "income")] = ["/evidence: 근거가 없습니다."]
+    draft.coverage["schedules"] = {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}
+    draft.rejected[("schedules", "late")] = ["/startsAt: 날짜 형식"]
+    draft.coverage["documents"] = {"status": "EXTRACTED"}
+    section._mark_not_added(draft)
+    assert draft.coverage["eligibility"]["status"] == "PARTIAL" and "1개(income)" in draft.coverage["eligibility"]["reason"]
+    assert draft.coverage["schedules"] == {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}  # 담당이 적은 이유를 둠
+    assert draft.coverage["documents"] == {"status": "EXTRACTED"}  # 거절이 남지 않은 섹션은 그대로

@@ -163,6 +163,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     if stopped is None and resolver_on():
         resolved, resolver = _resolve(spec, draft, state, rt, documents, chat, context.usage)
         draft = resolved or draft
+    _mark_not_added(draft)
     trace = {
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
@@ -188,6 +189,20 @@ def _mark_unfinished(draft: SectionDraft, sections: tuple[str, ...], why: str) -
     for section in sections:
         if draft.items.get(section) and (draft.coverage.get(section) or {}).get("status") not in ("PARTIAL", "FAILED"):
             draft.coverage[section] = {"status": "PARTIAL", "reason": f"담당이 끝내기 전에 멈췄어요({why}). 넣지 못한 항목이 있을 수 있어요."}
+
+
+def _mark_not_added(draft: SectionDraft) -> None:
+    """넣을 때 거절된 항목을 끝내 넣지 못하고 끝난 섹션은 PARTIAL로 적어 사람 확인으로 보냅니다. 「다 넣음(EXTRACTED)」으로 두면 그 항목
+    (소득 상한 같은 자격 기준, 기준표 담당에게서 넘겨받은 거절 항목 포함)이 조용히 빠진 채 게시되어 판정이 너그러워졌어요(2026-11-10 재검토).
+    담당이 PARTIAL·FAILED로 적은 섹션은 그 이유를 둡니다. 모든 담당·섹션에 같은 규칙입니다."""
+    left: dict[str, list[str]] = {}
+    for section, item_id in draft.rejected:
+        left.setdefault(section, []).append(item_id)
+    for section, ids in left.items():
+        if (draft.coverage.get(section) or {}).get("status") in ("PARTIAL", "FAILED"):
+            continue
+        shown = ", ".join(ids[:5]) + (f" 외 {len(ids) - 5}개" if len(ids) > 5 else "")
+        draft.coverage[section] = {"status": "PARTIAL", "reason": f"넣을 때 거절된 항목 {len(ids)}개({shown})를 끝내 넣지 못했어요."}
 
 
 def resolver_on() -> bool:

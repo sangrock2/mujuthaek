@@ -168,10 +168,16 @@ def add(context: SectionContext, section: str, items: list[dict[str, Any]], tuck
                 kept = True
             continue
         with draft._lock:
-            draft.items.setdefault(section, []).append(copy.deepcopy(item))
-            draft.rejected.pop((section, item_id), None)
-            draft.pending.pop((section, item_id), None)
-            draft.version += 1
+            # 같은 id 검사는 잠근 뒤 다시 해요: 한 차례의 넣기는 동시에 돌아, 검사 사이에 같은 id가 먼저 들어가면 둘 다 들어갔어요(2026-11-10 재검토)
+            duplicate = draft.find(section, item_id) is not None
+            if not duplicate:
+                draft.items.setdefault(section, []).append(copy.deepcopy(item))
+                draft.rejected.pop((section, item_id), None)
+                draft.pending.pop((section, item_id), None)
+                draft.version += 1
+        if duplicate:
+            failed.append({"id": item_id, "errors": [f"/id: 이미 있는 id입니다({item_id}). 고치려면 update_item을 씁니다."]})
+            continue
         added.append(item.get("id") or section)
     note = {"note": " ".join(tucked) + ". 근거(evidence)는 항목 객체 안에 적습니다."} if tucked else {}
     return _dump({"added": added, "failed": failed, **({"hint": PATCH_HINT} if kept else {}), **note})
@@ -186,13 +192,18 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
     draft = context.draft
     if section not in draft.sections:
         return _error("NOT_MY_SECTION", f"맡은 섹션은 {', '.join(draft.sections)}입니다.")
-    index = draft.find(section, item_id)
-    if index is None and (section, item_id) in draft.pending:
+    # 한 차례의 도구는 동시에 돌아요. 고칠 항목은 잠근 채 꺼내 두고(base), 쓸 때 그 자리에 아직 같은 항목이 있을 때만 씁니다.
+    # 예전엔 자리만 잠금 밖에서 찾아, 같은 차례의 remove_item이 앞 항목을 빼면 다른 항목을 덮어쓰고(e4를 고치는데 e5가 사라짐)
+    # 같은 항목을 고치는 두 호출은 둘 다 「고침」으로 답하며 앞 고침이 사라졌어요(2026-11-10 코드 검토·재검토)
+    with draft._lock:
+        index = draft.find(section, item_id)
+        base = draft.items[section][index] if index is not None else None
+    if base is None and (section, item_id) in draft.pending:
         return _patch_pending(context, section, item_id, changes)
-    if index is None:
+    if base is None:
         return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
     # 고치며 넣은 예외의 비운 원문 글도 넣을 때처럼 근거로 채웁니다(2026-11-07 dudc-8934: 가산 행 예외는 넣은 조건을 고치며 더함)
-    merged, lost = _apply(draft.items[section][index], changes)
+    merged, lost = _apply(base, changes)
     if lost:
         return _bad_path(lost)
     merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
@@ -200,11 +211,9 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
     if problems:
         return _dump({"error": "BAD_ITEM", "errors": problems, "message": KEPT_AS_IS})
     with draft._lock:
-        # 자리는 잠근 뒤 다시 찾아요: 한 차례의 도구는 동시에 돌아, 검사하는 사이 같은 차례의 remove_item이 앞 항목을 빼면 자리가 밀려
-        # 다른 항목을 덮어썼어요(2026-11-10 코드 검토: e4를 고치는데 e5가 사라지고 옛 e4가 남음)
         index = draft.find(section, item_id)
-        if index is None:
-            return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다(같은 차례에 뺐으면 다시 넣지 않습니다).")
+        if index is None or draft.items[section][index] is not base:
+            return _error("CHANGED_MEANWHILE", f"같은 차례의 다른 도구가 {section}/{item_id or 'notice'}를 바꾸거나 뺐습니다. 다음 차례에 다시 고칩니다.")
         draft.items[section][index] = merged
         draft.version += 1
     return _dump({"ok": f"{section}/{item_id or 'notice'} 고침"})
@@ -273,12 +282,18 @@ WRITE_TOOLS = (update_item, remove_item, set_coverage, report_missing, finish)  
 def _patch_pending(context: SectionContext, section: str, item_id: str, changes: Any) -> str:
     """넣을 때 거절된 항목을 바꿀 칸만 고쳐, 맞으면 넣습니다. 아직 틀리면 고친 채로 남겨 두고 이유를 돌려줍니다."""
     draft = context.draft
-    merged, lost = _apply(draft.pending[(section, item_id)], changes)
+    with draft._lock:  # update_item과 같이: 꺼낸 거절 항목이 쓸 때도 그대로일 때만 씀
+        base = draft.pending.get((section, item_id))
+    if base is None:
+        return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다. add_{section}으로 넣습니다.")
+    merged, lost = _apply(base, changes)
     if lost:
         return _bad_path(lost)
     merged = fill_scope(section, fill_original_text(section, merged, context.document), context.documents)
     problems = _problems(context, section, merged, adding=True)
     with draft._lock:
+        if draft.pending.get((section, item_id)) is not base:
+            return _error("CHANGED_MEANWHILE", f"같은 차례의 다른 도구가 {section}/{item_id}를 바꾸거나 넣었습니다. 다음 차례에 다시 고칩니다.")
         if problems:
             draft.pending[(section, item_id)] = merged
             draft.rejected[(section, item_id)] = problems[:2]
