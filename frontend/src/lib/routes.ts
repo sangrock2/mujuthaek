@@ -30,6 +30,7 @@ export const routes = {
   install: "/install",
   admin: "/admin",
   adminReview: "/admin/review",
+  adminExtraction: "/admin/extraction",
   adminSources: "/admin/sources",
   adminCriteria: "/admin/criteria",
   adminReports: "/admin/reports",

@@ -84,6 +84,22 @@ class ExtractionReviewClientTest {
   }
 
   @Test
+  void extractionStatsAsksForTheDaysAndPassesTheBodyThrough() {
+    var client = client(null);
+    server
+        .expect(requestTo(BASE + "/stats/extraction?days=7"))
+        .andExpect(method(HttpMethod.GET))
+        .andRespond(
+            withSuccess(
+                "{\"days\":7,\"notices\":3,\"usage\":{\"cachedRatio\":0.8}}",
+                MediaType.APPLICATION_JSON));
+    var body = client.extractionStats(7);
+    assertThat(body.get("notices").asInt()).isEqualTo(3);
+    assertThat(body.path("usage").path("cachedRatio").asDouble()).isEqualTo(0.8);
+    server.verify();
+  }
+
+  @Test
   void rejectPostsNote() {
     var client = client(null);
     server

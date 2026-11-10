@@ -28,6 +28,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from mujuthaek_extraction import extraction_stats
 from mujuthaek_extraction.cost_alert import monthly_costs
 from mujuthaek_extraction.pipeline import Outcome
 from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES
@@ -728,6 +729,10 @@ class JobStore:
     def monthly_costs(self, month: str | None = None, budget_usd: float | None = None) -> dict[str, Any]:
         """그 달의 분야별 유료 AI 호출 수·비용(cost_alert.monthly_costs)."""
         return monthly_costs(self.conn, month, budget_usd)
+
+    def extraction_stats(self, days: int) -> dict[str, Any]:
+        """관리자 「추출 비용·품질」: 최근 days일(한국 시간)의 처리 공고·상태·비용·담당별 비중·멈춤 (extraction_stats.collect)."""
+        return extraction_stats.collect(self.conn, days)
 
     # ---- 다시 처리 ----
     def spent_before(self, raw_event: dict[str, Any]) -> float:
