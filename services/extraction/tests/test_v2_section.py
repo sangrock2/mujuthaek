@@ -1409,3 +1409,24 @@ def test_the_resolver_copy_keeps_items_that_were_not_added():
     assert copied.rejected == draft.rejected and copied.pending == draft.pending
     copied.rejected.clear()
     assert draft.rejected  # 사본을 고쳐도 원래 초안은 그대로
+
+
+def test_an_update_writes_to_the_item_where_it_is_now_even_if_an_earlier_item_was_removed_meanwhile(monkeypatch):
+    # 2026-11-10 코드 검토: 한 차례의 update_item·remove_item은 동시에 돌아, 고치기가 자리를 먼저 찾고 검사하는 사이 앞 항목이 빠지면
+    # 다른 항목(e5)을 덮어써 사라지고 옛 항목이 남았음
+    from mujuthaek_extraction.v2.tools import write
+
+    rows = [{"id": "e2", "description": "앞"}, {"id": "e4", "description": "고칠 것"}, {"id": "e5", "description": "자산"}]
+    draft = SectionDraft(("eligibility",), items={"eligibility": [dict(r) for r in rows]})
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+
+    def remove_e2_meanwhile(*args, **kwargs):
+        draft.items["eligibility"].pop(0)  # 같은 차례의 remove_item(e2)이 검사 사이에 끝남
+        return []
+
+    monkeypatch.setattr(write, "_problems", remove_e2_meanwhile)
+    monkeypatch.setattr(write, "fill_original_text", lambda section, item, document: item)
+    monkeypatch.setattr(write, "fill_scope", lambda section, item, documents: item)
+    answer = json.loads(write.update_item.func("eligibility", "e4", {"description": "고침"}, SimpleNamespace(context=context)))
+    assert answer == {"ok": "eligibility/e4 고침"}
+    assert draft.items["eligibility"] == [{"id": "e4", "description": "고침"}, {"id": "e5", "description": "자산"}]

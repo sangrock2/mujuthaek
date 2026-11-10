@@ -234,6 +234,8 @@ def build_intake(
         if listing.truncated:
             message = f"첨부 엑셀이 {listing.rows}행이라 주택별로 넣지 않고 공고문의 주택형별 표로 읽습니다."
             issue("SPREADSHEET_TOO_LARGE", ready, f"/payload/files/{index}", message)
+        if listing.hidden:  # 숨긴 행·열은 넘기지 않았음(이번 공고가 아닌 호실일 수 있음, xlsx_reader)
+            issue("SPREADSHEET_HIDDEN_PARTS", ready, f"/payload/files/{index}", f"첨부 엑셀의 숨긴 행·열 {listing.hidden}개는 넘기지 않았습니다.")
         sheets.append(f"=== 첨부 엑셀 {file.name} ===\n{listing.text}")
         sheet_tables.extend({"documentId": file.document_id, "name": file.name, "sheet": name, "rows": rows} for name, rows in listing.sheets)
     attachment_text = pdf_text
@@ -243,7 +245,7 @@ def build_intake(
     forced: list[tuple[str, str]] = []
     # collector는 목록 원본만 전달합니다. 읽지 못한 목록을 공고문이 전부 대신한다고 가정하면
     # PDF에 없는 호별 조건이 빠진 채 자동 완료될 수 있어, 추출은 계속하되 검수를 남깁니다.
-    for code in ("SPREADSHEET_UNREADABLE", "SPREADSHEET_TOO_LARGE", "ATTACHMENT_NOT_STORED", "ATTACHMENT_TYPE_UNSUPPORTED"):
+    for code in ("SPREADSHEET_UNREADABLE", "SPREADSHEET_TOO_LARGE", "SPREADSHEET_HIDDEN_PARTS", "ATTACHMENT_NOT_STORED", "ATTACHMENT_TYPE_UNSUPPORTED"):
         affected = [
             raw.files[int(i.path.rsplit("/", 1)[-1])].name for i in issues if i.code == code and raw.files[int(i.path.rsplit("/", 1)[-1])].role == "UNIT_LIST"
         ]

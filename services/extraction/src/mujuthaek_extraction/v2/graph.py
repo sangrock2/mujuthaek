@@ -57,6 +57,8 @@ class V2State(TypedDict, total=False):
     context: Any  # V1 TrustedContext(그림 판독 뒤 문서 기록 — 판독 글을 붙인 원문의 해시)
     image_run: ExtractionRun | None
     structure_run: ExtractionRun | None  # 구조(V1 방식) 호출 기록
+    structure_first_run: ExtractionRun | None  # 구조(V1 방식)가 대체 모델로 넘어갔을 때 처음 모델의 기록
+    structure_model: str | None  # 구조(V1 방식)를 낸 모델 이름(대체로 넘어갔으면 그 모델)
     recheck_model: Any  # 구조 단계 재확인 모델(V1 extract_parts가 고른 것: 대체 모델로 넘어갔으면 그 모델)
     extracted: Any  # 채팅 모델이 없어 V1 방식으로 모든 섹션을 뽑은 결과(pipeline.Extracted). 있으면 담당 없이 마무리
     document: DocumentModel
@@ -133,7 +135,14 @@ def _v1_state(extracted: pipeline.Extracted) -> dict[str, Any]:
     """V1 방식 추출 결과 → 그래프 상태(조각·구조 요약·호출 기록·재확인 모델)."""
     run = extracted.run
     summary = run.structure or (structure_summary(run.parts[0]) if run.parts else None)
-    return {"parts": list(run.parts), "structure": summary, "structure_run": run, "recheck_model": extracted.recheck_model}
+    return {
+        "parts": list(run.parts),
+        "structure": summary,
+        "structure_run": run,
+        "structure_first_run": extracted.first_run,
+        "structure_model": extracted.model_used,
+        "recheck_model": extracted.recheck_model,
+    }
 
 
 def _shared_structure(state: V2State, rt: pipeline.Runtime) -> bool:
@@ -172,7 +181,9 @@ def section(state: V2State, runtime: Context) -> dict[str, Any]:
         from mujuthaek_extraction.v2.agents.section import run_section  # 섹션 담당 에이전트(LangChain)
 
         agent = run_section
-    parts, usage, trace = _unpack(agent(spec, state, runtime.context))
+    # 동시에 도는 담당 수는 EXTRACTION_PARALLEL_CALLS까지(1이면 하나씩, V1 섹션 호출과 같음). 예전엔 이 설정을 읽지 않았어요(2026-11-10 코드 검토)
+    with runtime.context.gate:
+        parts, usage, trace = _unpack(agent(spec, state, runtime.context))
     return {"parts": parts, "usage": usage, "traces": trace}
 
 
@@ -190,7 +201,13 @@ def conclude(state: V2State, runtime: Context) -> dict[str, Any]:
             raw_responses=list(base.raw_responses),
             structure=state.get("structure"),
         )
-        extracted = pipeline.Extracted(run, None, rt.models.names.get("primary", "primary"), state.get("recheck_model") or rt.models.primary)
+        # 담당(채팅 모델)이 돌았으면 유료 모델, 아니면 구조를 낸 모델로 적어요. 구조가 대체 모델로 넘어갔으면 처음 모델의 기록도 남겨요.
+        # 예전엔 늘 primary(로컬 AI 설정이면 「local」)로 적고 처음 모델의 시도를 버려 작업 기록이 틀렸어요(2026-11-10 코드 검토)
+        names = rt.models.names
+        paid = names.get("fallback") or names.get("primary", "primary")
+        model = paid if state.get("usage") else state.get("structure_model") or names.get("primary", "primary")
+        recheck = state.get("recheck_model") or rt.models.primary
+        extracted = pipeline.Extracted(run, state.get("structure_first_run"), model, recheck)
         rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
         scope = workers(state["rules"])[STRUCTURE].sections
     report = pipeline.first_report(extracted, material, context, rt)

@@ -110,3 +110,22 @@ class ToolCallingFake(GenericFakeChatModel):
 
     def bind_tools(self, tools, **kwargs):
         return self
+
+
+def test_a_one_page_pdf_followed_by_another_pdf_gives_the_second_its_own_ids():
+    # 2026-11-10 코드 검토: 쪽 번호가 줄 때만 다음 첨부로 봐서, 1쪽짜리 정정공고 뒤 공고문의 [표 1-1]이 같은 id(t1-1)가 되어
+    # 앞 표 인용이 뒤 표 글자로 풀렸음
+    text = "\n".join(
+        [
+            "=== 첨부 정정공고.pdf ===",
+            "--- 1쪽 ---",
+            "[표 1-1]",
+            "| 청년 | 100% |",
+            "=== 첨부 공고문.pdf ===",
+            "--- 1쪽 ---",
+            "[표 1-1]",
+            "| 보증금 | 2억 5,400만원 |",
+        ]
+    )
+    doc = parse(text)
+    assert [table.id for table in doc.tables] == ["t1-1", "d2.t1-1"]

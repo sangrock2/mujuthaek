@@ -476,7 +476,7 @@ def test_spreadsheet_with_trailing_space_in_name_is_read(monkeypatch):
     data = b"PK synthetic xlsx"
     sha = hashlib.sha256(data).hexdigest()
     files = [{"name": "주택목록.xlsx ", "downloadUrl": "https://x.kr/f", "sha256": sha, **fields("xlsx", "UNIT_LIST"), "s3Key": "raw/x/a.xlsx"}]
-    listing = SimpleNamespace(truncated=False, rows=1, text="주택형 | 임대보증금\n26A | 12,000,000", sheets=())
+    listing = SimpleNamespace(truncated=False, rows=1, text="주택형 | 임대보증금\n26A | 12,000,000", sheets=(), hidden=0)
     monkeypatch.setattr(adapter, "read_xlsx", lambda data: listing)
     result = build_intake(make_event(files=files), InMemorySourceReader(files={"raw/x/a.xlsx": data}), require_pdf=False)
     assert result.ready and result.material.text_document_id == "pdf-text"

@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import logging
 import re
+import threading
 from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -184,6 +185,11 @@ class Runtime:
     require_pdf: bool = True
     parallel_calls: int = 1
     parallel_stagger: float = 0.0
+    # V2 담당을 동시에 몇 개까지 돌릴지(parallel_calls). 담당은 Send로 한꺼번에 출발하므로 여기서 줄 세워요
+    gate: threading.BoundedSemaphore = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gate", threading.BoundedSemaphore(max(1, self.parallel_calls)))
 
     def cost(self) -> float:
         return self.models.budget.spent_usd if self.models.budget else 0.0

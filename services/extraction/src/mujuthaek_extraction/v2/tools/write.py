@@ -200,6 +200,11 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
     if problems:
         return _dump({"error": "BAD_ITEM", "errors": problems, "message": KEPT_AS_IS})
     with draft._lock:
+        # 자리는 잠근 뒤 다시 찾아요: 한 차례의 도구는 동시에 돌아, 검사하는 사이 같은 차례의 remove_item이 앞 항목을 빼면 자리가 밀려
+        # 다른 항목을 덮어썼어요(2026-11-10 코드 검토: e4를 고치는데 e5가 사라지고 옛 e4가 남음)
+        index = draft.find(section, item_id)
+        if index is None:
+            return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다(같은 차례에 뺐으면 다시 넣지 않습니다).")
         draft.items[section][index] = merged
         draft.version += 1
     return _dump({"ok": f"{section}/{item_id or 'notice'} 고침"})
@@ -209,10 +214,10 @@ def update_item(section: str, item_id: str, changes: dict[str, Any], runtime: To
 def remove_item(section: str, item_id: str, runtime: ToolRuntime[SectionContext, Any]) -> str:
     """넣은 항목을 뺍니다(원문에 없거나 다른 섹션 몫인 항목)."""
     draft = runtime.context.draft
-    index = draft.find(section, item_id) if section in draft.sections else None
-    if index is None:
-        return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다.")
-    with draft._lock:
+    with draft._lock:  # 자리는 잠근 뒤 찾아요(같은 차례의 다른 도구가 목록을 바꿀 수 있음, update_item 참고)
+        index = draft.find(section, item_id) if section in draft.sections else None
+        if index is None:
+            return _error("UNKNOWN_ITEM", f"{section}에 {item_id} 항목이 없습니다.")
         draft.items[section].pop(index)
         draft.version += 1
     return _dump({"ok": f"{section}/{item_id} 뺌"})

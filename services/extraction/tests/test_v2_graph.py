@@ -65,6 +65,16 @@ def test_when_the_structure_step_fails_the_section_agents_are_not_sent(v2):
     assert outcome.status == "FAILED" and seen == []
 
 
+def test_the_job_record_names_the_paid_model_when_agents_ran_even_with_a_local_primary(v2):
+    # 2026-11-10 코드 검토: 로컬 AI + 유료 대체 설정에서 담당이 모두 유료로 돌았는데 작업 기록 모델이 늘 「local」이었음
+    recorded = answers()
+    for name in ("structure", "schedules", "eligibility", "selection", "documents"):
+        v2[name] = lambda spec, state, rt: ([json.loads(recorded[spec.name][0])], [{"agent": spec.name, "costUsd": 0.0}])
+    names = {"primary": "local", "fallback": "gpt-6-luna"}
+    outcome = run(raw_event(), NoticeModels(RecordedModel({}, "local"), None, names=names))
+    assert outcome.status == "COMPLETED" and outcome.model_used == "gpt-6-luna"
+
+
 def test_without_chat_models_the_structure_node_extracts_every_section_the_v1_way(v2):
     # 채팅 모델이 없는 실행(로컬 AI만·녹화·대역)은 담당 에이전트를 돌릴 수 없어, 구조 노드가 V1 방식 추출 전체를 돌리고 담당 없이 마무리로 감
     # (2026-11-10 V1 정해진 단계 그래프를 걷어내며 이 길로 옮김: 그 그래프와 같은 호출·결과)
@@ -109,3 +119,42 @@ def test_conclude_rechecks_the_structure_sections_the_v1_way_and_leaves_agent_se
     assert not any(t.startswith("/supplyGroups") for t in targets) and "/eligibility/1" in targets
     rent = next(p for p in outcome.candidate["supplyGroups"][0]["prices"] if p["kind"] == "MONTHLY_RENT")
     assert rent["amountKrw"] == 100000
+
+
+def test_section_agents_follow_the_parallel_calls_setting(v2, monkeypatch):
+    # 2026-11-10 코드 검토: V2는 EXTRACTION_PARALLEL_CALLS를 읽지 않아 1로 두어도 담당이 모두 동시에 돌았음(429·예산 예약 충돌)
+    import time
+
+    recorded = answers()
+    monkeypatch.setattr(graph, "SLEEP", lambda seconds: None)
+    clock = lambda: datetime(2026, 10, 15, tzinfo=UTC)  # noqa: E731
+
+    def busiest(parallel):
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def fake(spec, state, rt):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+            return [json.loads(recorded[spec.name][0])], []
+
+        for name in ("structure", "schedules", "eligibility", "selection", "documents"):
+            v2[name] = fake
+        outcome = process(
+            raw_event(),
+            models=models(),
+            reader=InMemorySourceReader(),
+            regions=REGIONS,
+            clock=clock,
+            new_event=new_event,
+            require_pdf=False,
+            parallel_calls=parallel,
+        )
+        assert outcome.status == "COMPLETED"
+        return peak[0]
+
+    assert busiest(1) == 1
+    assert busiest(4) > 1

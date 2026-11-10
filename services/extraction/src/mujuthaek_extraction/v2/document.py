@@ -311,6 +311,11 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
             continue
         if block := BLOCK.match(line):
             close()
+            if block.group(1).startswith("첨부 ") and not block.group(1).startswith("첨부 엑셀") and last_page:
+                # 첨부 PDF 머리(「=== 첨부 공고문.pdf ===」)가 앞 PDF 쪽 뒤에 오면 다음 첨부예요. 쪽 번호가 줄 때만 보면 1쪽짜리 PDF 뒤의
+                # PDF가 같은 문서로 남아 두 PDF의 표 id가 겹치고(t1-1), 앞 표 인용이 뒤 표 글자로 풀렸어요(2026-11-10 코드 검토)
+                document += 1
+                last_page = 0
             kind = "x" if "엑셀" in block.group(1) else "g" if "그림 판독" in block.group(1) else "b"
             blocks[kind] = blocks.get(kind, 0) + 1
             area = f"{kind}{blocks[kind]}"

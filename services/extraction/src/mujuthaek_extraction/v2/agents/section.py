@@ -92,6 +92,14 @@ TABLE_ENV = "EXTRACTION_V2_CRITERIA_TABLES"
 TABLE_CALLS = 6
 TABLE_WORKERS = 3
 TABLE_OUTPUT_TOKENS = 16_000
+
+
+def _parallel(rt: Any) -> int:
+    """동시 호출 수 설정(EXTRACTION_PARALLEL_CALLS, 1이면 하나씩). 담당 안의 기준표·해결 담당도 이 수를 넘지 않아요(2026-11-10 코드 검토:
+    V2는 이 설정을 읽지 않아, 1로 두어도 담당 4개 × 3개씩 동시에 불렀음)."""
+    return max(1, int(getattr(rt, "parallel_calls", TABLE_WORKERS) or 1))
+
+
 LOST_VALUE_NOTES = (NOTE_CODES | DROPPED_VALUE_CODES) - {
     "IMAGE_TRANSCRIBED_VALUES",
     "CONVERSION_DIRECTION_CORRECTED",
@@ -219,7 +227,7 @@ def _resolve(
         def one(group: tuple[tuple[str, str], list[dict[str, Any]]]) -> tuple[SectionDraft | None, dict[str, Any], list[dict[str, Any]]]:
             return _resolve_group(spec, base, state, rt, documents, chat, group[1], known)  # noqa: B023 (차례 안에서만 부름)
 
-        with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(wave), _parallel(rt))) as pool:
             results = list(pool.map(one, wave))
         merged, taken = _copy(spec, base), []
         for (_, issues), (trial, run, calls) in zip(wave, results, strict=True):
@@ -446,7 +454,7 @@ def _tables(
         return []
     if not chunks:
         return []
-    with ThreadPoolExecutor(max_workers=min(len(chunks), TABLE_WORKERS)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(chunks), TABLE_WORKERS, _parallel(rt))) as pool:
         runs = list(pool.map(lambda chunk: _run_table(spec, chunk, state, rt, documents, chat), chunks))
     records = []
     for chunk, (helper, record, calls) in zip(chunks, runs, strict=True):
