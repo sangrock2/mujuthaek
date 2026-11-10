@@ -1,0 +1,5 @@
+# 저장소 맨 위: 편집기·OS 파일만. 백엔드·프론트 규칙은 각 폴더의 .gitignore에 있어요.
+.idea/
+*.iml
+.vscode/
+.DS_Store
