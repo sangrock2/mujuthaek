@@ -1295,7 +1295,7 @@ def test_a_criteria_table_helper_hears_only_its_own_problems_and_the_missing_row
     assert issues[0]["description"].startswith("원문 자격 기준표 3행의 기준값 140%, 120%, 200%")  # 맡은 신생아 행만
 
 
-def run_after_helpers(monkeypatch, found):
+def run_after_helpers(monkeypatch, found, given=None):
     """기준표 담당이 항목 하나를 넣은 뒤 자격 담당을 돌림. 자격 담당(가짜)은 차례마다 끝내기만 부르고, 받은 메시지를 차례마다 남김."""
     document = parse(TEXT)
     age, _ = _text_only(document)
@@ -1320,7 +1320,7 @@ def run_after_helpers(monkeypatch, found):
             Main(messages=iter([])), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], middleware=middleware, context_schema=SectionContext
         )
 
-    monkeypatch.setattr(section, "_tables", tables)
+    monkeypatch.setattr(section, "_tables", given or tables)
     monkeypatch.setattr(section, "_issues", lambda *args: found(*args) if callable(found) else list(found))
     monkeypatch.setattr(section, "document_ids", lambda material: ["text"])
     monkeypatch.setattr(section, "_agent", agent)
@@ -1354,6 +1354,35 @@ def test_a_failing_check_after_the_helpers_stops_only_this_agent(monkeypatch):
     turns, parts, usage, trace = run_after_helpers(monkeypatch, broken)
     assert trace["stopped"] and "검증기 결함" in trace["stopped"]
     assert [row["id"] for row in trace["draft"]["items"]["eligibility"]] == ["t1-1-age"]  # 넣은 항목은 두고 이 담당만 멈춤
+
+
+def test_rows_a_stopped_table_helper_left_send_the_section_to_review_when_still_missing(monkeypatch):
+    # 2026-11-10 재검토: 기준표 담당이 호출 상한에 끊긴 묶음의 남은 행은 할 일 글로만 넘어가, 자격 담당이 넣지 않고 끝내면 EXTRACTED로 남았음
+    def stopped_tables(spec, draft, state, rt, documents, chat, usage):
+        document = state["document"]
+        age, _ = _text_only(document)
+        draft.items.setdefault("eligibility", []).append({**age, "id": "t1-1-age"})
+        draft.version += 1
+        return [
+            {"table": "t1-1", "rows": "t1-1 행 r0~r15", "groups": [], "stopped": "모델 호출 상한(6번)", "items": ["t1-1-age"], "brief": [], "spots": [3, 4]}
+        ]
+
+    seen = []
+    monkeypatch.setattr(section, "_checked", lambda *args: ([], {"eligibility": [], "selectionRules": []}))
+
+    def missed(candidate, text, rows):
+        seen.append(rows)
+        return ([("| 신생아 | 140% |", ["140%"], None)], {})
+
+    monkeypatch.setattr(section, "missed_criteria_rows", missed)
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [], given=stopped_tables)
+    assert seen == [frozenset({3, 4})]  # 끝내지 못한 묶음의 행만 셈
+    assert trace["draft"]["coverage"]["eligibility"]["status"] == "PARTIAL" and "1행" in trace["draft"]["coverage"]["eligibility"]["reason"]
+
+    # 남은 행을 자격 담당이 넣었으면 그대로
+    monkeypatch.setattr(section, "missed_criteria_rows", lambda candidate, text, rows: ([], {}))
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [], given=stopped_tables)
+    assert "eligibility" not in trace["draft"]["coverage"]
 
 
 def test_rows_a_criteria_table_helper_could_not_add_are_handed_to_the_eligibility_agent(monkeypatch):

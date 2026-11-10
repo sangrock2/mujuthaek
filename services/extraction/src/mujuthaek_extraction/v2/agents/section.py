@@ -168,6 +168,8 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         resolved, resolver = _resolve(spec, draft, state, rt, documents, chat, context.usage)
         draft = resolved or draft
     _mark_not_added(draft)
+    if tables:
+        _mark_table_rows_left(spec, draft, tables, state, rt, documents)
     trace = {
         "agent": spec.name,
         "turns": _trace(last.get("messages") or []),
@@ -207,6 +209,29 @@ def _mark_not_added(draft: SectionDraft) -> None:
             continue
         shown = ", ".join(ids[:5]) + (f" 외 {len(ids) - 5}개" if len(ids) > 5 else "")
         draft.coverage[section] = {"status": "PARTIAL", "reason": f"넣을 때 거절된 항목 {len(ids)}개({shown})를 끝내 넣지 못했어요."}
+
+
+def _mark_table_rows_left(
+    spec: CallSpec, draft: SectionDraft, tables: list[dict[str, Any]], state: Any, rt: pipeline.Runtime, documents: tuple[str, ...]
+) -> None:
+    """기준표 담당이 끝내지 못했거나(호출 상한·오류·잘림) PARTIAL로 적은 묶음의 행을 자격 담당도 넣지 않고 끝내면 자격 섹션을 PARTIAL로 적어
+    사람 확인으로 보냅니다. 그 행은 할 일 글로만 넘어가, 자격 담당이 넣지 않고 끝내면 섹션이 「다 넣음」이 되고 소득·자산 상한이 조용히 빠졌어요
+    (2026-11-10 재검토. 기준표 누락 메모는 2행부터라 1행 누락을 못 보고, 최종 검증에서도 메모라 게시를 막지 않았음). 남은 행은 1행이라도 봅니다."""
+    if "eligibility" not in spec.sections or (draft.coverage.get("eligibility") or {}).get("status") in ("PARTIAL", "FAILED"):
+        return
+    spots = frozenset(spot for record in tables if record.get("stopped") or record.get("partial") for spot in record.get("spots") or [])
+    if not spots or not draft.items.get("eligibility"):
+        return  # 항목이 없는 섹션은 parts_of가 FAILED로 적어요
+    _, candidate = _checked(spec, draft, state, rt, documents)
+    if candidate is None:  # 결합하지 못해 셀 수 없으면 확인 필요
+        missed: list[Any] = [None]
+    else:
+        missed, _ = missed_criteria_rows(candidate, state["document"].source, spots)
+    if missed:
+        draft.coverage["eligibility"] = {
+            "status": "PARTIAL",
+            "reason": f"기준표 담당이 끝내지 못한 행 중 {len(missed)}행의 기준값을 넣지 못했어요.",
+        }
 
 
 def resolver_on() -> bool:
@@ -480,6 +505,8 @@ def _tables(
         usage.extend(calls)
         merged, refused = _merge_table(draft, helper, chunk)
         record = {**record, "items": [item["id"] for item in merged], "brief": [_brief(item) for item in merged]}
+        if record.get("stopped") or record.get("partial"):
+            record["spots"] = list(chunk.spots)  # 끝내지 못한 묶음의 원문 줄: 자격 담당이 끝낸 뒤 남은 행을 다시 셈(_mark_table_rows_left)
         records.append({**record, "refused": refused} if refused else record)
     return records
 

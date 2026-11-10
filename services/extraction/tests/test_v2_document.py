@@ -105,6 +105,19 @@ def test_document_from_a_real_pdf_keeps_v1_table_numbers():
     assert doc.picture_pages == ()
 
 
+def test_picture_pages_are_numbered_by_the_pdfs_whose_text_is_in_the_source(monkeypatch):
+    # 2026-11-10 재검토: 글자를 못 읽은 PDF(스캔본)가 앞에 있으면 첨부 PDF 전체로 번호를 세어, 안내의 그림 쪽이 다른 문서(p1)나 없는 id(d2.p1)를 가리켰음
+    import mujuthaek_extraction.image_reading as image_reading
+
+    scan, readable = make_pdf([["a"]], body="x"), make_pdf(CELLS)  # 글자가 적은 PDF는 읽지 못한 것으로 빠짐
+    monkeypatch.setattr(image_reading, "image_pages", lambda data: {scan: [(1, None)], readable: [(1, None)]}.get(data, []))
+    files = [("scan.pdf", scan), ("notice.pdf", readable)]
+    event = raw_event()
+    event["payload"]["files"] = [attachment(name, data) for name, data in files]
+    material = build_intake(event, InMemorySourceReader(files={f"raw/x/{name}": data for name, data in files})).material
+    assert build(material).picture_pages == ("p1",)  # 원문의 첫 PDF(notice.pdf) 1쪽. 스캔본 쪽은 근거로 쓸 수 없어 뺌
+
+
 class ToolCallingFake(GenericFakeChatModel):
     """녹화한 답(도구 호출 포함)을 차례로 내는 가짜 모델. create_agent가 도구를 묶을 수 있게 bind_tools는 그대로 돌려줍니다."""
 

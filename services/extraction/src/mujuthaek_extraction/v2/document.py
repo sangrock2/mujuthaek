@@ -270,10 +270,15 @@ class DocumentModel:
 def build(material: ExtractionMaterial) -> DocumentModel:
     """V1 입력 해석 결과 → 문서 모델. 그림 쪽은 첨부 PDF에서 찾습니다(V1 그림 판독과 같은 기준)."""
     document = parse(material.text, material.text_document_id)
-    pdfs = [file.document_id for file in material.files if file.file_type == "pdf"]
+    # 문서 번호는 원문에 글자가 들어간 PDF 순서로만 셉니다(parse·V1 표 번호와 같음). 첨부 PDF 전체로 세면 앞에 글자를 못 읽은 PDF(스캔본)가
+    # 있을 때 번호가 밀려, 안내의 그림 쪽 id가 다른 문서를 가리키거나 없는 id(d2.p1)가 됐어요(2026-11-10 재검토). 원문에 없는 PDF의 그림 쪽은
+    # 근거로 쓸 수 없어 안내에서 뺍니다(그 글자는 그림 판독 블록으로 들어와요)
+    pdfs = [str(page.get("documentId")) for page in material.pdf_pages]
     pages = []
     for document_id, _, _, page in image_targets(material):
-        order = pdfs.index(document_id) + 1 if document_id in pdfs else 1
+        if document_id not in pdfs:
+            continue
+        order = pdfs.index(document_id) + 1
         pages.append(f"p{page}" if order == 1 else f"d{order}.p{page}")
     return dataclasses.replace(document, picture_pages=tuple(pages))
 
