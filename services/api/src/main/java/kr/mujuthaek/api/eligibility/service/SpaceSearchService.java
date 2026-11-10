@@ -15,6 +15,7 @@ import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.common.pagination.CursorKey;
 import kr.mujuthaek.api.common.pagination.CursorQuery;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import kr.mujuthaek.api.common.text.Keywords;
 import kr.mujuthaek.api.eligibility.dto.request.JudgmentApplicantRequest;
 import kr.mujuthaek.api.eligibility.dto.request.SpaceSearchRequest;
@@ -290,7 +291,11 @@ public class SpaceSearchService {
       }
       boolean wholeSido = code.startsWith("000", 2);
       for (String c : chosen) {
-        if (code.startsWith(c) || (wholeSido && c.startsWith(code.substring(0, 2)))) {
+        // 일반구가 있는 시(CityDistricts): 시를 고르면 그 구의 공간도, 구를 고르면 시 전체 공간도 걸려요(재검토: 수원시를 고르면 구 공간이 빠졌음)
+        if (code.startsWith(c)
+            || (wholeSido && c.startsWith(code.substring(0, 2)))
+            || CityDistricts.inCity(c, code)
+            || (CityDistricts.isCity(code) && CityDistricts.inCity(code, c))) {
           return true;
         }
       }

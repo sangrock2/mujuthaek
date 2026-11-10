@@ -124,6 +124,10 @@
       "properties": {
         "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
         "needsReview": { "type": "boolean" },
+        "reviewed": {
+          "type": "boolean",
+          "description": "사람이 검수해 승인·반려한 결과(없으면 false). 받는 쪽은 같은 version이라도 검수 결과는 받아요(검수 전 결과가 먼저 나가 있으므로)"
+        },
         "reviewReasons": {
           "type": "array",
           "items": { "enum": ["EVIDENCE_NOT_FOUND", "LOW_CONFIDENCE", "NO_DOCUMENT", "RULE_AI_CONFLICT", "TEXT_TRUNCATED"] }

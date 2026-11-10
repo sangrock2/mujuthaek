@@ -95,9 +95,11 @@ def neutral_from_candidate(candidate: dict[str, Any], notice_id: str) -> dict[st
     notice_counts = [c for c in notice.get("counts") or [] if not c["scope"]["targetGroups"] or every and every <= set(c["scope"]["targetGroups"])]
     offered = [c["value"] for c in notice_counts if c["kind"] == "OFFERED"]
     reserve = [c["value"] for c in notice_counts if c["kind"] == "RESERVE"]
-    if len(offered) == 1 and len(reserve) == 1 and all(isinstance(v, int) for v in (*offered, *reserve)):
+    if len(offered) == 1 and len(reserve) == 1 and all(isinstance(v, int) for v in (*offered, *reserve)) and offered[0] < reserve[0]:
         # 즉시 입주자와 함께 뽑는 새 예비자(RESERVE)도 모집 수입니다. 정답표 채점 정책: 「거북이집 5명·17명은 즉시 입주와 공동 예비인원을
-        # 합친 원문 수치」, 기존 대기자(WAITLIST)는 넣지 않음(2026-11-09 gndc 2건: 「모집인원 17명(우선 입주자 2명, 예비 입주자 15명)」)
+        # 합친 원문 수치」, 기존 대기자(WAITLIST)는 넣지 않음(2026-11-09 gndc 2건: 「모집인원 17명(우선 입주자 2명, 예비 입주자 15명)」).
+        # 모집 수가 예비보다 작을 때만 더합니다: 크거나 같으면 모집 수가 이미 예비를 품은 전체일 수 있음(같은 날 23건 측정 gndc-1239는
+        # 「모집인원 17명」을 OFFERED 17, 「예비 15명」을 RESERVE 15로 적어 32로 셌음)
         total = [offered[0] + reserve[0]]
     else:
         total = offered or [c["value"] for c in notice_counts if c["kind"] in ("RESERVE", "WAITLIST")]
@@ -1002,8 +1004,20 @@ def sums(score: Score) -> tuple[int, int]:
 def _load_key(folder: Path, notice: str) -> dict[str, Any] | None:
     for path in (folder / notice / "key.json", folder / f"{notice}.json"):
         if path.exists():
-            return _child_age_rows(json.loads(path.read_text(encoding="utf-8")))
+            return _child_age_rows(_not_owned_rows(json.loads(path.read_text(encoding="utf-8"))))
     return None
+
+
+# 정답표가 값 없이 적은 「자동차(가액 산출대상 자동차)를 소유하고 있지 않을 것」은 자동차가액 0입니다. 값이 없으면 재현에서도 빠지고, 추출의
+# 「자동차가액 0 이하」가 틀린 값 후보로 세어졌습니다(2026-11-10 23건 dcco-24791·dudc-8934 대학생 계층. 정답표 23건에 이 두 행뿐)
+NOT_OWNED = re.compile(r"소유하(?:고\s*있)?지\s*않")
+
+
+def _not_owned_rows(key: dict[str, Any]) -> dict[str, Any]:
+    for e in key.get("eligibility") or []:
+        if e.get("criterion") == "CAR_ASSETS" and not _values(e.get("value")) and NOT_OWNED.search(str(e.get("text") or "")):
+            e["value"] = 0
+    return key
 
 
 # 정답표는 자녀 나이(「6세 이하 자녀를 둔 한부모가족」)도 AGE로 적습니다. 상한이 이 나이 이하면 신청자 나이일 수 없어, 원문·대상에 「자녀」가 있는

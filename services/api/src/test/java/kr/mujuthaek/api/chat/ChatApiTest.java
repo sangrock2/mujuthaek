@@ -81,8 +81,8 @@ class ChatApiTest {
         if (id.equals(CLOSED)) {
           return Optional.of(new ChatRoom(CLOSED, TODAY.minusDays(31)));
         }
-        if (id.equals(MERGED)) {
-          return Optional.of(new ChatRoom(MERGED_INTO, TODAY.plusDays(10)));
+        if (id.equals(MERGED) || id.equals(MERGED_INTO)) {
+          return Optional.of(new ChatRoom(MERGED_INTO, TODAY.plusDays(10), List.of(MERGED)));
         }
         if (id.equals(ALWAYS)) {
           return Optional.of(new ChatRoom(ALWAYS, null));
@@ -430,10 +430,60 @@ class ChatApiTest {
     mvc.perform(get("/api/v1/notices/{id}/chat/messages", MERGED_INTO))
         .andExpect(jsonPath("$.items[0].content").value("합쳐진 공고에서 보냄"));
 
+    // 2026-11-10 코드 검토: 합치기 전에 합쳐진 공고에 쓴 메시지도 남은 방 목록에 보이고 답장할 수 있어요(예전엔 사라짐)
+    UUID before = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into chat.messages (id, notice_id, user_id, author_nickname, content, status, created_at)
+        values (?, ?, ?, ?, '합치기 전 메시지', 'VISIBLE', ?)
+        """,
+        before,
+        MERGED,
+        a.userId(),
+        a.nickname(),
+        OffsetDateTime.now().minusDays(1));
+    mvc.perform(get("/api/v1/notices/{id}/chat/messages", MERGED_INTO))
+        .andExpect(jsonPath("$.items[?(@.content == '합치기 전 메시지')]").exists());
+    sendRaw(MERGED_INTO, a, "{\"content\": \"답장\", \"parentId\": \"" + before + "\"}")
+        .andExpect(status().isCreated());
+
     mvc.perform(get("/api/v1/notices/{id}/chat", UNKNOWN))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("NOTICE_NOT_FOUND"));
     sendRaw(UNKNOWN, a, "{\"content\": \"없는 공고\"}").andExpect(status().isNotFound());
+  }
+
+  @Test
+  void changesToAMessageWrittenBeforeTheMergeReachTheSurvivingRoom() throws Exception {
+    // 2026-11-10 재검토: 합치기 전 메시지의 좋아요·삭제 이벤트를 메시지의 공고 ID(합쳐진 공고)로 보내 남은 방 연결에 가지 않았음
+    LoginUser a = member();
+    UUID before = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into chat.messages (id, notice_id, user_id, author_nickname, content, status, created_at)
+        values (?, ?, ?, ?, '합치기 전 메시지', 'VISIBLE', ?)
+        """,
+        before,
+        MERGED,
+        a.userId(),
+        a.nickname(),
+        OffsetDateTime.now().minusDays(1));
+    MvcResult stream =
+        mvc.perform(get("/api/v1/notices/{id}/chat/stream", MERGED_INTO))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+    mvc.perform(
+            put("/api/v1/chat/messages/{id}/like", before)
+                .header("Authorization", bearer(member())))
+        .andExpect(status().isOk());
+    mvc.perform(delete("/api/v1/chat/messages/{id}", before).header("Authorization", bearer(a)))
+        .andExpect(status().is2xxSuccessful());
+
+    assertThat(body(stream))
+        .contains("event:like.updated")
+        .contains("event:message.deleted")
+        .contains(before.toString());
   }
 
   @Test

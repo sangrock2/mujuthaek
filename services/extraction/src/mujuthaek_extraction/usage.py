@@ -109,21 +109,24 @@ class MeteredModel:
 
     label: 기록에 남길 모델 이름(models.names 값). 요율표(PRICES)에 있는 이름이면 사용량으로 비용을 추정합니다."""
 
-    def __init__(self, model: ExtractionModel, usage: UsageRecorder, label: str, clock=time.perf_counter):
+    def __init__(self, model: ExtractionModel, usage: UsageRecorder, label: str, clock=time.perf_counter, gate: Any = None):
+        """gate: 공고 하나의 모델 호출 동시 상한(EXTRACTION_PARALLEL_CALLS, pipeline.Runtime.gate). V2 담당 호출(BudgetMiddleware)과 함께 씁니다."""
         self.model = model
         self.usage = usage
         self.label = label
         self._clock = clock
+        self._gate = gate
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         attempt = self.usage.next_attempt(request.call_name)
-        start = self._clock()
-        try:
-            response = self.model.complete(request)
-        except ModelError as error:
-            self.usage.add_call(self._record(request, attempt, self._clock() - start, None, error))
-            raise
-        self.usage.add_call(self._record(request, attempt, self._clock() - start, response, None))
+        with self._gate or nullcontext():
+            start = self._clock()  # 차례를 기다린 시간은 호출 시간에 넣지 않아요
+            try:
+                response = self.model.complete(request)
+            except ModelError as error:
+                self.usage.add_call(self._record(request, attempt, self._clock() - start, None, error))
+                raise
+            self.usage.add_call(self._record(request, attempt, self._clock() - start, response, None))
         return response
 
     def _record(self, request: ModelRequest, attempt: int, seconds: float, response: ModelResponse | None, error: ModelError | None) -> dict[str, Any]:

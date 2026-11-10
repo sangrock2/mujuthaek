@@ -374,6 +374,8 @@ class ReviewService:
             payload["reprocess"] = True
             quality = payload["quality"]
             quality["needsReview"] = False
+            # 검수 전 결과가 같은 버전으로 이미 나가 있어, 표시가 없으면 api가 같은 버전이라 버렸습니다(2026-11-10 코드 검토)
+            quality["reviewed"] = True
             quality["reviewReasons"] = [r for r in quality.get("reviewReasons", []) if r == "NO_DOCUMENT"]  # 사람이 확인함
             event = self.new_event("policy.extracted", "extraction", payload)
             errors = tools().validate(event, BENEFIT_EVENT_SCHEMA)

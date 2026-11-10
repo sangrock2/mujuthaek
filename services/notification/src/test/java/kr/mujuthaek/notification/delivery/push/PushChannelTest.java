@@ -123,15 +123,62 @@ class PushChannelTest {
     assertThat(bad.code()).isEqualTo("PUSH_400");
 
     sender.plan("https://fcm.googleapis.com/key", 403);
-    sender.plan("https://fcm.googleapis.com/never", 201);
+    sender.plan("https://fcm.googleapis.com/key2", 401);
     DeliveryException key =
-        catchDelivery(
-            address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/never"));
-    assertThat(key.code()).isEqualTo("PUSH_403");
-    assertThat(key.permanent()).isTrue();
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/key2"));
+    assertThat(key.code()).startsWith("PUSH_40");
+    assertThat(key.permanent()).isTrue(); // 모든 기기가 키를 거절: 다시 보내도 같아요
+  }
+
+  @Test
+  void oneDeviceRefusingTheKeyDoesNotFailWhatOthersReceivedOrMustRetry() throws Exception {
+    // 2026-11-10 코드 검토: 기기 하나의 401·403이 다른 기기의 수신·재시도를 보기 전에 묶음 전체를 영구 실패로 던졌음
+    // (계약 web-push.draft.md 「한 대라도 받았으면 SENT」)
+    sender.plan("https://fcm.googleapis.com/key", 403);
+    sender.plan("https://fcm.googleapis.com/ok", 201);
+    channel.send(
+        user,
+        address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/ok"),
+        one(NotificationType.CORRECTED)); // 받은 기기가 있어 보낸 것
+
+    sender.plan("https://fcm.googleapis.com/busy", 503);
+    DeliveryException retry =
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/busy"));
+    assertThat(retry.permanent()).isFalse(); // 잠깐 막힌 기기는 다시 보내요
+    assertThat(retry.remainingAddress().orElseThrow()).contains("/busy").doesNotContain("/key");
+  }
+
+  @Test
+  void aKeyRefusalIsNotHiddenByAnotherDeviceThatKeepsFailingToConnect() {
+    // 2026-11-10 재검토: 기기가 모두 키를 거절하는데 한 대가 연결 오류면 재시도로 가고, 재시도를 다 쓰면 PUSH_IO로 남아 VAPID 키 문제가 가려졌음
+    sender.plan("https://fcm.googleapis.com/key", 403);
+    sender.failWithIo("https://fcm.googleapis.com/io");
+    DeliveryException first =
+        catchDelivery(address("https://fcm.googleapis.com/key", "https://fcm.googleapis.com/io"));
+    assertThat(first.permanent()).isFalse(); // 연결 오류 기기는 다시 보내요
+    assertThat(first.code()).isEqualTo("PUSH_403");
+    assertThat(first.remainingAddress().orElseThrow()).contains("/io").doesNotContain("/key");
+
+    DeliveryException second = catchDelivery(first.remainingAddress().orElseThrow());
+    assertThat(second.code()).isEqualTo("PUSH_403"); // 키를 거절한 기기를 다시 보내지 않아도 다음 차례에 알아요
+    assertThat(channel.deliveredBefore(second.remainingAddress().orElseThrow())).isFalse();
+  }
+
+  @Test
+  void aDeviceThatReceivedEarlierKeepsTheRowSentWhenTheRestLaterFail() throws Exception {
+    // 2026-11-10 코드 검토: 1차에 A가 받고 B가 503 → 2차에 B가 410이면 ALL_EXPIRED로 FAILED였음
+    sender.plan("https://fcm.googleapis.com/a", 201);
+    sender.plan("https://fcm.googleapis.com/b", 503);
+    DeliveryException first =
+        catchDelivery(address("https://fcm.googleapis.com/a", "https://fcm.googleapis.com/b"));
+    assertThat(first.delivered()).isTrue();
+    assertThat(channel.deliveredBefore(first.remainingAddress().orElseThrow()))
+        .isTrue(); // 작업기가 예상 못한 오류 때 묻는 표시
+
+    sender.plan("https://fcm.googleapis.com/b", 410);
+    channel.send(user, first.remainingAddress().orElseThrow(), one(NotificationType.CORRECTED));
     assertThat(sender.endpoints())
-        .as("기기는 동시에 보내서 다른 기기에도 보내 봐요")
-        .contains("https://fcm.googleapis.com/never");
+        .containsOnlyOnce("https://fcm.googleapis.com/a"); // 받은 기기에 다시 보내지 않음
   }
 
   @Test
@@ -234,6 +281,29 @@ class PushChannelTest {
         .contains("\"title\":\"새 소식 3건\"")
         .contains("\"body\":\"서리풀 청년아트타운 외 2건\"")
         .contains("\"linkPath\":\"/notifications\"");
+  }
+
+  @Test
+  void aLargeDigestIsSentWithOnlyAsManyIdsAsFit() throws Exception {
+    // 2026-11-10 코드 검토: 한 칸에 90건 남짓이 쌓이면 ID 목록만으로 한도를 넘어, 묶음 전체가 PUSH_PAYLOAD_TOO_LARGE로 실패했음
+    List<OutgoingNotification> many = new java.util.ArrayList<>();
+    for (int i = 0; i < 150; i++) {
+      many.add(
+          new OutgoingNotification(
+              NotificationType.NEW_SUPPORT,
+              "새 정책: 청년 월세 " + i,
+              "b",
+              "/benefits/" + i,
+              java.util.UUID.randomUUID()));
+    }
+    byte[] payload = channel.payload(many);
+    assertThat(payload.length).isLessThanOrEqualTo(WebPushCrypto.MAX_PLAINTEXT_BYTES);
+    assertThat(text(payload))
+        .contains("\"title\":\"새 소식 150건\"")
+        .contains(many.get(0).inboxId().toString());
+
+    channel.send(user, address("https://fcm.googleapis.com/a"), many); // 실패하지 않고 보냄
+    assertThat(sender.sent).hasSize(1);
   }
 
   @Test

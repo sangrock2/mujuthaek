@@ -975,6 +975,23 @@
       "errorCode": null
     },
     {
+      "name": "item_note_keeps_application_windows",
+      "operations": [
+        {
+          "path": "/payload/notice/quality/notes",
+          "value": [
+            {
+              "code": "EVIDENCE_QUOTE_TOO_SHORT",
+              "target": "/schedules/0/endsAt",
+              "description": "근거 인용이 짧습니다."
+            }
+          ]
+        }
+      ],
+      "valid": true,
+      "errorCode": null
+    },
+    {
       "name": "schedule_place_hours_and_days",
       "operations": [
         {

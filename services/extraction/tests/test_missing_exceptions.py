@@ -178,3 +178,15 @@ def test_values_used_by_selection_rules_are_not_missing_tiers():
     assert check([income], text)
     scoring = {"kind": "SCORING", "originalText": "가구 소득 월평균 소득의 80% 이하인 경우 : 1점", "rule": {"status": "UNSTRUCTURED", "expression": None}}
     assert check_missing_exceptions({"eligibility": [income], "selectionRules": [scoring]}, SourceBundle(texts={"text": text})) == []
+    # 띄어쓰기가 원문과 달라도 가점 글의 자리를 찾음
+    spaced = {**scoring, "originalText": "가구소득 월평균소득의 80%이하인 경우:1점"}
+    assert check_missing_exceptions({"eligibility": [income], "selectionRules": [spaced]}, SourceBundle(texts={"text": text})) == []
+
+
+def test_a_selection_rule_only_excuses_values_in_its_own_place_in_the_source():
+    # 2026-11-10 코드 검토: 가점 글의 값을 공고 전체에서 「이미 쓰인 값」으로 쳐, 같은 숫자의 진짜 가산 기준(맞벌이 120%)까지 경고가 꺼짐
+    text = "월평균소득 100% 이하(맞벌이 120% 이하) | 가점: 가구소득 120% 이하인 경우 1점"
+    income = condition(atom("INCOME_BENCHMARK_PERCENT", 100, unit="PERCENT"))
+    scoring = {"kind": "SCORING", "originalText": "가구소득 120% 이하인 경우 1점", "rule": {"status": "UNSTRUCTURED", "expression": None}}
+    [finding] = check_missing_exceptions({"eligibility": [income], "selectionRules": [scoring]}, SourceBundle(texts={"text": text}))
+    assert finding.code == "EXCEPTION_SUSPECTED" and "120%" in finding.description

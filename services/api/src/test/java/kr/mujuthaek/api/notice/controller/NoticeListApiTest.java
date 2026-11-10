@@ -74,6 +74,11 @@ class NoticeListApiTest {
 
     assertThat(ids("regionCodes", "11440")).containsExactly(mapo.toString());
     assertThat(ids("regionCodes", "41")).containsExactly(suwon.toString());
+    // 2026-11-10 재검토: 수원시(41110)를 고르면 장안구(41111) 공고가 빠지고, 증평군(43745)을 고르면 영동군(43740) 전체 공고가 나왔음
+    assertThat(ids("regionCodes", "41110")).containsExactly(suwon.toString());
+    UUID yeongdong = f.notice(p -> NoticeFixtures.region(p, "43740"));
+    assertThat(ids("regionCodes", "43745")).isEmpty();
+    assertThat(ids("regionCodes", "43740")).containsExactly(yeongdong.toString());
     assertThat(ids("tenure", "BUY")).containsExactly(sale.toString());
     assertThat(ids("noticeTypes", "PUBLIC_SALE")).containsExactly(sale.toString());
     assertThat(ids("tenure", "RENT"))

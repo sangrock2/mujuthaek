@@ -517,6 +517,27 @@ def test_child_age_on_every_applicant_and_an_age_boundary_day_go_to_review():
     assert not is_note(day.issue())  # 사람 확인(그 조건만 보류)
 
 
+def test_a_child_age_limit_left_out_of_the_expression_goes_to_review():
+    # 2026-11-09 저장 결과 1,123개 실행: 「만6세 이하(태아포함)자녀를 둔 사람」을 자녀 수(CHILD_COUNT GTE 1)만으로 넣어 원문보다 넓은 조건 6가지
+    count = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "CHILD_COUNT", "operator": "GTE", "value": 1}
+    youngest = {"kind": "ATOMIC", "subject": "HOUSEHOLD", "attribute": "YOUNGEST_CHILD_AGE_YEARS", "operator": "LTE", "value": 6}
+
+    def item(original, *atoms, status="STRUCTURED"):
+        expression = (atoms[0] if len(atoms) == 1 else {"kind": "ALL", "children": list(atoms)}) if atoms else None
+        return {"category": "CHILDREN", "scope": scope(), "evidenceIds": [], "originalText": original, "rule": {"status": status, "expression": expression}}
+
+    def found(*items):
+        c = candidate(eligibility=list(items), notice={"counts": [], "targetGroups": ["한부모가족"]})
+        return [f for f in check_consistency(c, SourceBundle(texts={"pdf-text": TABLE})) if f.code == "CHILD_AGE_LIMIT_MISSING"]
+
+    [missing] = found(item("만6세 이하(태아포함)자녀를 둔 사람", count))
+    assert missing.target == "/eligibility/0" and "「만6세 이하(태아포함)자녀」" in missing.description
+    assert not is_note(missing.issue())  # 사람 확인(그 조건만 보류)
+    assert found(item("만6세 이하(태아포함)자녀를 둔 사람", count, youngest)) == []  # 조건식에 있음
+    assert found(item("만19세 미만 자녀 2명 이상을 둔 사람", count)) == []  # 미성년 자녀 수 기준
+    assert found(item("6세 이하 자녀를 둔 한부모가족", status="UNSTRUCTURED")) == []  # 조건식이 없으면 조건식 없음 검사가 봄
+
+
 def test_price_table_continued_on_next_page_without_header_is_checked_too():
     # 실측(LH 청주지북 공공분양): 분양가 표가 다음 쪽 머리 없는 표로 이어져 55개가 빠졌는데 어떤 검사에도 걸리지 않음
     all_rows = [
@@ -879,6 +900,31 @@ def test_reference_rent_prose_and_schedule_tables_are_not_criteria_tables():
     assert criteria_omission(TABLE + "\n" + tables, [income]) is None
 
 
+def test_a_disputed_image_row_is_held_even_when_the_same_words_appear_outside_the_reading():
+    # 2026-11-10 코드 검토: 그림 표 줄이 두 판독에서 다른데(70%·100%), 본문 다른 대상 문장에 같은 글이 있어 그림 근거에서 빠지고 보류 없이 게시됨
+    row = "| 신혼부부 | 월평균소득 70% 이하 |"
+    head = "=== 그림 판독 공고.pdf 3쪽 (AI가 그림 속 글자를 옮김) ===\n"
+    disputed = "=== 그림 판독 불일치 공고.pdf 3쪽 ===\n불일치 줄: " + row.replace("|", "¦")
+    text = f"청년 계층: 월평균소득 70% 이하\n--- 1쪽 ---\n{head}{row}\n{disputed}"
+    at = text.index(row)
+    evidence = [{"id": "ev", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": at, "end": at + len(row)}, "quote": "월평균소득 70% 이하"}]
+    income = {"category": "INCOME", "rule": {"status": "STRUCTURED", "expression": None}, "scope": scope(), "evidenceIds": ["ev"]}
+    candidate = {
+        "evidence": evidence,
+        "notice": {"counts": [], "evidenceIds": []},
+        "locations": [],
+        "supplyGroups": [],
+        "schedules": [],
+        "eligibility": [income],
+        "selectionRules": [],
+        "requiredDocuments": [],
+        "quality": {"coverage": {s: {"status": "EXTRACTED"} for s in ("eligibility", "requiredDocuments", "schedules")}, "missingFields": []},
+    }
+    found = {(f.code, f.target) for f in check_consistency(candidate, SourceBundle(texts={"pdf-text": text}, pdfs={"file-1": b"pdf"}))}
+    assert ("IMAGE_READING_DISAGREES", "/eligibility/0") in found
+    assert ("EVIDENCE_FROM_IMAGE", "/eligibility/0") not in found  # 그림 근거 표시는 지금처럼 그림 밖 글로 판단
+
+
 def test_image_quotes_also_written_outside_the_reading_are_not_image_evidence():
     # 2026-11-09 23건 sh-311005: 표지 그림의 제목 글을 공고 근거로 써 공고 전체가 검수로 감. 같은 제목이 게시글 제목(그림 밖 글)에 있음
     head = "=== 그림 판독 공고.pdf 1쪽 (AI가 그림 속 글자를 옮김) ===\n"
@@ -953,8 +999,10 @@ def test_documents_asked_for_in_prose_must_be_in_the_document_list():
         "다만 현재 입주대기자는 입주대기 취소 신청서 제출 후 신청 가능합니다.",
         "※ 외국인은 신청불가 합니다.",  # 다음 문장의 「불가」는 앞 문장의 제출과 상관없음
         "선정된예비입주자는정해진일정까지아래절차이행 • 입주신청확인서제출 • 입주신청확인금입금",
+        "※ 2020.12.21. 이후 발급한 여권은 여권정보증명서를 함께 구비해야 인정",  # 「구비」도 내라는 말(jbdc-16011)
     ]
     not_asked = [
+        "인터넷 청약 시 공동인증서 또는 카카오톡인증서를 구비하여야 합니다.",  # 로그인용 전자 인증서
         "공고문을 해당 지자체(시·군·자치구)로부터 받아서 제출",  # 「받아서」는 서류가 아님
         "하는 자가 이 동의서 제출을 2회 거부하면",  # 이미 넣은 「동의서」
         "추후 청약신청납입확인서를 제출하더라도 인정하지 않습니다.",
@@ -965,10 +1013,12 @@ def test_documents_asked_for_in_prose_must_be_in_the_document_list():
     ]
     text = TABLE + "\n" + "\n".join([*asked, *not_asked])
     finding = document_omission(text, ["개인정보 수집·이용 동의서"])
-    assert finding is not None and "글에서 내라고 한 서류 3개" in finding.description
-    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):
+    assert finding is not None and "글에서 내라고 한 서류 4개" in finding.description
+    for name in ("희망주택목록", "입주대기 취소 신청서", "입주신청확인서"):  # 설명에는 앞 3개만 보임
         assert f"「{name}」" in finding.description
-    assert document_omission(text, ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]) is None
+    listed = ["개인정보 수집·이용 동의서", "계약 희망 주택 목록", "입주대기 취소 신청서", "입주신청확인서"]
+    assert "글에서 내라고 한 서류 1개가 서류 목록에 없습니다: 「여권정보증명서」" in document_omission(text, listed).description
+    assert document_omission(text, [*listed, "여권정보증명서"]) is None
 
 
 def schedule_item(kind, start, end=None):
@@ -1052,6 +1102,36 @@ def unit_group(label, value=1, kind="HOUSING_UNIT"):
     return {"housingTypeCode": None, "unitLabel": label, "exclusiveAreaSqm": 24.83, "itemKind": kind, "scope": scope(), "prices": [], "counts": counts}
 
 
+def type_group(code, value, *groups, location="loc-1"):
+    counts = [{"kind": "OFFERED", "value": value, "scope": scope(*groups), "evidenceIds": []}]
+    return {
+        "housingTypeCode": code,
+        "unitLabel": None,
+        "locationId": location,
+        "itemKind": "HOUSING_TYPE",
+        "scope": scope(*groups),
+        "prices": [],
+        "counts": counts,
+    }
+
+
+def test_a_type_count_that_disagrees_with_the_same_types_counts_by_target_is_held():
+    # 2026-11-10 23건 유료 확인 dcco-24804(추가모집): 「임대대상 : 64호」 아래 형별 「공급 호수」 11·28·25를 모집 수로 읽어 게시함.
+    # 같은 형의 계층별 표 모집 수 합은 2+7·11+2·7+6 → 형별 수는 대상 주택 규모일 수 있어 보류, 계층별 수는 그대로
+    groups = [type_group("21", 11), type_group("26", 28), type_group("21", 2, "대학생"), type_group("21", 7, "청년"), type_group("26", 13, "대학생")]
+    found = [f for f in check_consistency(candidate(supplyGroups=groups), SourceBundle(texts={"pdf-text": TABLE})) if f.code == "TYPE_COUNTS_DISAGREE"]
+    assert [f.target for f in found] == ["/supplyGroups/0/counts", "/supplyGroups/1/counts"] and not is_note(found[0].issue())
+    assert "주택형 21 모집 수 11" in found[0].description and "(9)" in found[0].description
+    # 합이 맞거나, 대상별 수가 없거나, 다른 단지의 같은 형이면 보지 않습니다
+    for others in (
+        [type_group("21", 9), type_group("21", 2, "대학생"), type_group("21", 7, "청년")],
+        [type_group("21", 11), type_group("26", 28)],
+        [type_group("21", 11), type_group("21", 2, "대학생", location="loc-2")],
+    ):
+        found = check_consistency(candidate(supplyGroups=others), SourceBundle(texts={"pdf-text": TABLE}))
+        assert not [f for f in found if f.code == "TYPE_COUNTS_DISAGREE"]
+
+
 def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
     # 2026-11-09 23건 sh-311005: 「모집 세대수 원룸1세대추가모집」인데 수량 열 없는 호실 표 두 개의 24행을 모두 모집 1로 셈(대상 「1인 가구」가 붙어
     # 합계 검사는 건너뜀). 어느 호실이 이번 모집인지 정할 수 없어 그 수량을 보류합니다
@@ -1065,3 +1145,9 @@ def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
     for notice_total, groups in ((total | {"value": 3}, rooms), (total, [unit_group("59A", 10, "HOUSING_TYPE"), unit_group("59B", 5, "HOUSING_TYPE")])):
         found = check_consistency(candidate(notice={"counts": [notice_total]}, supplyGroups=groups), SourceBundle(texts={"pdf-text": TABLE}))
         assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]
+    # 2026-11-10 코드 검토: 공고 모집 수가 대상마다만 있으면(「남성 1·여성 1」) 그 합(2)과 견줌. 예전엔 건너뛰어 호실 3곳이 모두 모집 1로 게시됨
+    by_target = [{"kind": "OFFERED", "value": 1, "scope": {"targetGroups": [name], "supplyCategory": "ALL"}} for name in ("남성", "여성")]
+    found = check_consistency(candidate(notice={"counts": by_target}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
+    assert len([f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]) == 6
+    found = check_consistency(candidate(notice={"counts": [*by_target, by_target[0]]}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
+    assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]  # 합 3이면 호실 3곳은 맞음

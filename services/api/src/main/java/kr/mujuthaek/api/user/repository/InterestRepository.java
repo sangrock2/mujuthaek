@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -16,7 +17,9 @@ import org.springframework.stereotype.Repository;
  * 관심 조건 세 가지 (account.housing_interests·business_interests·support_interests)와 새 공고·정책 알림 대상자 찾기.
  *
  * <p>지역 맞추기: 회원 코드 u와 공고·정책 코드 n이 같은 시도(앞 2자리)이고, 같은 시군구이거나 둘 중 하나가 시도 전체(xx000)면 맞아요. 서울
- * 전체(11000)를 고른 회원은 마포구(11440) 공고를, 마포구를 고른 회원은 서울 전체 대상 정책을 받아요.
+ * 전체(11000)를 고른 회원은 마포구(11440) 공고를, 마포구를 고른 회원은 서울 전체 대상 정책을 받아요. 일반구가 있는 시(CityDistricts)와 그 구도
+ * 맞아요: 수원시(41110)를 고른 회원은 장안구(41111) 공고를, 장안구를 고른 회원은 수원시 전체 공고를 받아요(2026-11-10 재검토: 수원시를 고른 회원에게 구
+ * 공고 알림이 빠졌음).
  */
 @Repository
 public class InterestRepository {
@@ -25,8 +28,10 @@ public class InterestRepository {
   private static final String REGION_MATCH =
       """
       exists (select 1 from unnest(i.region_codes) u, unnest(cast(:codes as text[])) n
-               where left(u, 2) = left(n, 2) and (u = n or u like '__000' or n like '__000'))
-      """;
+               where left(u, 2) = left(n, 2) and (u = n or u like '__000' or n like '__000'
+                 or %s or %s))
+      """
+          .formatted(CityDistricts.sqlInCity("u", "n"), CityDistricts.sqlInCity("n", "u"));
 
   private final JdbcClient jdbc;
 

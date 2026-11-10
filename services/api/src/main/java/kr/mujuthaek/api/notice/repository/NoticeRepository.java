@@ -173,28 +173,48 @@ public class NoticeRepository {
         .optional();
   }
 
-  /** 원래 공고를 가리키는 정정 공고가 반영된 공고인지. */
-  public boolean hasCorrection(UUID noticeId) {
-    return jdbc.sql(
-            "select exists (select 1 from notice.notice_posts where notice_id = :id"
-                + " and kind = 'CORRECTION' and supersedes_post_id is not null)")
-        .param("id", noticeId)
-        .query(Boolean.class)
-        .single();
+  /** 공고에 이은 정정 글 하나. linked: 원래 공고 글을 가리킴(supersedes_post_id 있음). */
+  private record CorrectionPost(UUID rawPostId, LocalDate postedOn, boolean linked) {}
+
+  /**
+   * 기준 출처 줄기(base: 기준 출처의 최초 원공고 글)의 정정 글. base가 없으면(기준 출처를 정하기 전 공고) 모든 정정 글. 기준 출처가 아닌 출처의 정정은
+   * 공고에 잇기만 하고 반영하지 않으니(KEPT_BASE_SOURCE) 세지 않아요. 예전엔 함께 세어, 합친 공고에서 다른 출처가 정정을 올리면 기준 출처의 새 버전이
+   * 「정정 반영됨」으로 계속 막혀 공고가 옛 값으로 굳었어요(2026-11-10 코드 검토).
+   */
+  private List<CorrectionPost> corrections(UUID noticeId, UUID base) {
+    List<CorrectionPost> all =
+        jdbc.sql(
+                "select raw_post_id, posted_on, supersedes_post_id is not null as linked"
+                    + " from notice.notice_posts where notice_id = :id and kind = 'CORRECTION'")
+            .param("id", noticeId)
+            .query(
+                (rs, i) ->
+                    new CorrectionPost(
+                        rs.getObject("raw_post_id", UUID.class),
+                        rs.getObject("posted_on", LocalDate.class),
+                        rs.getBoolean("linked")))
+            .list();
+    return base == null
+        ? all
+        : all.stream().filter(c -> base.equals(rootPostOf(c.rawPostId()))).toList();
+  }
+
+  /** 원래 공고를 가리키는 기준 출처의 정정 공고가 반영된 공고인지. base는 {@link #baseRoot} (없으면 null). */
+  public boolean hasCorrection(UUID noticeId, UUID base) {
+    return corrections(noticeId, base).stream().anyMatch(CorrectionPost::linked);
   }
 
   /**
-   * 이 공고에 반영한 정정 공고 중, 받은 글(rawPostId)이 아닌 것의 가장 늦은 게시일. 없거나 게시일을 모르면 빈 값. 늦게 도착한 더 이른 정정이 최신 정정을
-   * 덮어쓰지 않게 비교해요.
+   * 이 공고에 반영한 기준 출처의 정정 공고 중, 받은 글(rawPostId)이 아닌 것의 가장 늦은 게시일. 없거나 게시일을 모르면 빈 값. 늦게 도착한 더 이른 정정이
+   * 최신 정정을 덮어쓰지 않게 비교해요. base는 {@link #baseRoot} (없으면 null).
    */
-  public Optional<LocalDate> latestOtherCorrectionPostedOn(UUID noticeId, UUID rawPostId) {
-    return jdbc.sql(
-            "select max(posted_on) as posted_on from notice.notice_posts where notice_id = :id"
-                + " and kind = 'CORRECTION' and raw_post_id <> :rawPostId")
-        .param("id", noticeId)
-        .param("rawPostId", rawPostId)
-        .query((rs, i) -> Optional.ofNullable(rs.getObject("posted_on", LocalDate.class)))
-        .single();
+  public Optional<LocalDate> latestOtherCorrectionPostedOn(
+      UUID noticeId, UUID rawPostId, UUID base) {
+    return corrections(noticeId, base).stream()
+        .filter(c -> !c.rawPostId().equals(rawPostId))
+        .map(CorrectionPost::postedOn)
+        .filter(java.util.Objects::nonNull)
+        .max(java.util.Comparator.naturalOrder());
   }
 
   /** 원본 글을 공고에 이어요 (이미 있으면 게시일·시각만 갱신). postedOn은 원본 글 게시일 (모르면 null). */
@@ -607,9 +627,16 @@ public class NoticeRepository {
                 + " v.payload -> 'notice' -> 'notice' ->> 'publisher' as publisher,"
                 + " array(select r.sigungu_code from notice.notice_regions r"
                 + " where r.notice_id = n.id) as regions,"
+                // 단지 이름은 보류하지 않은 위치에서만 (들어온 공고 쪽 NoticeContent.complexNames와 같은 규칙). 예전엔 이 쪽만 보류한
+                // 이름까지 넣어, 확인 전 이름 하나로 다른 공고가 자동으로 합쳐질 수 있었어요(2026-11-10 코드 검토)
                 + " array(select distinct coalesce(l->>'complexName', l->>'buildingName')"
-                + " from jsonb_array_elements(v.payload->'notice'->'locations') l"
-                + " where coalesce(l->>'complexName', l->>'buildingName') is not null) as names"
+                + " from jsonb_array_elements(v.payload->'notice'->'locations') with ordinality as e(l, i)"
+                + " where coalesce(l->>'complexName', l->>'buildingName') is not null"
+                + " and not exists (select 1 from jsonb_array_elements("
+                + "coalesce(v.payload->'heldItems', '[]'::jsonb)) h"
+                + " where h->>'target' = '/locations/' || (i - 1)"
+                + " or '/locations/' || (i - 1) like (h->>'target') || '/%'"
+                + " or h->>'target' like '/locations/' || (i - 1) || '/%')) as names"
                 + " from notice.notices n join notice.notice_versions v"
                 + " on v.notice_id = n.id and v.version = n.current_version"
                 // 기관은 정식 명칭·약칭 표기가 달라 DuplicateRule에서 비교해요

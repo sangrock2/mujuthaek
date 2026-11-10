@@ -1,5 +1,7 @@
 package kr.mujuthaek.notification.stats;
 
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletRequestWrapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -118,9 +120,22 @@ class DeliveryStatsController {
               ("Bearer " + token).getBytes(StandardCharsets.UTF_8));
     }
     try {
-      return InetAddress.getByName(request.getRemoteAddr()).isLoopbackAddress();
+      return InetAddress.getByName(socketAddress(request)).isLoopbackAddress();
     } catch (UnknownHostException e) {
       return false;
     }
+  }
+
+  /**
+   * 전달 헤더(X-Forwarded-For·Forwarded)로 바뀌지 않은 실제 연결 주소. 운영은 forward-headers-strategy=framework라
+   * getRemoteAddr()가 호출자가 보낸 헤더 값이 되어, 같은 망의 다른 컨테이너가 「X-Forwarded-For: 127.0.0.1」로 같은 컴퓨터인 척할 수
+   * 있었어요(2026-11-10 코드 검토). 감싼 요청을 벗겨 서블릿 컨테이너가 본 주소를 봐요.
+   */
+  static String socketAddress(HttpServletRequest request) {
+    ServletRequest raw = request;
+    while (raw instanceof ServletRequestWrapper wrapper) {
+      raw = wrapper.getRequest();
+    }
+    return raw.getRemoteAddr();
   }
 }

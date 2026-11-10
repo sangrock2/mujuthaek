@@ -32,6 +32,7 @@ import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.NoticeSummaryResponse;
 import kr.mujuthaek.api.notice.mapper.ExtractionEvent;
 import kr.mujuthaek.api.notice.repository.ExtractionResultRepository;
+import kr.mujuthaek.api.notice.repository.NoticeRepository;
 import kr.mujuthaek.api.notice.service.NoticeField;
 import kr.mujuthaek.api.notice.service.NoticeForJudgment;
 import kr.mujuthaek.api.notice.service.NoticeQueryService;
@@ -118,6 +119,7 @@ class NoticeIngestionIntegrationTest {
   @Autowired NoticeAreaScoreService areaScores;
   @Autowired NoticeBackfillService backfill;
   @Autowired PolicyDuplicateService duplicates;
+  @Autowired NoticeRepository repository;
   @MockitoSpyBean ExtractionResultRepository results;
 
   @BeforeEach
@@ -701,6 +703,9 @@ class NoticeIngestionIntegrationTest {
         .doesNotContain(againId)
         .contains(firstId);
     assertThat(duplicates.list("HIDDEN").items()).hasSize(1);
+    // 2026-11-10 재검토: 숨긴 사업에 둔 관심은 user가 남은 사업으로 옮겨요
+    assertThat(events.stream(kr.mujuthaek.api.common.event.PolicyHidden.class))
+        .containsExactly(new kr.mujuthaek.api.common.event.PolicyHidden(againId, firstId));
     assertThatThrownBy(() -> duplicates.decide(againId, firstId, "KEEP_BOTH", "admin-1"))
         .isInstanceOf(kr.mujuthaek.api.common.exception.CustomException.class);
   }
@@ -829,6 +834,16 @@ class NoticeIngestionIntegrationTest {
             query.findOpenPoliciesClosingOn(List.of(today.plusDays(3), today.plusDays(1)), today))
         .extracting(PolicySummary::policyId)
         .containsExactly(startupId);
+    // 2026-11-10 코드 검토: 관리자가 중복으로 숨긴 정책에도 D-3·D-1 알림이 갔음 → 숨긴 정책은 빼요
+    jdbc.sql("update notice.policy_judgments set hidden_at = now() where raw_policy_id = :id")
+        .param("id", startupId)
+        .update();
+    assertThat(
+            query.findOpenPoliciesClosingOn(List.of(today.plusDays(3), today.plusDays(1)), today))
+        .isEmpty();
+    jdbc.sql("update notice.policy_judgments set hidden_at = null where raw_policy_id = :id")
+        .param("id", startupId)
+        .update();
 
     clock.set("2026-10-23T09:00");
     assertThat(query.findPolicySummary(startupId).orElseThrow().status()).isEqualTo("CLOSED");
@@ -1675,6 +1690,36 @@ class NoticeIngestionIntegrationTest {
   }
 
   @Test
+  void 보류한_단지_이름은_같은_공고_판별에_쓰지_않는다() {
+    // 2026-11-10 코드 검토: 들어온 공고는 보류한 위치의 이름을 빼는데 저장된 공고 쪽은 넣어, 확인 전 이름 하나로 다른 공고가 자동으로 합쳐질 수 있었음
+    ingestion.apply(body(fixture()));
+    UUID kept = onlyNotice();
+    String held =
+        fixture()
+            .path("payload")
+            .path("notice")
+            .path("locations")
+            .get(0)
+            .path("complexName")
+            .asString();
+    jdbc.sql(
+            "update notice.notice_versions set payload = jsonb_set(payload, '{heldItems}',"
+                + " coalesce(payload->'heldItems', '[]'::jsonb) || '[{\"target\": \"/locations/0/complexName\","
+                + " \"extent\": \"ITEM\", \"codes\": [\"API_MISMATCH\"], \"description\": \"확인 필요\"}]'::jsonb)"
+                + " where notice_id = :id")
+        .param("id", kept)
+        .update();
+
+    List<String> names =
+        repository.findOpenIdentities().stream()
+            .filter(peer -> peer.noticeId().equals(kept))
+            .findFirst()
+            .orElseThrow()
+            .complexNames();
+    assertThat(names).hasSize(1).doesNotContain(held);
+  }
+
+  @Test
   void 합치면_한_공고만_남고_합쳐진_공고의_원본_글은_남은_공고의_새_버전이_된다() {
     ingestion.apply(body(fixture()));
     UUID kept = onlyNotice();
@@ -1696,6 +1741,18 @@ class NoticeIngestionIntegrationTest {
     ((ObjectNode) next.path("payload").path("notice").path("notice")).put("title", "다른 출처에서 고친 제목");
     assertThat(ingestion.apply(body(next))).isEqualTo(IngestionOutcome.KEPT_BASE_SOURCE);
     assertThat(query.detail(kept).header().title()).isNotEqualTo("다른 출처에서 고친 제목");
+
+    // 2026-11-10 코드 검토: 기준이 아닌 출처의 정정은 잇기만 하고 반영하지 않으니, 기준 출처의 새 버전을 「정정 반영됨」으로 막으면 안 돼요
+    // (예전엔 그 정정을 세어 기준 출처의 수정이 KEPT_CORRECTION으로 막혀 공고가 옛 값으로 굳었음)
+    assertThat(ingestion.apply(body(correctionOf(duplicate.deepCopy(), "2026-11-06"))))
+        .isEqualTo(IngestionOutcome.KEPT_BASE_SOURCE);
+    ObjectNode baseNext = withRawVersion(fixture(), 2);
+    baseNext.put("eventId", UUID.randomUUID().toString());
+    ((ObjectNode) baseNext.path("payload")).put("title", "기준 출처에서 고친 제목");
+    ((ObjectNode) baseNext.path("payload").path("notice").path("notice"))
+        .put("title", "기준 출처에서 고친 제목");
+    assertThat(ingestion.apply(body(baseNext))).isEqualTo(IngestionOutcome.NEW_VERSION);
+    assertThat(query.detail(kept).header().title()).isEqualTo("기준 출처에서 고친 제목");
   }
 
   @Test

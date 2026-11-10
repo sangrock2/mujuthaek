@@ -44,7 +44,7 @@ public class NoticeApiFixture {
           new ExtractionResultRepository(client),
           followUps,
           new NoticeMergeService(notices, followUps, event -> {}, clock),
-          new PolicyDuplicateService(new PolicyDuplicateRepository(client), clock),
+          new PolicyDuplicateService(new PolicyDuplicateRepository(client), clock, event -> {}),
           event -> {},
           NoticeFixtures.JSON,
           clock);

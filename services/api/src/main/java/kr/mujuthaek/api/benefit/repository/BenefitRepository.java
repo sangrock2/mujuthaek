@@ -20,6 +20,7 @@ import kr.mujuthaek.api.benefit.mapper.PolicyExtractedEvent;
 import kr.mujuthaek.api.benefit.mapper.PolicyExtractedEvent.Condition;
 import kr.mujuthaek.api.benefit.mapper.PolicyExtractedEvent.Support;
 import kr.mujuthaek.api.common.id.UuidV7;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -261,7 +262,12 @@ public class BenefitRepository {
                     + " and b.status in ('UPCOMING', 'OPEN') and (cardinality(cast(:regions as"
                     + " text[])) = 0 or b.region_scope = 'NATIONWIDE' or exists (select 1 from"
                     + " unnest(b.region_codes) r, unnest(cast(:regions as text[])) f where r like f"
-                    + " || '%' or f like r || '%')) order by b.apply_end nulls last, b.id")
+                    + " || '%' or f like r || '%' or "
+                    // 일반구가 있는 시와 그 구도 겹쳐요(재검토: 장안구 회원에게 수원시 혜택이 후보에서 빠졌음)
+                    + CityDistricts.sqlInCity("f", "r")
+                    + " or "
+                    + CityDistricts.sqlInCity("r", "f")
+                    + ")) order by b.apply_end nulls last, b.id")
             .param("regions", regions)
             .query(BenefitRepository::judgmentRow)
             .list();

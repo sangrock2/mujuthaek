@@ -266,6 +266,77 @@ class BenefitIngestionTest {
   }
 
   @Test
+  void 같은_버전의_검수_결과는_고치고_검수_아닌_같은_버전은_버린다() {
+    // 2026-11-10 코드 검토: 검수 승인·반려가 검수 전 결과와 같은 버전으로 와서 버려졌음
+    UUID raw = UUID.randomUUID();
+    f.ingest.apply(
+        BenefitFixture.event(raw, 1, p -> p.withObject("quality").put("needsReview", true)));
+    UUID id = f.repository.findByRawPolicyId(raw).orElseThrow().id();
+    f.published.clear();
+
+    f.ingest.apply(
+        BenefitFixture.event(
+            raw,
+            1,
+            p -> {
+              p.put("reprocess", true);
+              p.withObject("source").put("title", "검수로 고친 제목");
+              p.withObject("quality").put("reviewed", true);
+            }));
+    f.ingest.apply(
+        BenefitFixture.event(raw, 1, p -> p.withObject("source").put("title", "다시 뽑은 제목")));
+
+    var row =
+        f.jdbc.queryForMap("select title, needs_review from benefit.benefits where id = ?", id);
+    assertThat(row.get("title")).isEqualTo("검수로 고친 제목");
+    assertThat(row.get("needs_review")).isEqualTo(false);
+    assertThat(f.published)
+        .singleElement()
+        .isInstanceOfSatisfying(
+            BenefitUpdated.class,
+            e -> {
+              assertThat(e.changedFields()).containsExactly("basic");
+              assertThat(e.reprocess()).isTrue();
+            });
+
+    f.ingest.apply(
+        BenefitFixture.event(
+            raw,
+            1,
+            p -> {
+              p.put("reprocess", true);
+              p.put("relevant", false);
+              p.withObject("quality").put("reviewed", true);
+            }));
+    assertThat(
+            f.jdbc.queryForObject(
+                "select status from benefit.benefits where id = ?", String.class, id))
+        .as("반려도 같은 버전으로 와서 숨겨요")
+        .isEqualTo("HIDDEN");
+  }
+
+  @Test
+  void 숨겨져_있다가_검수_승인으로_처음_보이면_새_혜택으로_알린다() {
+    // 2026-11-10 재검토: 검수 결과는 reprocess=true로 와서, 범위 밖(숨김)이던 혜택을 승인해 처음 보이게 해도 새 혜택 알림이 빠졌음
+    UUID raw = UUID.randomUUID();
+    f.ingest.apply(BenefitFixture.event(raw, 1, p -> p.put("relevant", false)));
+    assertThat(f.published).isEmpty();
+
+    f.ingest.apply(
+        BenefitFixture.event(
+            raw,
+            1,
+            p -> {
+              p.put("reprocess", true);
+              p.withObject("quality").put("reviewed", true);
+            }));
+
+    assertThat(f.published)
+        .singleElement()
+        .isInstanceOfSatisfying(BenefitPublished.class, e -> assertThat(e.reprocess()).isFalse());
+  }
+
+  @Test
   void 범위_밖이거나_재처리면_알리지_않고_범위_밖은_숨긴다() {
     UUID hidden = f.benefit(p -> p.put("relevant", false));
     f.benefit(p -> p.put("reprocess", true));

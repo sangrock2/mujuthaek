@@ -54,19 +54,24 @@ class AdminAuthorization {
   AuthorizationManager<RequestAuthorizationContext> reviewQueue() {
     return check(
         (a, request) -> {
-          String kinds = request.getParameter("kinds");
+          // 값이 여럿(kinds=NOTICE&kinds=BENEFIT)이면 컨트롤러는 쉼표로 이어 받아요. 첫 값만 보면 다른 종류 권한 없이 그 종류까지
+          // 볼 수 있었어요(2026-11-10 코드 검토). 컨트롤러와 같게 모든 값을 이어서 봐요
+          String[] values = request.getParameterValues("kinds");
+          String kinds = values == null ? null : String.join(",", values);
           List<String> wanted =
               kinds == null || kinds.isBlank()
                   ? List.of("NOTICE", "BENEFIT")
                   : List.of(kinds.split(",")).stream().map(String::trim).toList();
-          return wanted.stream()
-              .allMatch(
-                  k ->
-                      switch (k) {
-                        case "NOTICE" -> a.has(AdminPermission.NOTICE_REVIEW);
-                        case "BENEFIT" -> a.has(AdminPermission.BENEFIT_REVIEW);
-                        default -> false;
-                      });
+          // 「kinds=,」처럼 값이 모두 비면 빈 목록이라 allMatch가 늘 참이었어요(서비스가 400으로 막았지만 권한 검사가 먼저 막아야 해요, 재검토)
+          return !wanted.isEmpty()
+              && wanted.stream()
+                  .allMatch(
+                      k ->
+                          switch (k) {
+                            case "NOTICE" -> a.has(AdminPermission.NOTICE_REVIEW);
+                            case "BENEFIT" -> a.has(AdminPermission.BENEFIT_REVIEW);
+                            default -> false;
+                          });
         });
   }
 

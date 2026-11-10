@@ -1,19 +1,19 @@
 """추출 그래프: 상황별로 어느 길로 끝나는지와 분기를 확인합니다. 녹화 응답만 씁니다.
 
 기존 순차 경로(_process)와 결과가 같음은 지우기 전 비교 시험(#2)으로 확인했습니다. 아래 기대값은 그때 두 경로가 같이 낸 값입니다.
+녹화 모델에는 채팅 모델이 없어 V2 그래프(v2/graph.py)가 V1 방식 추출 전체로 돕니다(2026-11-10 V1 정해진 단계 그래프를 걷어낸 뒤에도 같은 값).
 """
 
+import dataclasses
 import json
 
 import pytest
 from helpers import example, to_ai
 from test_pipeline import answers, raw_event, run
 
-from mujuthaek_extraction.graph import GRAPH
-from mujuthaek_extraction.graph.build import _after_recheck
+from mujuthaek_extraction import pipeline
 from mujuthaek_extraction.model import ModelError, RecordedModel
 from mujuthaek_extraction.model.factory import NoticeModels
-from mujuthaek_extraction.verify import VerificationReport
 
 FAKE_QUOTE = "원문에 없는 무주택 문장입니다"
 
@@ -97,13 +97,20 @@ def test_recheck_results_are_recorded():
     assert rejected.usage["recheck"]["accepted"] is False
 
 
-def test_contract_errors_route_to_quarantine():
-    clean = VerificationReport(candidate={}, findings=[], contract_errors=[])
-    broken = VerificationReport(candidate={}, findings=[], contract_errors=["/eligibility/0 오류"])
-    assert _after_recheck({"report": clean}) == "annotate"
-    assert _after_recheck({"report": broken}) == "quarantine"
+def test_contract_errors_left_after_recheck_go_through_quarantine(monkeypatch):
+    # 마무리(v2/graph.conclude)는 재확인 뒤에도 계약 오류가 남으면 계약 정리를 거쳐 게시합니다(V1 그래프의 quarantine 분기와 같음)
+    recheck_step, seen = pipeline.recheck_step, []
 
+    def broken_recheck(*args, **kwargs):
+        result, repairs = recheck_step(*args, **kwargs)
+        result.report = dataclasses.replace(result.report, contract_errors=["/eligibility/0 오류"])
+        return result, repairs
 
-def test_graph_has_the_pipeline_nodes():
-    nodes = set(GRAPH.get_graph().nodes)
-    assert {"intake", "image_reading", "extract", "assemble_verify", "recheck", "quarantine", "annotate", "publish", "finish"} <= nodes
+    def quarantine_step(report, recheck, material, context, rt):
+        seen.append(report.contract_errors)
+        return dataclasses.replace(report, contract_errors=[]), ["계약 정리: /eligibility/0"]
+
+    monkeypatch.setattr(pipeline, "recheck_step", broken_recheck)
+    monkeypatch.setattr(pipeline, "quarantine_step", quarantine_step)
+    outcome = run(raw_event(), _models("clean"))
+    assert seen == [["/eligibility/0 오류"]] and "계약 정리: /eligibility/0" in outcome.repairs

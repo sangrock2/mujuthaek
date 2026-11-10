@@ -101,12 +101,31 @@ def add_tool(section: str, documents: tuple[str, ...]) -> StructuredTool:
 
 def _add(context: SectionContext, section: str, items: Any, unknown: dict[str, Any]) -> str:
     """도구 인자 → 넣기. 근거를 항목 밖에 적었으면(맨 위 evidence·목록에 낀 「evidence:[」) 항목 안으로 바로잡아 넣고(write.tuck_evidence),
-    옮길 곳을 정하지 못한 맨 위 근거나 다른 모르는 인자가 있으면 예전처럼 아무것도 넣지 않습니다."""
+    담긴 것이 없는 맨 위 군더더기 칸(_junk)은 무시하고 알립니다. 옮길 곳을 정하지 못한 맨 위 근거나 내용이 있는 다른 모르는 인자가 있으면
+    예전처럼 아무것도 넣지 않습니다."""
+    junk = sorted(name for name, value in unknown.items() if name != "evidence" and _junk(value))
+    for name in junk:
+        del unknown[name]
     stray = unknown.pop("evidence") if set(unknown) == {"evidence"} else None
     items, stray, tucked = tuck_evidence(context.document, items, stray)
     if stray is not None:
         unknown["evidence"] = stray
-    return unknown_args(unknown) if unknown else add(context, section, items, tucked)
+    if unknown:
+        return unknown_args(unknown)
+    if junk:
+        tucked = [*tucked, f"도구 인자 맨 위의 알 수 없는 칸({', '.join(junk)})은 담긴 것이 없어 무시했습니다(항목은 items 안에만 적습니다)"]
+    return add(context, section, items, tucked)
+
+
+# 인자 글이 「…}]},"evidence:["],"x":"x"}」처럼 끝나 맨 위에 군더더기 칸이 붙는 실수(JSON을 닫으려고 붙인 듯함). 2026-11-10 23건 유료:
+# jbdc-16011 자격 담당의 12차례 중 4차례가 이 칸 하나로 통째 거절됨(첫 차례 항목 29개·출력 1.5만 토큰 포함, 칸 이름 note·oops·x·garbage,
+# 값 「.」「x」「1」) → 호출 상한에 끊겨 소득 기준 행이 빠짐. 담긴 것이 없는 값만 무시합니다(글이 길거나 객체·목록이면 그대로 거절)
+JUNK_CHARS = 3
+
+
+def _junk(value: Any) -> bool:
+    """담긴 것이 없는 값: 빈 값·숫자·참거짓·JUNK_CHARS자 이하 글."""
+    return value is None or isinstance(value, bool | int | float) or (isinstance(value, str) and len(value.strip()) <= JUNK_CHARS)
 
 
 def unknown_args(unknown: dict[str, Any]) -> str:

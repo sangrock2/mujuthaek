@@ -51,6 +51,22 @@ class FavoriteServiceTest {
   }
 
   @Test
+  void aNoticeSavedBeforeItWasMergedIsRemovedWithItAndNotSavedTwice() {
+    // 2026-11-10 재검토: 합치기 전에 저장한 줄(합쳐진 공고 ID)은 알림이 보는데, 남은 공고로 지우면 그 줄이 남아 알림이 계속 갔음
+    UUID merged = UUID.randomUUID();
+    UUID remaining = UUID.randomUUID();
+    when(notices.findSummary(any())).thenReturn(Optional.of(notice(remaining)));
+    when(notices.mergedFrom(remaining)).thenReturn(List.of(merged));
+    when(repository.exists(eq(user), eq("NOTICE"), any()))
+        .thenAnswer(i -> i.<java.util.Collection<?>>getArgument(2).contains(merged));
+
+    assertThat(service.add(user, "NOTICE", remaining)).isEqualTo(remaining);
+    verify(repository, never()).add(any(), anyString(), any(), any());
+    service.remove(user, "NOTICE", remaining);
+    verify(repository).remove(user, "NOTICE", List.of(remaining, merged));
+  }
+
+  @Test
   void hiddenBenefitIsNotFound() {
     UUID hidden = UUID.randomUUID();
     UUID open = UUID.randomUUID();
@@ -89,7 +105,7 @@ class FavoriteServiceTest {
     UUID id = UUID.randomUUID();
     when(notices.findSummary(any())).thenAnswer(i -> Optional.of(notice(i.getArgument(0))));
     when(repository.count(user)).thenReturn((long) FavoriteService.MAX_FAVORITES);
-    when(repository.exists(user, "NOTICE", id)).thenReturn(true);
+    when(repository.exists(user, "NOTICE", List.of(id))).thenReturn(true);
 
     assertThat(service.add(user, "NOTICE", id)).isEqualTo(id); // 이미 있는 것은 그대로
     assertThatThrownBy(() -> service.add(user, "NOTICE", UUID.randomUUID()))
@@ -180,6 +196,7 @@ class FavoriteServiceTest {
                     null,
                     end,
                     List.of(),
+                    null,
                     null)));
 
     var items = service.list(user, null, null, null).items();
@@ -208,7 +225,8 @@ class FavoriteServiceTest {
   }
 
   private static PolicySummary policy(UUID id, String field) {
-    return new PolicySummary(id, 2, field, "t", null, "APPLYING", null, null, List.of(), null);
+    return new PolicySummary(
+        id, 2, field, "t", null, "APPLYING", null, null, List.of(), null, null);
   }
 
   private static BenefitSummary benefit(UUID id, String field, String status) {

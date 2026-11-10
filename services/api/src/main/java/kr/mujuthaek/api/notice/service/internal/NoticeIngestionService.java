@@ -358,6 +358,21 @@ public class NoticeIngestionService {
       if (published.mergedInto()) {
         decision = new Decision(IngestionOutcome.PUBLISHED, AUTO_MERGED);
       }
+    } else if (decision.outcome() == IngestionOutcome.NEW_VERSION
+        && source.correction()
+        && !NoticeContent.droppedCoreSections(
+                parse(current.orElseThrow().snapshotJson()),
+                parse(current.orElseThrow().heldItemsJson()),
+                event)
+            .isEmpty()) {
+      // 짧은 정정 안내(공급·자격·위치 중 지금 버전에 있는 것이 정정 결과에 없음): 공고를 통째로 바꾸지 않고 바뀐 일정을 후속 안내로 붙여요.
+      // 통째로 바꾸면 원공고 내용이 사라지고, 정정이 반영된 공고라 원공고의 새 결과도 막혀 되돌릴 수 없었어요(2026-11-10 재검토).
+      // 정정 분류를 넓히기 전(「…(발표일 변경)」을 후속 안내로 분류)과 같은 결과예요. 원공고 공고문 전체를 고친 정정은 그대로 새 버전이에요
+      log.info(
+          "핵심 섹션이 빈 정정이라 후속 안내로 붙여요 rawPostId={} noticeId={}",
+          event.rawPostId(),
+          current.orElseThrow().noticeId());
+      return logged(event, attachFollowUp(event, source, now));
     } else if (decision.outcome() == IngestionOutcome.NEW_VERSION) {
       // 정정 줄기의 최초 원공고 글(정정의 정정 C2 → C1 → N이면 N)
       UUID root =
@@ -456,12 +471,16 @@ public class NoticeIngestionService {
 
   private PublicationPolicy.Published published(CurrentVersion current, ExtractionEvent event) {
     Optional<SourceVersion> fromPost = notices.latestFromPost(event.rawPostId());
+    // 반영한 정정은 기준 출처의 정정뿐이에요(다른 출처의 정정은 잇기만 함). 그것만 세야 기준 출처의 새 버전이 굳지 않아요
+    UUID base = notices.baseRoot(current.noticeId()).orElse(null);
     return new PublicationPolicy.Published(
         fromPost.map(SourceVersion::rawVersion).orElse(null),
         fromPost.map(SourceVersion::reviewStatus).orElse(null),
         current.contentHash(),
-        notices.hasCorrection(current.noticeId()),
-        notices.latestOtherCorrectionPostedOn(current.noticeId(), event.rawPostId()).orElse(null));
+        notices.hasCorrection(current.noticeId(), base),
+        notices
+            .latestOtherCorrectionPostedOn(current.noticeId(), event.rawPostId(), base)
+            .orElse(null));
   }
 
   /**

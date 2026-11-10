@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from mujuthaek_collector.core.storage import MAX_ATTEMPTS, Intake
 from mujuthaek_collector.sources.policy.base import PolicySource
@@ -73,8 +73,13 @@ class PolicyMemoryStore:
         mine = [v for v in self.versions if v.policy.id == policy_id]
         return (mine[-1].version, mine[-1].content_hash, mine[-1].origin_status) if mine else None
 
+    def latest_files(self, policy_id):
+        mine = [v for v in self.versions if v.policy.id == policy_id]
+        return [replace(file) for file in mine[-1].files if file.s3_key] if mine else []
+
     def mark_done(self, policy_id):
-        self.policies[policy_id].status = "DONE"
+        p = self.policies[policy_id]
+        p.status, p.attempts, p.last_error = "DONE", 0, None
 
     def mark_failed(self, policy_id, error):
         p = self.policies[policy_id]

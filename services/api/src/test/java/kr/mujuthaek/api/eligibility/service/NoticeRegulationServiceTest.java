@@ -57,6 +57,15 @@ class NoticeRegulationServiceTest {
         .isEqualTo(true);
     // 다른 구(권선구 41113)는 걸리지 않아요
     assertThat(NoticeRegulationService.match(List.of("4111300000"), district)).isEmpty();
+    // 2026-11-10 재검토: 끝자리 0 모양으로 시를 정해 영동군(43740) 규제지역에 증평군(43745) 공고가 걸렸음
+    assertThat(
+            NoticeRegulationService.match(
+                List.of("4374500000"), List.of(area("43740", "SPECULATION"))))
+        .isEmpty();
+    assertThat(
+            NoticeRegulationService.match(
+                List.of("4374000000"), List.of(area("43745", "SPECULATION"))))
+        .isEmpty();
     // 시 단위 코드끼리는 앞 4자리가 달라 섞이지 않아요(남양주 41360 · 오산 41370)
     assertThat(
             NoticeRegulationService.match(

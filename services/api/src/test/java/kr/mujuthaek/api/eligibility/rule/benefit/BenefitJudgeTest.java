@@ -144,6 +144,11 @@ class BenefitJudgeTest {
             .getFirst();
     assertThat(moved.status()).isEqualTo(Status.UNKNOWN);
     assertThat(moved.reason()).isEqualTo("이 지역으로 이사하면 받을 수 있어요");
+    // 2026-11-10 재검토: 일반구가 있는 시의 혜택은 그 구 주민도 사는 곳(장안구 주민에게 「이사하면」이 나왔음). 영동군 혜택은 증평군 주민 것이 아님
+    Condition suwon = c("RESIDENCE", Map.of("regions", List.of("41110")), 1);
+    assertThat(one(suwon, a().region("41111").build())).isEqualTo(Status.MET);
+    Condition yeongdong = c("RESIDENCE", Map.of("regions", List.of("43740")), 1);
+    assertThat(one(yeongdong, a().region("43745").build())).isEqualTo(Status.UNKNOWN);
   }
 
   @Test

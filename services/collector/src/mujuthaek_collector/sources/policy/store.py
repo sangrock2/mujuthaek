@@ -114,6 +114,7 @@ class PolicyStore(Protocol):
     def skip_policy(self, policy_id: UUID, title: str, marker: str, list_raw: dict[str, Any], field: str) -> None: ...
     def queued_policies(self, source_code: str, limit: int) -> list[PolicyRow]: ...
     def latest_hash(self, policy_id: UUID) -> tuple[int, str, str] | None: ...
+    def latest_files(self, policy_id: UUID) -> list[PolicyFile]: ...
     def mark_done(self, policy_id: UUID) -> None: ...
     def mark_failed(self, policy_id: UUID, error: str) -> None: ...
     def save_version(self, new: NewPolicyVersion) -> None: ...
@@ -182,8 +183,21 @@ class PostgresPolicyStore(PostgresStore):
         ).fetchone()
         return (row[0], row[1], row[2]) if row else None
 
+    def latest_files(self, policy_id: UUID) -> list[PolicyFile]:
+        """마지막 버전의 첨부(원본이 남아 있는 것)와 그 글자. 첨부를 끝내 받지 못할 때 이전 것을 이어 쓰는 데 써요(게시판 수집과 같음)."""
+        rows = self.conn.execute(
+            "select f.idx, f.name, f.role, f.download_url, f.file_hash, f.size_bytes, f.s3_key, f.stored_until, f.text_status, t.text, "
+            "f.found_on from raw_policy_files f join raw_policy_versions v on v.id = f.version_id "
+            "left join raw_policy_texts t on t.file_id = f.id "
+            "where v.raw_policy_id = %s and v.version = (select max(version) from raw_policy_versions where raw_policy_id = %s) "
+            "and f.s3_key is not null and f.deleted_at is null order by f.idx",
+            (policy_id, policy_id),
+        ).fetchall()
+        return [PolicyFile(*row) for row in rows]
+
     def mark_done(self, policy_id: UUID) -> None:
-        self.conn.execute("update raw_policies set status = 'DONE', last_error = null, updated_at = now() where id = %s", (policy_id,))
+        # 실패 횟수도 되돌려요(게시판 수집과 같음, 2026-11-10 재검토)
+        self.conn.execute("update raw_policies set status = 'DONE', attempts = 0, last_error = null, updated_at = now() where id = %s", (policy_id,))
 
     def mark_failed(self, policy_id: UUID, error: str) -> None:
         self.conn.execute(

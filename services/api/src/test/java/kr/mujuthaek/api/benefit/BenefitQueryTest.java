@@ -120,6 +120,14 @@ class BenefitQueryTest {
         .doesNotContain(busan, closed);
     assertThat(ids(List.of("11"))).contains(mapo, seoul, nationwide).doesNotContain(busan);
     assertThat(ids(List.of())).contains(mapo, seoul, busan, nationwide).doesNotContain(closed);
+
+    // 2026-11-10 재검토: 일반구가 있는 시와 그 구는 겹쳐요(장안구 회원에게 수원시 혜택이 후보에서 빠졌음). 영동군과 증평군은 아님
+    UUID suwon = f.benefit(region("SIGUNGU", "41110"));
+    UUID jangan = f.benefit(region("SIGUNGU", "41111"));
+    UUID yeongdong = f.benefit(region("SIGUNGU", "43740"));
+    assertThat(ids(List.of("41111"))).contains(suwon, jangan).doesNotContain(mapo, yeongdong);
+    assertThat(ids(List.of("41110"))).contains(suwon, jangan);
+    assertThat(ids(List.of("43745"))).doesNotContain(yeongdong, suwon);
   }
 
   @Test

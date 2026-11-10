@@ -86,6 +86,7 @@ NO_RECHECK_CODES = frozenset(
         "IMAGE_READING_DISAGREES",  # 그림 두 판독이 다름(2026-11-05): AI는 글자만 보므로 다시 읽어도 어느 쪽이 맞는지 정할 수 없음
         "PRICE_PARTS_MISMATCH",  # 보증금 ≠ 계약금 + 잔금(2026-11-07): 표 숫자로 정한 보류. 원문 오타면 다시 읽어도 같은 숫자
         "UNIT_COUNTS_EXCEED_TOTAL",  # 호실마다 모집 1로 센 수 > 공고 전체 모집 수(2026-11-09): 코드가 표에서 센 수량이라 AI가 다시 읽어도 같음
+        "TYPE_COUNTS_DISAGREE",  # 같은 주택형의 대상 없는 모집 수 ≠ 대상별 모집 수 합(2026-11-10): 코드가 표에서 옮긴 수량끼리의 불일치
         "AGE_BOUNDARY_DAY",  # 원문이 나이 경계일을 따로 정함(2026-11-09): 만 나이 조건식이 담지 못하는 것이라 AI가 다시 읽어도 같음
     }
 )
@@ -126,19 +127,17 @@ class RecheckResult:
     # 채택하지 않은 범위와 이유(2026-10-24 세 번째 채점: 어느 섹션을 왜 버렸는지 결과에 없어 평가에서 추정해야 했음).
     # (「전체」 또는 섹션 이름, 이유: 새로 생긴 (코드, 위치) 목록이나 「줄어든 문제 없음」)
     rejected: tuple[tuple[str, str], ...] = ()
-    agent: dict[str, Any] | None = None  # 재확인 에이전트의 항목별 기록(차례·도구·결말). 묶음 재확인이면 None
 
     def summary(self) -> dict[str, Any] | None:
         """작업 기록(usage)·로그에 남길 재확인 요약. 다시 본 항목이 없으면 None."""
         if not self.rechecked:
             return None
-        summary = {
+        return {
             "rechecked": list(self.rechecked),
             "accepted": self.accepted,
             "adoptedSections": list(self.adopted_sections),
             "rejected": [{"scope": scope, "reason": reason} for scope, reason in self.rejected],
         }
-        return {**summary, "agent": self.agent} if self.agent is not None else summary
 
 
 def _item_key(candidate: dict[str, Any], pointer: str) -> tuple[str, str | None] | None:
@@ -592,12 +591,11 @@ class RecheckAnswer:
     targets: list[dict[str, Any]]
     sections: list[str]
     rejected: tuple[tuple[str, str], ...] = ()
-    agent: dict[str, Any] | None = None  # 답을 받은 과정의 기록(에이전트 전략만)
 
 
 class RecheckStrategy(Protocol):
     """다시 볼 항목의 고친 답을 받는 방법입니다. 받은 답을 채택할지는 전략이 아니라 adopt(같은 검증기)가 정합니다.
-    evaluate는 답을 내기 전에 스스로 확인할 때만 씁니다(에이전트의 validate_item). 채택 판단에는 쓰지 않습니다."""
+    운영은 묶음(BATCH) 하나입니다(항목마다 도구를 쓰던 에이전트 전략은 2026-11-10 걷어냄). 시험은 정해 둔 답을 내는 전략을 꽂습니다."""
 
     def answer(
         self,
@@ -607,7 +605,6 @@ class RecheckStrategy(Protocol):
         parts: list[dict[str, Any]],
         targets: list[dict[str, Any]],
         sections: list[str],
-        evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None] | None = None,
         **run_options: Any,
     ) -> RecheckAnswer: ...
 
@@ -623,7 +620,6 @@ class BatchStrategy:
         parts: list[dict[str, Any]],
         targets: list[dict[str, Any]],
         sections: list[str],
-        evaluate: Callable[[list[dict[str, Any]]], VerificationReport | None] | None = None,
         **run_options: Any,
     ) -> RecheckAnswer:
         call = CallSpec(
@@ -680,54 +676,10 @@ def recheck_problems(
     if not targets:
         return RecheckResult(parts, first, [], False, None)
     rechecked = [f"{t['section']}/{t['id']}" if t["id"] else t["section"] for t in targets]
-    answer = strategy.answer(rules, material, model, parts, targets, sections, evaluate=evaluate, **run_options)
+    answer = strategy.answer(rules, material, model, parts, targets, sections, **run_options)
     if answer.response is None:
-        result = RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
-    else:
-        result = adopt(parts, first, answer, rechecked, evaluate)
-    result.agent = answer.agent
-    return result
-
-
-def recheck_rounds(
-    rules: FieldRules,
-    material: ExtractionMaterial,
-    model: ExtractionModel,
-    parts: list[dict[str, Any]],
-    evaluate: Callable[[list[dict[str, Any]]], VerificationReport],
-    strategies: tuple[RecheckStrategy, ...],
-    scope: Collection[str] | None = None,
-    **run_options: Any,
-) -> RecheckResult:
-    """재확인을 여러 라운드로: 앞 라운드에서 채택한 결과 위에서 남은 문제만 다음 전략으로 다시 봅니다(2026-11-05).
-    실측(공고 4건): 묶음 재확인은 일정·자격처럼 한 번에 고칠 수 있는 항목을, 에이전트는 묶음이 못 고친 항목 일부를 고쳤습니다.
-    라운드마다 채택은 같은 검증기(adopt)가 정하므로, 뒤 라운드가 앞 라운드에서 받은 것을 나쁘게 바꿀 수 없습니다."""
-    current: RecheckResult | None = None
-    rechecked: list[str] = []
-    adopted: list[str] = []
-    rejected: list[tuple[str, str]] = []
-    run = ExtractionRun()
-    accepted = False
-    agent = None
-    for number, strategy in enumerate(strategies, start=1):
-        result = recheck_problems(rules, material, model, current.parts if current else parts, evaluate, strategy=strategy, scope=scope, **run_options)
-        if current is None:
-            current = result
-        if result.run is not None:
-            run.attempts += result.run.attempts
-            run.raw_responses += result.run.raw_responses
-            run.failed_calls += result.run.failed_calls
-        rechecked += [r for r in result.rechecked if r not in rechecked]
-        if result.accepted:
-            accepted = True
-            adopted += [f"{number}:{a}" for a in result.adopted_sections] or [f"{number}:전체"]
-            current = result
-        rejected += [(f"{number}:{scope}", reason) for scope, reason in result.rejected]
-        agent = result.agent or agent
-        if not result.rechecked:
-            break  # 남은 문제가 없으면 다음 라운드를 부르지 않습니다
-    assert current is not None
-    return RecheckResult(current.parts, current.report, rechecked, accepted, run if run.attempts else None, tuple(adopted), tuple(rejected), agent)
+        return RecheckResult(parts, first, rechecked, False, answer.run, rejected=answer.rejected)
+    return adopt(parts, first, answer, rechecked, evaluate)
 
 
 def adopt(

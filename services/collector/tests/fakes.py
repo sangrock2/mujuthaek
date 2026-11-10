@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from uuid import UUID
 
-from mujuthaek_collector.core.storage import MAX_ATTEMPTS, BoardState, Intake, NewVersion, PostRow
+from mujuthaek_collector.core.storage import MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, BoardState, Intake, NewVersion, PostRow
 from mujuthaek_collector.errors import FileRejected
 from mujuthaek_platform.ids import uuid7
 
@@ -54,10 +54,11 @@ class MemoryStore:
         if self.find_post(post.source_code, post.post_key) is None:
             self.posts[post.id] = post
 
-    def update_list_fields(self, post_id, list_status, deadline_on):
+    def update_list_fields(self, post_id, list_status, deadline_on, list_item=None):
         post = self.posts[post_id]
         post.list_status = list_status or post.list_status
         post.deadline_on = deadline_on or post.deadline_on
+        post.list_item = list_item if list_item is not None else post.list_item
 
     def set_parent(self, post_id, parent_post_id):
         self.posts[post_id].parent_post_id = parent_post_id
@@ -81,16 +82,44 @@ class MemoryStore:
     def requeue_open_posts(self, source_code, today, since_days):
         count = 0
         for p in self.posts.values():
-            if p.source_code == source_code and p.status == "DONE" and p.kind in ("NOTICE", "CORRECTION") and (p.deadline_on is None or p.deadline_on >= today):
+            exhausted = p.status == "FAILED" and p.attempts >= MAX_ATTEMPTS
+            if (
+                p.source_code == source_code
+                and (p.status == "DONE" or exhausted)
+                and p.kind in ("NOTICE", "CORRECTION")
+                and (p.deadline_on is None or p.deadline_on >= today)
+            ):
                 p.status, count = "PENDING", count + 1
         return count
+
+    def orphan_follow_ups(self, source_code, since):
+        return [
+            p
+            for p in self.posts.values()
+            if p.source_code == source_code
+            and p.kind == "FOLLOW_UP"
+            and p.status == "SKIPPED"
+            and p.parent_post_id is None
+            and p.last_error == ORPHAN_FOLLOW_UP
+            and (p.posted_on is None or p.posted_on >= since)
+        ]
+
+    def link_follow_up(self, post_id, parent_post_id, status, reason):
+        post = self.posts[post_id]
+        if post.status == "SKIPPED" and post.parent_post_id is None:
+            post.parent_post_id, post.status, post.last_error = parent_post_id, status, reason
 
     def latest_hash(self, post_id):
         mine = [v for v in self.versions if v.post.id == post_id]
         return (mine[-1].version, mine[-1].content_hash) if mine else None
 
+    def latest_files(self, post_id):
+        mine = [v for v in self.versions if v.post.id == post_id]
+        return [replace(f) for f in mine[-1].files if f.s3_key] if mine else []
+
     def mark_done(self, post_id):
-        self.posts[post_id].status = "DONE"
+        post = self.posts[post_id]
+        post.status, post.attempts, post.last_error = "DONE", 0, None
 
     def mark_failed(self, post_id, error):
         post = self.posts[post_id]
@@ -152,7 +181,10 @@ class FakeClient:
         self.requested.append(url)
         if url in self.rejected:
             raise FileRejected("robots.txt가 막은 주소")
-        return self.files[url]
+        data = self.files[url]
+        if isinstance(data, Exception):  # 받기 오류 흉내 (연결 끊김 등)
+            raise data
+        return data
 
     def close(self):
         pass

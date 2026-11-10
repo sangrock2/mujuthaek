@@ -189,6 +189,33 @@ def test_rows_are_compared_by_cells_so_spacing_or_a_missing_label_is_not_a_dispu
     assert not image_reading._agrees(wrong, wrong, ocr) and image_reading._agrees(first, first, ocr)
 
 
+def test_ocr_counts_how_often_a_value_is_used_when_ocr_shows_a_misread_and_also_checks_lines_that_are_not_table_rows():
+    # 2026-11-10 코드 검토: OCR이 그림 어디엔가 있는지만 봐서, 두 판독이 같게 잘못 읽은 값이 다른 행 값과 같으면 지나갔고 표 행이 아닌 줄은 OCR을 건너뜀
+    from collections import Counter
+
+    rows = "| 101 | 31.69 | 250,600 |\n| 102 | 31.69 | 250,600 |"  # 102호는 실제 250,500인데 두 판독 모두 250,600으로 읽음
+    ocr = Counter(["101", "102", "31.69", "31.69", "250600", "250500"])
+    counted = image_reading.counted_numbers(image_reading.reading_numbers(rows), ocr)
+    assert counted == Counter({"250600": 2})  # OCR에만 있는 250500(여섯 자리)이 오독 흔적 → 여섯 자리 판독 숫자를 셈
+    assert [image_reading._agrees(line, rows, ocr, "", counted) for line in rows.split("\n")] == [False, False]  # 어느 행인지 몰라 둘 다
+    # 2026-11-10 재검토: 판독 지시가 합친 칸 값을 행마다 되풀이해 적게 해서, OCR은 한 번 본 값을 판독은 행마다 적음 → 흔적이 없으면 「있는지」만
+    merged = Counter(["101", "102", "31.69", "250600"])
+    counted = image_reading.counted_numbers(image_reading.reading_numbers(rows), merged)
+    assert counted == Counter() and all(image_reading._agrees(line, rows, merged, "", counted) for line in rows.split("\n"))
+    # 흔적이 있어도 자릿수가 다른 합친 칸(31.69, 네 자리)은 세지 않음
+    counted = image_reading.counted_numbers(image_reading.reading_numbers(rows), merged + Counter(["250500"]))
+    assert counted == Counter({"250600": 2}) and not image_reading._agrees("| 101 | 31.69 | 250,600 |", rows, merged + Counter(["250500"]), "", counted)
+    assert image_reading._agrees("| 101 | 31.69 | 250,600 |", rows, Counter(["101", "31.69", "250600", "250600", "250500"]), "", counted)
+    # 작은 숫자(층·호수)는 되풀이되고 OCR이 놓치기 쉬워 흔적이 있어도 「있는지」만 봄
+    small = image_reading.reading_numbers("| 2 | 250,600 |\n| 2 | 250,700 |")
+    ocr = Counter(["2", "250600", "250700", "250500"])
+    assert image_reading._agrees("| 2 | 250,600 |", "| 2 | 250,600 |", ocr, "", image_reading.counted_numbers(small, ocr))
+    prose = "※ 신혼부부 월평균소득 70% 이하"
+    counted = image_reading.counted_numbers(image_reading.reading_numbers(prose), Counter(["100"]))
+    assert not image_reading._agrees(prose, prose, Counter(["100"]), "", counted)
+    assert image_reading._agrees(prose, prose, Counter(["70"]), "", counted)
+
+
 def test_ocr_is_skipped_when_turned_off(monkeypatch):
     monkeypatch.setenv("EXTRACTION_IMAGE_OCR", "false")
     assert image_reading._ocr_numbers(b"not a pdf", 1) is None

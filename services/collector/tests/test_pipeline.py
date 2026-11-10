@@ -2,9 +2,12 @@
 
 from datetime import date
 
+import httpx
+
 from mujuthaek_collector import pipeline
 from mujuthaek_collector.core.files import FileRef
-from mujuthaek_collector.errors import BlockedError, ParseError
+from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+from mujuthaek_collector.errors import BlockedError, FileNotReady, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, ListItem, Request, Source
 
 TODAY = date(2026, 10, 14)
@@ -92,6 +95,67 @@ def test_correction_links_to_the_round_before_it_not_a_later_one(client, store, 
     assert store.by_key("23").parent_post_id == store.by_key("21").id
 
 
+def test_correction_links_only_to_the_notice_with_the_same_block(client, store, file_store, settings, monkeypatch):
+    """이름 비교는 괄호를 지워서, 괄호 안 블록이 다른 같은 이름 공고에 붙지 않게 구분도 맞춰 봐요 (2026-11-10 코드 검토)."""
+    rows = [
+        ("32", "행복주택 입주자 모집공고(A-2블록) [정정공고]", date(2026, 10, 5)),
+        ("31", "행복주택 입주자 모집공고(A-3블록)", date(2026, 10, 3)),
+        ("30", "행복주택 입주자 모집공고(A-2블록)", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("32").parent_post_id == store.by_key("30").id
+
+
+def test_follow_up_links_only_to_the_notice_with_the_same_block(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 같은 날 올라온 「(A-2블록)」·「(A-3블록)」 공고가 있으면 A-2블록 후속 안내가 A-3블록 공고에 붙었어요."""
+    rows = [  # 원공고는 앞선 회차에 모여 있어요(후속 안내를 등록할 때 찾음)
+        ("41", "행복주택 입주자 모집공고(A-3블록)", date(2026, 10, 1)),
+        ("40", "행복주택 입주자 모집공고(A-2블록)", date(2026, 10, 1)),
+        ("42", "행복주택 입주자 모집공고(A-2블록)(2026.10.01) 서류심사 대상자 발표", date(2026, 10, 10)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("42").kind == "FOLLOW_UP" and store.by_key("42").parent_post_id == store.by_key("40").id
+
+
+def test_correction_with_the_original_date_links_to_that_round(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 공고일 뒤에 바뀐 내용을 적은 정정 제목은 후속 안내로 분류됐고, 공고일·꾸밈말 괄호까지 견줘 원래 공고와 끊겼어요.
+    제목의 공고일이 있으면 그날 올라온 회차에 붙어요."""
+    rows = [
+        ("42", "[정정공고] 김제하동 국민임대주택 모집공고(2026.09.07) 당첨자 발표일 변경", date(2026, 10, 9)),
+        ("41", "김제하동 국민임대주택 모집공고(수요자맞춤형)", date(2026, 10, 7)),
+        ("40", "김제하동 국민임대주택 모집공고(수요자맞춤형)", date(2026, 9, 7)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("42").kind == "CORRECTION" and store.by_key("42").parent_post_id == store.by_key("40").id
+
+
+class TwoBoardSource(FakeSource):
+    """LH처럼 두 게시판이 같은 글 번호를 쓰는 출처. 게시판마다 상세 주소가 달라요."""
+
+    boards = [Board("open", "분양임대"), Board("myhome", "마이홈")]
+
+    def parse_list(self, board, body, page_url):
+        items = super().parse_list(board, body, page_url)
+        for item in items:
+            item.detail_url = f"{item.detail_url}&board={board.key}"
+        return items
+
+
+def test_a_post_listed_on_two_boards_keeps_the_list_line_of_its_own_board(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 다른 게시판의 줄로 목록 값을 덮어, 정정 확인 때 상세를 다른 게시판 주소로 열었어요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    for board in ("open", "myhome"):
+        client.pages[f"https://a.kr/view?id=1&board={board}"] = "본문"
+    run(TwoBoardSource(rows), client, store, file_store, settings, monkeypatch)
+    run(TwoBoardSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    post = store.by_key("1")
+    assert post.board_key == "open" and post.list_item["detail_url"].endswith("board=open")
+
+
 def test_event_files_point_to_uploaded_s3_objects(client, store, file_store, settings, monkeypatch):
     """이벤트의 s3Key는 실제로 올린 S3 경로와 같고, 받는 쪽은 role로 공고문을 찾아요."""
     rows = ROWS[:1]
@@ -138,11 +202,77 @@ def test_broken_detail_marks_failed_and_continues(client, store, file_store, set
     assert result.status == "SUCCESS" and any("상세를 읽지 못했어요" in w for w in result.warnings)
 
 
-def test_blocked_stops_source_and_keeps_post_pending(client, store, file_store, settings, monkeypatch):
-    pages(client, ROWS[:1])
-    client.pages["https://a.kr/view?id=1"] = BlockedError("HTTP 429")
-    result = run(FakeSource(ROWS[:1]), client, store, file_store, settings, monkeypatch)
-    assert result.status == "BLOCKED" and store.by_key("1").status == "PENDING"
+def test_blocked_stops_source_and_counts_against_the_post(client, store, file_store, settings, monkeypatch):
+    """403·429면 출처 회차를 멈추고 그 글의 실패로 세요. 다음 회차엔 밀린 다른 글이 먼저 열리고, 3번 막힌 글은 더 열지 않아요.
+    예전엔 그 글이 PENDING으로 남아 매 회차 먼저 열려 출처 전체가 멈춰 있었어요 (2026-11-10 코드 검토)."""
+    rows = [("5", "2026년 국민임대 입주자 모집공고", date(2026, 10, 5)), ROWS[0]]
+    pages(client, rows)
+    client.pages["https://a.kr/view?id=5"] = BlockedError("HTTP 403")
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "BLOCKED" and store.by_key("5").status == "FAILED" and store.by_key("5").attempts == 1
+    assert store.by_key("1").status == "PENDING"  # 막힌 글이 먼저라 이번엔 못 열었어요
+
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "BLOCKED" and store.by_key("1").status == "DONE" and store.by_key("5").attempts == 2
+
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("5").attempts == MAX_ATTEMPTS
+    client.requested.clear()
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "SUCCESS" and "https://a.kr/view?id=5" not in client.requested
+
+    # 새벽 정정 확인은 횟수를 다 쓴 글도 하루 한 번 다시 열어요(2026-11-10 재검토: 상세만 3번 막힌 새 글은 영영 모이지 않았음)
+    client.pages["https://a.kr/view?id=5"] = "본문"
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    assert "https://a.kr/view?id=5" in client.requested and store.by_key("5").latest_version == 1 and store.by_key("5").attempts == 0
+
+
+def test_flaky_attachment_does_not_make_a_version_without_it(client, store, file_store, settings, monkeypatch):
+    """첨부를 잠시 못 받으면 그 파일 없이 새 버전을 만들지 않아요(해시가 바뀌어 추출·알림이 다시 돌고 다음 회차에 되돌아갔음, 2026-11-10 코드 검토).
+    실패로 세어 다음 회차에 다시 받고, 마지막 시도엔 이전 버전의 같은 첨부를 이어 써요: 본문이 그대로면 새 버전이 아니고, 본문이 바뀌었으면
+    그 정정은 새 버전이 돼요(재검토: 이전 버전이 있으면 늘 건너뛰어 첨부가 계속 안 받아지면 본문 정정이 영영 반영되지 않았음).
+    처음 글은 마지막 시도엔 그 파일 없이라도 저장해요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    client.files["https://a.kr/f/1.pdf"] = httpx.ConnectError("연결 끊김")
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    assert result.new_count == 0 and store.by_key("1").latest_version == 1
+    assert (store.by_key("1").status, store.by_key("1").attempts) == ("FAILED", 1)
+    assert any("이전 버전은 그대로 둬요" in w for w in result.warnings)
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 0
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)  # 마지막 시도: 본문 그대로
+    assert result.new_count == 0 and any("이전 버전의 같은 첨부를 이어 써요" in w for w in result.warnings)
+    assert (store.by_key("1").status, store.by_key("1").attempts, store.by_key("1").latest_version) == ("DONE", 0, 1)  # 실패 횟수도 되돌림
+
+    client.pages["https://a.kr/view?id=1"] = "정정된 본문"
+    for _ in range(MAX_ATTEMPTS - 1):
+        assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True).new_count == 0
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 1  # 마지막 시도: 정정된 본문 + 이전 공고문
+    first, second = store.versions[0], store.versions[-1]
+    assert second.body_text == "정정된 본문" and second.files[0].s3_key == first.files[0].s3_key
+    assert second.files[0].file_hash == first.files[0].file_hash and second.files[0].text == first.files[0].text
+
+    new = [("7", "2026년 국민임대 입주자 모집공고", date(2026, 10, 7))]
+    pages(client, new)
+    client.files["https://a.kr/f/7.pdf"] = httpx.ConnectError("연결 끊김")
+    for attempt in range(1, MAX_ATTEMPTS):
+        assert run(FakeSource(new), client, store, file_store, settings, monkeypatch).new_count == 0
+        assert (store.by_key("7").status, store.by_key("7").attempts) == ("FAILED", attempt)
+    assert run(FakeSource(new), client, store, file_store, settings, monkeypatch).new_count == 1  # 마지막 시도
+    assert store.events[-1]["payload"]["files"] == []
+
+
+def test_a_page_instead_of_the_attachment_is_tried_again_like_a_flaky_one(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 점검 화면(파일 대신 웹페이지)·첨부 도메인 robots.txt를 잠시 못 받은 것을 영구 거절로 보아, 그 파일 없이 새 버전이 생겼어요."""
+    rows = [("8", "2026년 국민임대 입주자 모집공고", date(2026, 10, 8))]
+    pages(client, rows)
+    client.files["https://a.kr/f/8.pdf"] = FileNotReady("파일 대신 웹페이지가 왔어요")
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 0
+    assert (store.by_key("8").status, store.by_key("8").attempts) == ("FAILED", 1)
+    client.files["https://a.kr/f/8.pdf"] = b"%PDF-1.4 fake"
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 1
+    assert store.events[-1]["payload"]["files"]
 
 
 def test_old_posts_are_not_opened(client, store, file_store, settings, monkeypatch):
@@ -202,3 +332,63 @@ def test_source_can_bring_its_own_client(settings):
     default = make_client(FakeSource([]), settings)
     assert isinstance(default, PoliteClient)
     default.close()
+
+
+class ListBodySource(FakeSource):
+    """본문을 목록 JSON에 싣는 출처(청년안심주택처럼): 상세는 목록 줄의 본문으로 만들어요."""
+
+    def __init__(self, rows, bodies):
+        super().__init__(rows)
+        self.bodies = bodies  # post_key → 목록에 실린 본문
+
+    def parse_list(self, board, body, page_url):
+        items = super().parse_list(board, body, page_url)
+        return [ListItem(i.board, i.post_key, i.title, i.posted_on, i.detail_url, meta={"content": self.bodies[i.post_key]}) for i in items]
+
+    def parse_detail(self, item, body):
+        return Detail(item.title, item.meta["content"], [FileRef("모집공고문.pdf", f"https://a.kr/f/{item.post_key}.pdf", 1)])
+
+
+def test_a_body_carried_in_the_list_is_refreshed_when_the_post_is_listed_again(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 코드 검토: 상세 처리가 처음 본 목록 줄을 계속 써서, 본문을 목록에만 싣는 출처는 게시글 본문을 고쳐도 새 버전이 되지 않았어요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    source = ListBodySource(rows, {"1": "청약신청 : 26.10.19 ~ 10.20"})
+    run(source, client, store, file_store, settings, monkeypatch)
+    source.bodies["1"] = "청약신청 : 26.10.19 ~ 10.27 (연장)"
+    assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
+    assert store.versions[-1].body_text == "청약신청 : 26.10.19 ~ 10.27 (연장)"
+
+
+class PagedListBodySource(ListBodySource):
+    """한 쪽에 글 하나씩 싣는 목록(2쪽부터 있는 열린 공고를 보려고)."""
+
+    def parse_list(self, board, body, page_url):
+        page = int(page_url.rsplit("=", 1)[1])
+        rows = self.rows[page - 1 : page]
+        return [ListItem(board.key, key, title, day, f"https://a.kr/view?id={key}", meta={"content": self.bodies[key]}) for key, title, day in rows]
+
+
+def test_recheck_reads_later_list_pages_even_when_the_first_is_all_known(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 1쪽이 모두 아는 글이면 다음 쪽을 읽지 않아, 2쪽부터 있는 글은 목록 줄이 그대로라 본문 정정을 놓쳤어요."""
+    rows = [("1", "2026년 행복주택 입주자 모집공고", date(2026, 10, 10)), ("2", "2026년 국민임대 입주자 모집공고", date(2026, 10, 9))]
+    pages(client, rows)
+    source = PagedListBodySource(rows, {"1": "접수 10.19 ~ 10.20", "2": "접수 10.21 ~ 10.22"})
+    run(source, client, store, file_store, settings, monkeypatch)
+    assert store.by_key("2").latest_version == 1
+    source.bodies["2"] = "접수 10.21 ~ 10.29 (연장)"
+    assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
+    assert store.by_key("2").latest_version == 2 and store.versions[-1].body_text == "접수 10.21 ~ 10.29 (연장)"
+
+
+def test_a_follow_up_listed_before_its_original_is_linked_once_the_list_is_read(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 목록은 최신 글이 먼저라 처음 수집·새 출처에서 후속 안내가 원공고보다 먼저 등록돼 SKIPPED로 남고, 다음 회차엔 이미 있는
+    글이라 다시 분류하지 않아 영영 빠졌어요. 목록을 다 읽은 뒤 원공고를 다시 찾아 이어요."""
+    rows = [
+        ("52", "2026년 행복주택 입주자 모집공고(2026. 10. 1.) 서류심사 대상자 발표", date(2026, 10, 10)),
+        ("51", "2026년 행복주택 입주자 모집공고", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    follow_up = store.by_key("52")
+    assert follow_up.parent_post_id == store.by_key("51").id and follow_up.status == "DONE"

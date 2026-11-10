@@ -52,6 +52,7 @@ public record PolicyExtractedEvent(
     List<Condition> conditions,
     Double confidence,
     boolean needsReview,
+    boolean reviewed,
     List<String> reviewReasons,
     boolean hasDocument,
     Instant extractedAt) {
@@ -183,6 +184,7 @@ public record PolicyExtractedEvent(
         conditions,
         quality.path("confidence").isNumber() ? quality.path("confidence").asDouble() : null,
         quality.path("needsReview").asBoolean(),
+        quality.path("reviewed").asBoolean(false), // 검수 결과 (선택 칸, 없으면 검수 전 결과)
         strings(quality.path("reviewReasons")),
         quality.path("hasDocument").asBoolean(),
         java.time.OffsetDateTime.parse(quality.path("extractedAt").asString()).toInstant());

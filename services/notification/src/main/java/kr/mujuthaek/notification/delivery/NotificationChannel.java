@@ -37,4 +37,12 @@ public interface NotificationChannel {
    */
   String send(UUID userId, String address, List<OutgoingNotification> notifications)
       throws DeliveryException;
+
+  /**
+   * 다시 보낼 받을 곳에 「앞 차례에 이미 받은 곳이 있다」는 표시가 있는지. 발송 중 예상 못한 오류가 나도 그 표시를 잃지 않게 발송 작업기가 물어요(2026-11-10
+   * 재검토: 표시가 사라져 재시도를 다 쓰면 받은 알림이 FAILED로 남았음). 받을 곳이 하나뿐인 채널은 늘 false.
+   */
+  default boolean deliveredBefore(String address) {
+    return false;
+  }
 }

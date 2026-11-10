@@ -450,8 +450,9 @@ def test_approving_newer_version_supersedes_older_pending_review(store):
 
 def test_correction_notice_supersedes_pending_reviews_of_the_original_notice(store):
     original = str(uuid.uuid4())
-    o1 = store.save(notice_event(1, original), held("원 공고 v1"))
-    o2 = store.save(notice_event(2, original), held("원 공고 v2"))
+    store.save(notice_event(1, original), Outcome("COMPLETED", event=published().event, candidate=pending_item()["candidate"]))  # 공개된 원 공고
+    o1 = store.save(notice_event(2, original), held("원 공고 v2"))
+    o2 = store.save(notice_event(3, original), held("원 공고 v3"))
     follow_up = notice_event(1, str(uuid.uuid4()), kind="FOLLOW_UP", supersedesPostId=original)
     store.save(follow_up, published("후속 안내"))
     assert review_status(store, o1) == review_status(store, o2) == "PENDING"  # 후속 안내는 원 공고를 바꾸지 않음
@@ -463,6 +464,15 @@ def test_correction_notice_supersedes_pending_reviews_of_the_original_notice(sto
     status, body = ReviewService(session_of(store), new_event).approve(o2, {})
     assert status == 409 and "정정공고" in body["error"] and correction_post in body["error"]
     assert review_status(store, correction) == "PENDING"
+
+
+def test_a_correction_does_not_supersede_the_review_of_an_original_never_published(store):
+    # 2026-11-10 재검토: api는 원 공고가 공개돼야 정정을 반영하는데, 검수 대기뿐인 원 공고의 검수를 대체해 승인할 길이 막혀 둘 다 공개되지 않았음
+    original = str(uuid.uuid4())
+    waiting = store.save(notice_event(1, original), held("원 공고 v1"))
+    correction_post = str(uuid.uuid4())
+    store.save(notice_event(1, correction_post, kind="CORRECTION", supersedesPostId=original), published("정정"))
+    assert review_status(store, waiting) == "PENDING"  # 원 공고를 승인해 공개하면 api가 기다리던 정정을 이어서 반영해요
 
 
 def test_supersede_and_approve_of_the_same_notice_are_serialized(store):
@@ -677,6 +687,7 @@ def test_benefit_needing_review_is_saved_listed_and_approved_with_edits(store):
     published = store.conn.execute("select payload->'payload' from outbox order by created_at desc limit 1").fetchone()[0]
     assert published["summary"] == "고친 요약" and published["reprocess"] is True
     assert published["quality"]["needsReview"] is False and published["quality"]["reviewReasons"] == ["NO_DOCUMENT"]
+    assert published["quality"]["reviewed"] is True  # 같은 버전이라도 api가 검수 결과로 받아요
     assert store.benefit_review(item["reviewId"])["edits"] == [{"path": "/summary", "before": event["payload"]["summary"], "after": "고친 요약"}]
     # 관리자 개요 처리 통계에 혜택 검수도 들어가요(칸을 고쳤으니 고쳐서 승인)
     assert store.review_stats(7)["recent"]["editedApproved"] == 1
@@ -724,6 +735,7 @@ def test_reported_benefit_is_reopened_and_rejection_hides_it(store):
     published = store.conn.execute("select payload->'payload' from outbox order by created_at desc limit 1").fetchone()[0]
     # 반려 메모는 발행 값에 나가지 않아요(내부 기록에만)
     assert published["relevanceReason"] == "관리자가 확인해 서비스 대상에서 뺐어요"
+    assert published["quality"]["reviewed"] is True
     assert "주거 지원 아님" not in json.dumps(published, ensure_ascii=False)
     assert service.benefit_reopen({"rawPolicyId": str(uuid.uuid4())})[0] == 404
 

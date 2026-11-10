@@ -4,7 +4,7 @@
 #     --dry-run   옮길 테이블·줄 수(추정)·같이 비워지는 개발 테이블만 보여 주고 끝내요
 #     --skip-big  area.address_points·area.stores(수 GB, 주소 검색·상권에만 써요)는 빼요
 # 옮기는 것: 스키마 notice·benefit·area·eligibility의 테이블 (아래 EXCLUDE 제외). 회원·알림·채팅·트래픽·관리자 기록은 옮기지 않아요.
-# 방법: 개발 DB의 대상 테이블을 비우고(TRUNCATE … CASCADE) 운영에서 pg_dump --data-only로 뜬 데이터를 넣어요. 한 트랜잭션이라 중간에 실패하면 그대로예요.
+# 방법: 개발 DB의 대상 테이블을 비우고(TRUNCATE … CASCADE) 운영에서 pg_dump --data-only로 뜬 데이터를 넣어요. 한 트랜잭션이라 중간에 실패하면 그대로예요(pg_dump 실패 포함).
 # 운영 DB 계정은 .env(API_DB_URL·API_DB_USER·API_DB_PASSWORD), 개발 DB 계정·암호는 실행할 때 입력받아요(파일·명령 기록에 남기지 않아요).
 # pg_dump·psql은 서버에 설치하지 않고 postgres 이미지(PG_IMAGE)로 돌려요.
 set -euo pipefail
@@ -153,12 +153,21 @@ dump_args=(--data-only --no-owner --no-privileges)
 for t in "${TABLES[@]}"; do dump_args+=(-t "$t"); done
 
 echo "복사 중… (큰 테이블은 몇 분 걸려요)"
+# 트랜잭션은 직접 열고, pg_dump가 끝까지 성공했을 때만 외래키 다시 걸기와 commit을 보내요. pg_dump가 중간에 실패하면 묶음을 끝내(exit 1)
+# commit 없이 입력이 끝나고, psql이 끝나며 열린 트랜잭션이 되돌려져요. 예전 방식(--single-transaction)은 입력이 어디서 끝나든 마지막에
+# COMMIT해, 테이블을 비우고 일부만 넣은 채 외래키 없이 남았어요. 파이프 앞쪽 묶음 안에서는 set -e가 듣지 않아 실패를 직접 막아요
+# (2026-11-10 재검토, 임시 postgres 17 대조 실험으로 확인)
 {
+  echo "begin;"
   echo "truncate table $(IFS=,; echo "${TABLES[*]}") cascade;"
   echo "$DROP_FK"
-  pg src pg_dump "${dump_args[@]}" 2> >(grep -v "circular foreign-key\|detail: \|hint: " >&2)
+  pg src pg_dump "${dump_args[@]}" 2> >(grep -v "circular foreign-key\|detail: \|hint: " >&2) || {
+    echo "운영 DB를 끝까지 뜨지 못해 개발 DB는 그대로 둬요" >&2
+    exit 1
+  }
   echo "$ADD_FK"
-} | PG_STDIN=1 pg dev psql -q -v ON_ERROR_STOP=1 --single-transaction > /dev/null
+  echo "commit;"
+} | PG_STDIN=1 pg dev psql -q -v ON_ERROR_STOP=1 -f - > /dev/null
 
 pg dev psql -q -c "analyze $(IFS=,; echo "${TABLES[*]}");" > /dev/null
 echo "끝: 개발 DB 줄 수"

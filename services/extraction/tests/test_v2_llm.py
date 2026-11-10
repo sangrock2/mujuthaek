@@ -18,7 +18,7 @@ from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2.context import V2Context
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.llm import retry
-from mujuthaek_extraction.v2.llm.budget import CACHE_HIT, BudgetExceeded, BudgetMiddleware, cost_usd
+from mujuthaek_extraction.v2.llm.budget import CACHE_HIT, BudgetExceeded, BudgetMiddleware, cost_usd, maybe_billed
 from mujuthaek_extraction.v2.llm.cache import FileLLMCache
 from mujuthaek_extraction.v2.llm.models import chat_model
 
@@ -133,7 +133,10 @@ def test_chat_model_uses_the_responses_api_without_storing_or_retrying(monkeypat
 def test_langsmith_settings_in_env_file_are_handed_to_the_environment_without_overriding(tmp_path, monkeypatch):
     # LangChain·LangGraph는 추적 설정을 환경 변수로만 읽음 → .env의 LANGSMITH_*를 넘김(이미 있는 값은 그대로, 시험은 conftest가 꺼 둠)
     for name in TRACING_ENV_NAMES:
-        monkeypatch.delenv(name, raising=False)
+        # 먼저 값을 넣어야 monkeypatch가 시험 전 상태를 기록해 끝난 뒤 되돌림. 없던 이름을 바로 지우면 기록되지 않아, export_tracing이
+        # os.environ에 넣은 LANGSMITH_API_KEY가 뒤 시험으로 새었음(2026-11-10 코드 검토)
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     monkeypatch.setenv("LANGSMITH_PROJECT", "already-set")
     env = tmp_path / ".env"
     env.write_text("OPENAI_API_KEY=sk-test\nLANGSMITH_TRACING=true\nLANGSMITH_API_KEY=lsv2_pt_test\nLANGSMITH_PROJECT=from-file\n", encoding="utf-8")
@@ -167,3 +170,27 @@ def test_transient_model_errors_are_retried_and_each_attempt_is_budgeted_and_rec
     assert retry.transient(openai.RateLimitError("x", response=httpx.Response(429, request=req), body=None))
     assert not retry.transient(openai.BadRequestError("x", response=httpx.Response(400, request=req), body=None))
     assert not retry.transient(BudgetExceeded("상한"))
+
+
+def test_only_failures_that_may_have_been_billed_are_settled_at_worst_case():
+    # 2026-11-10 코드 검토: 실패를 모두 최악 비용으로 세어, 429·연결 거부(청구 없음)도 공고 상한·하루 장부를 채웠음(V1은 풀어 줌)
+    req = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    assert not maybe_billed(openai.RateLimitError("x", response=httpx.Response(429, request=req), body=None))
+    assert not maybe_billed(openai.InternalServerError("x", response=httpx.Response(503, request=req), body=None))
+    refused = openai.APIConnectionError(request=req)
+    refused.__cause__ = httpx.ConnectError("refused")
+    assert not maybe_billed(refused)
+    late = openai.APIConnectionError(request=req)
+    late.__cause__ = httpx.ReadError("cut")
+    assert maybe_billed(late) and maybe_billed(openai.APITimeoutError(request=req)) and maybe_billed(RuntimeError("모름"))
+
+    class RateLimited(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise openai.RateLimitError("x", response=httpx.Response(429, request=req), body=None)
+
+    budget = Budget("gpt-6-luna", 0.5)
+    context = V2Context(document=parse(TEXT), budget=budget)
+    agent = create_agent(RateLimited(messages=iter([])), tools=[], middleware=[BudgetMiddleware("schedules")], context_schema=V2Context)
+    with pytest.raises(openai.RateLimitError):
+        agent.invoke({"messages": [HumanMessage("일정")]}, context=context)
+    assert budget.spent_usd == 0 and context.usage[0]["maybeBilledUsd"] == 0

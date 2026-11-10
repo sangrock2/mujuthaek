@@ -17,7 +17,7 @@ import httpx
 
 from mujuthaek_collector.config import USER_AGENT
 from mujuthaek_collector.core.robots import ALLOW_ALL, RobotRules
-from mujuthaek_collector.errors import BlockedError, FileRejected
+from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, RobotsUnavailable
 
 ROBOTS_TTL_SECONDS = 24 * 60 * 60
 MAX_REDIRECTS = 5
@@ -117,13 +117,15 @@ class PoliteClient:
         """공고문 원본 파일. robots 허용 경로만, 크기 상한, 웹페이지가 오면 거부."""
         try:
             response = self._send("GET", url, referer=referer, stream=True)
+        except RobotsUnavailable as error:  # 첨부 도메인의 robots.txt를 잠시 못 받음: 그 파일만 다음에 다시
+            raise FileNotReady(str(error)) from error
         except BlockedError as error:
             if "robots.txt" in str(error):
                 raise FileRejected(str(error)) from error
             raise
         try:
             if "text/html" in (response.headers.get("Content-Type") or "").lower():
-                raise FileRejected("파일 대신 웹페이지가 왔어요 (주소나 권한 확인 필요)")
+                raise FileNotReady("파일 대신 웹페이지가 왔어요 (점검 중이거나 주소·권한 확인 필요)")
             if int(response.headers.get("Content-Length") or 0) > self._max_file_bytes:
                 raise FileRejected(f"파일이 {self._max_file_bytes // 1024 // 1024}MB보다 커서 받지 않아요")
             chunks, size = [], 0
@@ -148,13 +150,13 @@ class PoliteClient:
         try:
             response = self._client.get(robots_url, follow_redirects=True)
         except httpx.HTTPError as error:
-            raise BlockedError(f"robots.txt를 받지 못해 이 도메인은 요청하지 않아요: {host} ({error})") from error
+            raise RobotsUnavailable(f"robots.txt를 받지 못해 이 도메인은 요청하지 않아요: {host} ({error})") from error
         finally:
             self._last_request[host] = time.time()
         if 400 <= response.status_code < 500:
             rules = ALLOW_ALL  # robots.txt가 없으면(4xx) 표준상 전체 허용
         elif response.status_code >= 500:
-            raise BlockedError(f"robots.txt 서버 오류({response.status_code})라 이 도메인은 요청하지 않아요: {host}")
+            raise RobotsUnavailable(f"robots.txt 서버 오류({response.status_code})라 이 도메인은 요청하지 않아요: {host}")
         else:
             rules = RobotRules(decode(response), self._user_agent)
         _ROBOTS_CACHE[(self._user_agent, host)] = (time.time(), rules)

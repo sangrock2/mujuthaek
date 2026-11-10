@@ -20,3 +20,4 @@ class V2Context:
     document: DocumentModel
     budget: SkipValidation[Budget | None] = None  # 공고 예산 장부(V1과 같은 장부). 없으면 예산을 보지 않음(시험)
     usage: list[dict[str, Any]] = field(default_factory=list)  # 모델 호출 기록(에이전트·시간·토큰·비용)
+    calls: SkipValidation[Any] = None  # 모델 호출 동시 상한(pipeline.Runtime.gate). 없으면 제한 없음(시험)

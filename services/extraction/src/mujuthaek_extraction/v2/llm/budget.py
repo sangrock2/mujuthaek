@@ -10,6 +10,7 @@ import json
 import time
 from typing import Any
 
+import httpx
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -24,6 +25,19 @@ class BudgetExceeded(RuntimeError):
     """공고 예산 상한에 닿아 모델을 부르지 않았습니다."""
 
 
+def maybe_billed(error: BaseException) -> bool:
+    """실패한 호출이 청구됐을 수 있는지(V1 ModelError.maybe_billed와 같은 기준). 오류 응답(429·4xx·5xx)과 연결하지 못한 경우는
+    청구되지 않아 예약을 풉니다. 시간 초과·끊긴 응답·모르는 오류는 청구됐을 수 있다고 봅니다. 예전엔 모두 최악 비용으로 세어,
+    동시 호출이 429를 받고 재시도하면 청구 없는 가짜 비용이 공고 상한·하루 장부를 채웠어요(2026-11-10 코드 검토)."""
+    flagged = getattr(error, "maybe_billed", None)
+    if isinstance(flagged, bool):
+        return flagged
+    if isinstance(getattr(error, "status_code", None), int):  # openai.APIStatusError: 제공자가 오류로 답함
+        return False
+    connect = (httpx.ConnectError, httpx.ConnectTimeout)
+    return not isinstance(error, connect) and not isinstance(error.__cause__ or error.__context__, connect)
+
+
 class BudgetMiddleware(AgentMiddleware):
     def __init__(self, agent: str, max_output_tokens: int | None = None):
         super().__init__()
@@ -32,6 +46,13 @@ class BudgetMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         context = request.runtime.context
+        gate = getattr(context, "calls", None)
+        if gate is None:
+            return self._call(request, handler, context)
+        with gate:  # 공고 하나의 동시 호출 상한(재시도 사이 쉬는 동안은 잡지 않음: 재시도 미들웨어가 이 바깥)
+            return self._call(request, handler, context)
+
+    def _call(self, request, handler, context):
         budget = getattr(context, "budget", None)
         if budget is None:
             response = handler(request)
@@ -46,11 +67,16 @@ class BudgetMiddleware(AgentMiddleware):
         try:
             response = handler(request)
         except Exception as error:
-            budget.settle_worst(ticket)  # 보냈다면 청구됐을 수 있음
+            billed = maybe_billed(error)
+            if billed:
+                budget.settle_worst(ticket)  # 보낸 뒤 실패: 청구됐을 수 있음
+            else:
+                budget.release(ticket)
             record = getattr(context, "usage", None)
             if record is not None:  # 실패한 시도도 기록(재시도·비용 추정을 작업 기록에서 보게)
                 seconds = round(time.monotonic() - started, 3)
-                record.append({"agent": self.agent, "seconds": seconds, "error": f"{type(error).__name__}: {error}"[:200], "maybeBilledUsd": round(worst, 8)})
+                spent = round(worst if billed else 0.0, 8)
+                record.append({"agent": self.agent, "seconds": seconds, "error": f"{type(error).__name__}: {error}"[:200], "maybeBilledUsd": spent})
             raise
         message = _ai_message(response)
         usage = (message.usage_metadata or {}) if message is not None else {}

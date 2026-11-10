@@ -60,7 +60,8 @@ SUPPLY_HINT = re.compile(r"보증금|임대료|월세|분양|가격|전용|면�
 UNIT_FLOOR = re.compile(r"(\d{1,2})\d{2}")  # 3~4자리 숫자 호수의 앞자리 = 층 (지하·문자 호수는 건드리지 않음)
 # 호실 행의 입주 상태(2026-11-07 gndc-ddb1: 「비 고」 칸이 「입주완료」(세 호실에 병합)·「즉시 입주 가능」(한 호실)인 표에 수량 열이 없어 네 호실을
 # 모두 모집 1로 셈 — 공고는 즉시 입주 1명·예비 4명 모집. 이미 입주한 호실은 이번 모집 호실이 아닙니다)
-OCCUPIED_UNIT = re.compile(r"입주\s*완료|입주\s*중|거주\s*중|계약\s*완료|임대\s*중")
+# 「임대완료」「계약진행중」도 이번 모집 호실이 아님(2026-11-10 코드 검토: 이 표시는 빠져 있어 그 호실까지 모집 1로 셈)
+OCCUPIED_UNIT = re.compile(r"입주\s*완료|입주\s*중|거주\s*중|계약\s*완료|계약\s*진행|임대\s*중|임대\s*완료")
 AVAILABLE_UNIT = re.compile(r"공\s*가|입주\s*가능|즉시\s*입주")
 SUBTOTAL = re.compile(r"^(?:합\s*계|소\s*계|총\s*계|계|합계)$")
 
@@ -73,18 +74,36 @@ def _occupied(row: list[str]) -> bool:
 
 # 공급 규모 줄이 이번에 공급하는 호실을 괄호 안에 이름으로 적은 경우(2026-11-07 gndc-12394176: 「□ 공급규모 : 1인실 2호(남성 : 101호, 여성 : 202-1호)」
 # 인데 아래 호실 표는 일곱 호실의 임대료 표라, 행마다 모집 1로 세면 다섯 호실이 틀린 모집 1. gndc-ddb1 「□ 공급세대 : 1호(202-2호, 셰어하우스)」도 같은 꼴)
-OFFER_LINE = re.compile(r"(?:공급|모집)\s*(?:규모|호수|세대|호실|가구)\s*[:：][^\n(]*?(\d+)\s*(?:호|세대|실|가구)\s*\(([^)\n]*)\)")
+# 「기공급호실 : 301호」(이미 공급한 호실)·「미공급호실 : 101호」(뜻이 공고마다 다름)는 이번 모집 호실로 읽지 않아요(2026-11-10 재검토).
+# 「추가모집 호실」처럼 앞에 다른 낱말이 붙은 것은 그대로 읽어요
+NOT_OFFERED_BEFORE = r"(?<![기미])"
+OFFER_LINE = re.compile(rf"{NOT_OFFERED_BEFORE}(?:공급|모집)\s*(?:규모|호수|세대|호실|가구)\s*[:：][^\n(]*?(\d+)\s*(?:호|세대|실|가구)\s*\(([^)\n]*)\)")
 OFFER_UNIT = re.compile(r"(?<![\d-])(\d{1,4}(?:-\d{1,3})?)\s*호(?!선)")
+# 호실 번호만 늘어놓고 끝에만 「호」를 붙인 목록(「101, 202호」), 공급 호실을 수 없이 바로 적은 줄(「□ 공급호실 - 101호, 202호」).
+# 예전엔 둘 다 못 읽어 표의 모든 호실을 모집 1로 셈(2026-11-10 코드 검토)
+UNIT_NUMBER = r"\d{1,4}(?:-\d{1,3})?"
+BARE_UNIT_LIST = re.compile(rf"^\s*{UNIT_NUMBER}(?:\s*호)?(?:\s*[,·/]\s*{UNIT_NUMBER}(?:\s*호)?)*\s*호\s*$")
+OFFER_LIST = re.compile(  # 「공급호수 : 2호」는 호실이 아니라 수라 「호실」만 봅니다. 목록 뒤에 다른 말(「외」「등」)이 이어지면 안 셈
+    rf"{NOT_OFFERED_BEFORE}(?:공급|모집)\s*호실\s*[:：\-–]\s*({UNIT_NUMBER}\s*호?(?:\s*[,·/]\s*{UNIT_NUMBER}\s*호?)*\s*호)(?!\s*(?:[,·/(\d]|[가-힣]))"
+)
+
+
+def _listed_units(listed: str) -> set[str]:
+    if BARE_UNIT_LIST.match(listed):
+        return set(re.findall(rf"(?<![\d-]){UNIT_NUMBER}", listed))
+    return set(OFFER_UNIT.findall(listed))
 
 
 def offered_units(text: str) -> set[str]:
     """공급 규모 줄의 괄호에 적은 공급 호실 번호(「2호(남성 : 101호, 여성 : 202-1호)」 → {101, 202-1}). 괄호 앞 수와 호실 수가 같고
-    「등」「외」로 줄여 적지 않았을 때만 셉니다. 없으면 빈 집합."""
+    「등」「외」로 줄여 적지 않았을 때만 셉니다. 수 없이 호실만 적은 줄(「공급호실 - 101호, 202호」)도 셉니다. 없으면 빈 집합."""
     found: set[str] = set()
     for match in OFFER_LINE.finditer(text or ""):
-        units = set(OFFER_UNIT.findall(match[2]))
+        units = _listed_units(match[2])
         if units and len(units) == int(match[1]) and not re.search(r"등|외", match[2]):
             found |= units
+    for match in OFFER_LIST.finditer(text or ""):
+        found |= _listed_units(match[1])
     return found
 
 
@@ -886,6 +905,7 @@ def build_part(
                     "_address": named.get("ADDRESS"),
                     "_plans": {},
                     "_anonymous": not set(named) - {"TARGET_GROUP"},  # 행에 대상 칸 말고는 이름(주택형·호·단지·동·주소·층)이 없음
+                    "_row_words": _row_words(row),  # 열 의미를 답하지 않은 칸까지 행의 이름 칸 낱말(_attach_price_tables)
                 }
                 if len(title_types) > 1:
                     current["_type_ambiguous"] = title_types
@@ -973,7 +993,13 @@ def build_part(
                     if origin[r][c] >= 0:
                         price_refs.append(quote(_row_line(table.rows[origin[r][c]])))
                 base_plan = f"{row_plan} {column['plan']}" if row_plan and column.get("plan") else row_plan or column.get("plan") or "기본"
-                base_stage = column.get("priceStage") or _guess_stage(column, base_plan, limit_column, first_price, sign)
+                answered = column.get("priceStage")
+                if answered == "OTHER" and limit_column is not None and column["column"] - 1 > limit_column:
+                    # 전환 한도 칸 오른쪽 가격 열을 「그 밖」으로 답하면 비워 답한 것처럼 봅니다: 한도 칸의 증감 표시로 나누는 전환 금액
+                    # (2026-11-10 23건 유료 확인 bmc-75: 「상호전환 시 임대조건」 금액 열을 OTHER로 한 번만 답해, 줄마다 붙은 감액·증액·최대 증액
+                    # 금액을 나누지 못하고 보류 → 가격 68개 빠짐. 같은 표의 앞선 답은 방향마다 따로 답해 나뉘었음)
+                    answered = None
+                base_stage = answered or _guess_stage(column, base_plan, limit_column, first_price, sign)
                 if base_stage in ("STANDARD", "CONVERSION_DEPOSIT_UP", "CONVERSION_DEPOSIT_DOWN"):
                     # 열 제목·요금안 이름이 보증금을 올리는지 내리는지 말하면 그 방향을 씁니다(아래 부호 칸이 있으면 부호가 우선)
                     base_stage = _stage_words(f"{table.columns[c]} {base_plan}") or base_stage
@@ -1103,6 +1129,7 @@ def build_part(
         group.pop("_merged_cells", None)
         group.pop("_unit", None)
         group.pop("_anonymous", None)
+        group.pop("_row_words", None)
         name = group.get("unitLabel") or group.get("housingTypeCode") or group["id"]
         uncertain = group.pop("_scope_uncertain", None)
         if uncertain:
@@ -1629,7 +1656,7 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             and (_housing_number(g) == number or _within_area_range(g, number))
             and (same_complex(name, _norm(g.get("_complex"))) or single_complex(group, g))
             # 대상 계층이 둘 다 적혀 있으면 맞아야 합니다(실측: 포항 전세보증금 표의 계층별 5행이 21A 묶음마다 모두 붙음)
-            and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
+            and _classes_match(groups_of, set(g["scope"]["targetGroups"]), group.get("_row_words"))
         ]
         if number is None and name:
             # 주택형·면적 없이 단지 이름으로만 행을 나눈 가격표: 다른 표에 같은 이름의 모집 묶음이 딱 하나면 그 묶음의 가격입니다
@@ -1638,7 +1665,9 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             same_name = [
                 g
                 for g in with_counts
-                if table_of(g) != table_of(group) and _norm(g.get("_complex")) == name and _classes_match(groups_of, set(g["scope"]["targetGroups"]))
+                if table_of(g) != table_of(group)
+                and _norm(g.get("_complex")) == name
+                and _classes_match(groups_of, set(g["scope"]["targetGroups"]), group.get("_row_words"))
             ]
             targets = same_name if len(same_name) == 1 else []
         code = _norm(group.get("housingTypeCode")).upper()
@@ -1737,14 +1766,24 @@ def _class_words(name: str) -> set[str]:
     return {_norm(w) for w in re.split(r"[·․ㆍ・‧,/]", INCOME_PRESENCE.sub("", CLASS_NOTE.sub("", name))) if _norm(w)}
 
 
-def _classes_match(a: set[str], b: set[str]) -> bool:
+def _classes_match(a: set[str], b: set[str], words: set[str] | None = None) -> bool:
     """공급표와 임대조건표가 같은 계층을 다르게 적은 경우를 맞춥니다(실측 LH 인천석남 행복주택: 공급표 「대학생」「청년」
-    「고령자 (주거약자용外)」 ↔ 임대조건표 「대학생· 청년(소득無)」「청년(소득有)」「고령자」라 가격 56개가 모집 수 없는 묶음으로 남음)."""
+    「고령자 (주거약자용外)」 ↔ 임대조건표 「대학생· 청년(소득無)」「청년(소득有)」「고령자」라 가격 56개가 모집 수 없는 묶음으로 남음).
+    a에 계층 낱말이 없으면(대상이 「소득 有」뿐) words(그 가격표 행의 이름 칸 낱말, 병합으로 이어받은 칸·열 의미를 답하지 않은 칸 포함)에
+    b의 계층 낱말이 있을 때만 맞습니다. 2026-11-10 23건 유료 umca-4439: 열 의미 답이 병합된 「청 년」 열을 빼고 「소득 有·無」 열만 대상으로 답해
+    가격 48개가 「청년」 모집 묶음에 붙지 않음(같은 표를 세 번 물어 두 번이 그렇게 답함). 행에 다른 계층 이름이 있으면 붙지 않습니다."""
     if not a or not b:
         return True
     words_a = set().union(*(_class_words(x) for x in a))
     words_b = set().union(*(_class_words(x) for x in b))
+    if not words_a:
+        return bool(words and words_b & words)
     return bool(words_a & words_b)
+
+
+def _row_words(row: list[str]) -> set[str]:
+    """행의 숫자 아닌 칸 낱말(계층 이름 비교용, _class_words와 같은 정규화)."""
+    return set().union(*(_class_words(cell) for cell in row if cell and not _numeric(cell)))
 
 
 def complex_names(part: dict[str, Any]) -> list[str]:

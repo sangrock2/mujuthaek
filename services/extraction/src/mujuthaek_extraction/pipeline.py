@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import logging
 import re
+import threading
 from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -39,8 +40,7 @@ from mujuthaek_extraction.model.base import ExtractionModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel, extract_with_fallback
 from mujuthaek_extraction.publish import completed_payload
-from mujuthaek_extraction.recheck import BATCH, RecheckResult, lost_by_recheck, recheck_problems, recheck_rounds
-from mujuthaek_extraction.repair.agent import AGENT, recheck_strategy
+from mujuthaek_extraction.recheck import BATCH, RecheckResult, lost_by_recheck, recheck_problems
 from mujuthaek_extraction.rules import discover
 from mujuthaek_extraction.rules.base import FieldRules
 from mujuthaek_extraction.usage import MeteredModel, UsageRecorder
@@ -151,15 +151,16 @@ def process(
     parallel_stagger: 병렬로 보낼 때 섹션 호출을 내보내는 간격(초, 워커는 설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)."""
     usage = UsageRecorder()
     names = models.names
+    gate = call_gate(parallel_calls)
     metered = NoticeModels(
-        MeteredModel(models.primary, usage, names.get("primary", "primary")),
-        MeteredModel(models.fallback, usage, names.get("fallback", "fallback")) if models.fallback is not None else None,
+        MeteredModel(models.primary, usage, names.get("primary", "primary"), gate=gate),
+        MeteredModel(models.fallback, usage, names.get("fallback", "fallback"), gate=gate) if models.fallback is not None else None,
         models.budget,
         names,
         models.chat,  # V2 담당별 채팅 모델(LangChain). 예산 장부는 같은 것을 씀
     )
-    rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger)
-    from mujuthaek_extraction.graph import run_graph  # graph가 이 모듈의 단계 함수를 가져다 쓰므로 실행할 때 가져옵니다
+    rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger, gate)
+    from mujuthaek_extraction.v2.graph import run_graph  # 그래프가 이 모듈의 단계 함수를 가져다 쓰므로 실행할 때 가져옵니다
 
     outcome = run_graph(raw_event, rt, method)
     outcome.usage = usage.summary()
@@ -167,7 +168,11 @@ def process(
 
 
 # ── 처리 단계 ──────────────────────────────────────────────────────────────────────────────────────────────
-# 아래 함수들은 추출 그래프(graph/build.py)의 노드가 부르는 단계입니다. 순서·분기는 그래프가 정합니다.
+# 아래 함수들은 추출 그래프(v2/graph.py)의 노드가 부르는 단계입니다. 순서·분기는 그래프가 정합니다.
+
+
+def call_gate(parallel_calls: int) -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(max(1, parallel_calls))
 
 
 @dataclass(frozen=True)
@@ -185,6 +190,14 @@ class Runtime:
     require_pdf: bool = True
     parallel_calls: int = 1
     parallel_stagger: float = 0.0
+    # 공고 하나에서 동시에 나가는 모델 호출 수(parallel_calls). 담당 노드가 아니라 호출마다 잡아요: 담당 노드에만 걸면 구조 단계·캐시 데우기와
+    # 담당 안의 기준표·해결 담당 호출이 빠져, 1로 두어도 여러 호출이 함께 나갔어요(2026-11-10 재검토). V1 방식 호출은 MeteredModel이,
+    # V2 담당 호출은 BudgetMiddleware가 이 세마포어를 잡습니다(서로 안에서 부르지 않아 겹쳐 잡지 않음)
+    gate: threading.BoundedSemaphore | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.gate is None:
+            object.__setattr__(self, "gate", call_gate(self.parallel_calls))
 
     def cost(self) -> float:
         return self.models.budget.spent_usd if self.models.budget else 0.0
@@ -302,17 +315,13 @@ def recheck_step(
     rt: Runtime,
     scope: Collection[str] | None = None,
 ) -> tuple[RecheckResult, list[str]]:
-    """문제 항목을 AI에 한 번 더 보여 줍니다(오류 종류와 무관하게 검사기 문구를 그대로 전달). 재확인 결과와 수정 기록을 돌려줍니다.
-    답 받는 방법은 설정 EXTRACTION_RECHECK_STRATEGY: batch(기본, 한 번에 묶어 묻기), agent(항목마다 도구를 쓰는 에이전트),
-    hybrid(묶음 재확인 뒤 남은 문제만 에이전트로). scope: 이 섹션들의 문제만 봅니다(V2 구조 단계). None이면 모든 섹션."""
-    choice = recheck_strategy()
+    """문제 항목을 AI에 한 번 더 보여 줍니다(오류 종류와 무관하게 검사기 문구를 그대로 전달, 한 번에 묶어 묻기). 재확인 결과와 수정 기록을
+    돌려줍니다. scope: 이 섹션들의 문제만 봅니다(V2 구조 단계). None이면 모든 섹션.
+    항목마다 도구를 쓰던 재확인 에이전트(EXTRACTION_RECHECK_STRATEGY=agent·hybrid)는 2026-11-10 걷어냄: 담당이 검증 결과로 스스로 고치는
+    V2에서는 구조 섹션만 재확인하고, 비교 측정(11/05)에서 묶음보다 비용이 약 6배였음."""
     evaluate = lambda parts: evaluate_parts(parts, material, context, rt) or first  # noqa: E731
     with rt.usage.stage("recheck"):
-        if choice == "hybrid":
-            recheck = recheck_rounds(rules, material, extracted.recheck_model, extracted.run.parts, evaluate, (BATCH, AGENT), scope=scope)
-        else:
-            strategy = AGENT if choice == "agent" else BATCH
-            recheck = recheck_problems(rules, material, extracted.recheck_model, extracted.run.parts, evaluate, strategy=strategy, scope=scope)
+        recheck = recheck_problems(rules, material, extracted.recheck_model, extracted.run.parts, evaluate, strategy=BATCH, scope=scope)
     repairs = [f"재확인 {'채택' if recheck.accepted else '미채택'}: {', '.join(recheck.rechecked)}"] if recheck.rechecked else []
     # 섹션별 채택·거절 이유를 작업 기록(usage.recheck)과 로그에 남깁니다(2026-10-24: 평가에서 어느 섹션을 왜 버렸는지 볼 수 있게)
     if recheck.adopted_sections:

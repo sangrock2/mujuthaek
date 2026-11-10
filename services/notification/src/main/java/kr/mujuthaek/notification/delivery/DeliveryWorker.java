@@ -165,7 +165,9 @@ public class DeliveryWorker {
       fail(group, e);
     } catch (RuntimeException e) {
       log.warn("발송 중 예상하지 못한 오류: userId={}, channel={}", first.userId(), first.channel(), e);
-      fail(group, new DeliveryException(e.getClass().getSimpleName(), false));
+      // 앞 차례에 받은 곳이 있으면(받을 곳의 표시) 그 사실을 잃지 않아요: 재시도를 다 써도 보낸 것으로 적어요
+      boolean deliveredBefore = channel.deliveredBefore(latest.address());
+      fail(group, new DeliveryException(e.getClass().getSimpleName(), null, null, deliveredBefore));
     }
   }
 
@@ -184,6 +186,16 @@ public class DeliveryWorker {
                   ids(group), code, retryAt.get(), e.remainingAddress().orElse(null)));
       log.warn(
           "발송 실패, 다시 보내요: userId={}, channel={}, error={}, attempts={}",
+          first.userId(),
+          first.channel(),
+          code,
+          attempts);
+    } else if (e.delivered()) {
+      // 기기 한 대라도 받았으면 보낸 것이에요(계약 web-push.draft.md). 남은 기기의 재시도를 다 써도 실패로 적지 않아요
+      // (2026-11-10 코드 검토: 받은 줄이 FAILED로 남아 발송 통계 실패 수가 부풀었음)
+      tx.executeWithoutResult(s -> deliveries.markSent(ids(group), null, schedule.now()));
+      log.info(
+          "일부 받을 곳은 받아 보낸 것으로 적어요: userId={}, channel={}, error={}, attempts={}",
           first.userId(),
           first.channel(),
           code,

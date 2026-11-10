@@ -75,6 +75,15 @@ def oldest_first(items: list[ListItem]) -> list[ListItem]:
     return sorted(items, key=lambda item: (item.posted_on or date.max, item.post_key))
 
 
+# 회차마다 바뀌는 목록 칸(줄 번호·전체 건수, 마이홈 받은 시각). 목록 줄(list_item)에 두면 같은 글도 회차마다 줄이 달라, 목록에 있는 LH 글이
+# 매시 모두 UPDATE됐어요(2026-11-10 재검토). 상세 조회·분류는 이 칸을 쓰지 않아요(전체 건수는 목록 API가 쪽을 넘길 때만 씀)
+PAGING_KEYS = frozenset({"RNUM", "ALL_CNT"})
+
+
+def steady_row(row: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in row.items() if key not in PAGING_KEYS}
+
+
 class LhSource(Source):
     code = "lh"
     name = "LH 한국토지주택공사"
@@ -146,7 +155,7 @@ class LhSource(Source):
             detail_url=row.get("DTL_URL"),
             list_status=row.get("PAN_SS") or None,
             deadline_on=parse_day(row.get("CLSG_DT")),
-            meta={**lh_meta(row), "_lhRow": row},
+            meta={**lh_meta(row), "_lhRow": steady_row(row)},
         )
 
     def _myhome_item(self, board: Board, pan_id: str, entries: list[dict[str, Any]]) -> ListItem:
@@ -160,7 +169,7 @@ class LhSource(Source):
             # 상태·마감일은 비워요. LH 목록에도 있는 공고의 LH 값을 마이홈 값으로 덮지 않게 (목록 갱신은 빈 값을 무시해요)
             list_status=None,
             deadline_on=None,
-            meta={"_myhome": entries},
+            meta={"_myhome": [{key: value for key, value in entry.items() if key != "fetchedAt"} for entry in entries]},
         )
 
     def _myhome_groups(self, myhome: MyHomeApi) -> dict[str, list[dict[str, Any]]]:

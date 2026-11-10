@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import kr.mujuthaek.api.TestcontainersConfiguration;
+import kr.mujuthaek.api.notice.NoticeFixtures;
 import kr.mujuthaek.api.notice.domain.IngestionOutcome;
 import kr.mujuthaek.api.notice.service.internal.NoticeIngestionService;
 import kr.mujuthaek.api.notification.service.internal.Recipient;
@@ -116,6 +117,28 @@ class NoticeNotificationRequestTest {
     JsonNode corrected = onlyRequest();
     assertThat(recipientIds(corrected)).containsExactlyInAnyOrder(busan.toString(), ME.toString());
     assertThat(corrected.toString()).contains("fcm/send/busan").doesNotContain("seocho");
+  }
+
+  @Test
+  void aMemberWhoChoseACityWithDistrictsGetsNoticesOfItsDistricts() {
+    // 2026-11-10 재검토: 관심 지역 수원시(41110)를 고른 회원에게 장안구(41111) 새 공고 알림이 빠졌음
+    Instant now = Instant.now();
+    UUID suwon = member();
+    UUID jangan = member();
+    UUID gwonseon = member();
+    interests.saveHousing(
+        suwon, new InterestRepository.Housing(List.of("41110"), false, List.of()), now);
+    interests.saveHousing(
+        jangan, new InterestRepository.Housing(List.of("41111"), false, List.of()), now);
+    interests.saveHousing(
+        gwonseon, new InterestRepository.Housing(List.of("41113"), false, List.of()), now);
+    ObjectNode payload = fixture();
+    NoticeFixtures.region((ObjectNode) payload.get("payload"), "41111");
+
+    apply(payload);
+
+    assertThat(inboxUsers("NOTICE:" + onlyNotice() + ":NEW"))
+        .containsExactlyInAnyOrder(suwon, jangan, ME);
   }
 
   private UUID member() {

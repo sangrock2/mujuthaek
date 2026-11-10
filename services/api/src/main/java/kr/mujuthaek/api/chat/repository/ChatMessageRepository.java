@@ -94,34 +94,37 @@ public class ChatMessageRepository {
         .findFirst();
   }
 
-  /** 방의 메시지를 최신순으로. before가 있으면 그 메시지보다 오래된 것만 (커서). */
-  public List<MessageRow> page(UUID noticeId, UUID before, int limit, UUID viewer) {
+  /**
+   * 방의 메시지를 최신순으로. before가 있으면 그 메시지보다 오래된 것만 (커서). noticeIds는 방 ID와 그 공고에 합쳐진 공고 ID들
+   * (ChatRoom.noticeIds).
+   */
+  public List<MessageRow> page(List<UUID> noticeIds, UUID before, int limit, UUID viewer) {
     return jdbc.query(
         SELECT
             + """
-             where m.notice_id = :notice and (cast(:before as uuid) is null or m.id < :before)
+             where m.notice_id in (:notices) and (cast(:before as uuid) is null or m.id < :before)
              order by m.id desc
              limit :limit
             """,
         new MapSqlParameterSource()
-            .addValue("notice", noticeId)
+            .addValue("notices", noticeIds)
             .addValue("before", before)
             .addValue("limit", limit)
             .addValue("viewer", viewer),
         ChatMessageRepository::row);
   }
 
-  /** SSE 재연결: after 다음에 만들어진 메시지를 오래된 순으로. */
-  public List<MessageRow> after(UUID noticeId, UUID after, int limit) {
+  /** SSE 재연결: after 다음에 만들어진 메시지를 오래된 순으로. noticeIds는 page와 같아요. */
+  public List<MessageRow> after(List<UUID> noticeIds, UUID after, int limit) {
     return jdbc.query(
         SELECT
             + """
-             where m.notice_id = :notice and m.id > :after
+             where m.notice_id in (:notices) and m.id > :after
              order by m.id
              limit :limit
             """,
         new MapSqlParameterSource()
-            .addValue("notice", noticeId)
+            .addValue("notices", noticeIds)
             .addValue("after", after)
             .addValue("limit", limit)
             .addValue("viewer", null),

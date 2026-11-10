@@ -52,6 +52,8 @@ class Table:
     lines: tuple[str, ...]  # 원문의 표 행 줄 그대로(「| a | b |」)
     columns: tuple[str, ...] = ()  # V1이 복원한 열 제목(없으면 빈 값)
     caption: str = ""  # 엑셀 시트 이름 등
+    # 행마다 원문 글자의 줄 번호(0부터). 검증기의 기준표 행(verify/consistency.CriteriaRow.at)과 이 표의 행을 맞출 때 씀(v2/criteria.py)
+    spots: tuple[int, ...] = field(default=(), compare=False, repr=False)
 
     @property
     def rows(self) -> tuple[tuple[str, ...], ...]:
@@ -95,6 +97,23 @@ class DocumentModel:
         if column >= len(cells):
             raise KeyError(ref)
         return cells[column]
+
+    def neighbors(self, ref: str, reach: int = 6) -> list[str]:
+        """id가 가리키는 행·줄 둘레의 원문 글자: 표 행·칸이면 같은 표의 위 행부터 가까운 순서로, 다음 아래 행. 줄이면 같은 쪽·묶음의
+        위 줄부터, 다음 아래 줄(각 reach개까지). 없는 id면 빈 목록."""
+        item = self._by_id.get(ref)
+        if isinstance(item, Line):
+            same = [line for line in self.lines if line.id.rsplit(".", 1)[0] == item.id.rsplit(".", 1)[0]]
+            at = same.index(item)
+            return [line.text for line in [*reversed(same[max(0, at - reach) : at]), *same[at + 1 : at + 1 + reach]]]
+        try:
+            table_id, row, _ = _split_cell_ref(ref)
+        except KeyError:
+            return []
+        table = self._by_id.get(table_id)
+        if not isinstance(table, Table) or row >= len(table.lines):
+            return []
+        return [*reversed(table.lines[max(0, row - reach) : row]), *table.lines[row + 1 : row + 1 + reach]]
 
     def exists(self, ref: str) -> bool:
         try:
@@ -251,10 +270,15 @@ class DocumentModel:
 def build(material: ExtractionMaterial) -> DocumentModel:
     """V1 입력 해석 결과 → 문서 모델. 그림 쪽은 첨부 PDF에서 찾습니다(V1 그림 판독과 같은 기준)."""
     document = parse(material.text, material.text_document_id)
-    pdfs = [file.document_id for file in material.files if file.file_type == "pdf"]
+    # 문서 번호는 원문에 글자가 들어간 PDF 순서로만 셉니다(parse·V1 표 번호와 같음). 첨부 PDF 전체로 세면 앞에 글자를 못 읽은 PDF(스캔본)가
+    # 있을 때 번호가 밀려, 안내의 그림 쪽 id가 다른 문서를 가리키거나 없는 id(d2.p1)가 됐어요(2026-11-10 재검토). 원문에 없는 PDF의 그림 쪽은
+    # 근거로 쓸 수 없어 안내에서 뺍니다(그 글자는 그림 판독 블록으로 들어와요)
+    pdfs = [str(page.get("documentId")) for page in material.pdf_pages]
     pages = []
     for document_id, _, _, page in image_targets(material):
-        order = pdfs.index(document_id) + 1 if document_id in pdfs else 1
+        if document_id not in pdfs:
+            continue
+        order = pdfs.index(document_id) + 1
         pages.append(f"p{page}" if order == 1 else f"d{order}.p{page}")
     return dataclasses.replace(document, picture_pages=tuple(pages))
 
@@ -270,14 +294,14 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
     def close() -> None:
         nonlocal table
         if table is not None and table["lines"]:
-            items.append(Table(table["id"], table["area"], tuple(table["lines"]), tuple(table["columns"]), table["caption"]))
+            items.append(Table(table["id"], table["area"], tuple(table["lines"]), tuple(table["columns"]), table["caption"], tuple(table["spots"])))
         table = None
 
     def unnamed(caption: str = "") -> dict[str, Any]:
         counters[f"{area}.t"] = counters.get(f"{area}.t", 0) + 1
-        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption}
+        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption, "spots": []}
 
-    for raw in text.split("\n"):
+    for at, raw in enumerate(text.split("\n")):
         line = raw.rstrip("\r")
         if not line.strip():
             close()
@@ -292,6 +316,11 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
             continue
         if block := BLOCK.match(line):
             close()
+            if block.group(1).startswith("첨부 ") and not block.group(1).startswith("첨부 엑셀") and last_page:
+                # 첨부 PDF 머리(「=== 첨부 공고문.pdf ===」)가 앞 PDF 쪽 뒤에 오면 다음 첨부예요. 쪽 번호가 줄 때만 보면 1쪽짜리 PDF 뒤의
+                # PDF가 같은 문서로 남아 두 PDF의 표 id가 겹치고(t1-1), 앞 표 인용이 뒤 표 글자로 풀렸어요(2026-11-10 코드 검토)
+                document += 1
+                last_page = 0
             kind = "x" if "엑셀" in block.group(1) else "g" if "그림 판독" in block.group(1) else "b"
             blocks[kind] = blocks.get(kind, 0) + 1
             area = f"{kind}{blocks[kind]}"
@@ -300,7 +329,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
         if marker := TABLE.match(line):
             close()
             prefix = "" if document == 1 else f"d{document}."
-            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": ""}
+            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": "", "spots": []}
             continue
         if sheet := SHEET.match(line):
             close()
@@ -316,6 +345,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
             if table is None:
                 table = unnamed()
             table["lines"].append(line)
+            table["spots"].append(at)
             continue
         close()
         counters[area] = counters.get(area, 0) + 1

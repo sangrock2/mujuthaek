@@ -21,7 +21,13 @@ pytestmark = pytest.mark.skipif(not DB_URL, reason="COLLECTOR_TEST_DB_URL이 없
 @pytest.fixture
 def pg():
     store = PostgresStore(DB_URL)
-    store.conn.execute("truncate outbox, raw_units, raw_texts, raw_files, raw_post_versions, raw_posts, crawl_runs, source_boards")
+    # cascade: 정책 수집 표(raw_policy_versions 등)가 crawl_runs를 가리켜 나열한 표만 비우면 실패했어요
+    store.conn.execute("truncate outbox, raw_units, raw_texts, raw_files, raw_post_versions, raw_posts, crawl_runs, source_boards cascade")
+    # 처음 수집 개수 제한(2026-10-27)은 고른 것으로 둬요: 고르기 전이면 새 글이 HELD라 이 시험들의 흐름(PENDING → DONE)이 돌지 않았어요
+    store.conn.execute(
+        "insert into intake_decisions (group_code, limit_count, kept, ignored) values ('HOUSING_LH', 0, 0, 0), ('HOUSING_OTHER', 0, 0, 0)"
+        " on conflict (group_code) do update set cutoff_on = null"
+    )
     yield store
     store.close()
 
@@ -82,3 +88,85 @@ def test_failed_post_and_expired_files(pg, client, file_store, settings, monkeyp
     assert len(expired) == 1
     pg.mark_file_deleted(expired[0][0])
     assert pg.expired_files(date(2030, 1, 1)) == []
+
+
+def test_flaky_attachment_carries_the_earlier_file_and_spent_posts_are_requeued(pg, client, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 첨부를 끝내 못 받으면 이전 버전 것을 이어 쓰고(원본·글자·보관 기한 그대로), 성공하면 실패 횟수를 되돌리고,
+    새벽 정정 확인은 횟수를 다 쓴 FAILED 글도 다시 열어요."""
+    import httpx
+
+    from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+
+    rows = ROWS[:1]
+    pages(client, rows)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    client.files["https://a.kr/f/1.pdf"] = httpx.ConnectError("연결 끊김")
+    client.pages["https://a.kr/view?id=1"] = "정정된 본문"
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch, recheck=True)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    assert pg.conn.execute("select status, attempts from raw_posts where post_key = '1'").fetchone() == ("FAILED", 2)
+    assert run(FakeSource(rows), client, pg, file_store, settings, monkeypatch).new_count == 1
+    files = pg.conn.execute(
+        "select v.version, f.s3_key, f.stored_until, t.text is not null from raw_files f join raw_post_versions v on v.id = f.version_id "
+        "left join raw_texts t on t.file_id = f.id order by v.version"
+    ).fetchall()
+    assert len(files) == 2 and files[0][1:] == files[1][1:] and files[1][3]
+    assert pg.conn.execute("select status, attempts from raw_posts where post_key = '1'").fetchone() == ("DONE", 0)
+
+    post_id = pg.find_post("dcco", "1").id
+    pg.conn.execute("update raw_posts set attempts = 2 where id = %s", (post_id,))
+    pg.mark_done(post_id)
+    assert pg.conn.execute("select attempts from raw_posts where id = %s", (post_id,)).fetchone() == (0,)
+    pg.conn.execute("update raw_posts set status = 'FAILED', attempts = %s where id = %s", (MAX_ATTEMPTS, post_id))
+    assert pg.requeue_open_posts("dcco", TODAY, 60) == 1
+    assert pg.conn.execute("select status from raw_posts where id = %s", (post_id,)).fetchone() == ("PENDING",)
+
+
+def test_policy_flaky_attachment_carries_the_earlier_file(pg, monkeypatch):
+    """2026-11-10 재검토: 정책 수집도 첨부를 끝내 못 받으면 이전 버전 것을 원본·글자 그대로 이어 쓰고(latest_files), 성공하면 횟수를 되돌려요."""
+    import httpx
+
+    from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+    from mujuthaek_collector.sources.policy import pipeline as policy_pipeline
+    from mujuthaek_collector.sources.policy.config import PolicySettings
+    from mujuthaek_collector.sources.policy.store import PostgresPolicyStore
+    from tests.fakes import FakeClient, MemoryFileStore
+    from tests.test_policy_pipeline import KEY, central
+    from tests.test_policy_pipeline import run as policy_run
+
+    monkeypatch.setattr(policy_pipeline, "extract_text", lambda data, ext: (f"{ext} 문서 글자 " * 30, f"{ext.upper()} 텍스트"))
+    store = PostgresPolicyStore(DB_URL)
+    try:
+        store.conn.execute("truncate raw_policy_texts, raw_policy_files, raw_policy_versions, raw_policies cascade")
+        store.conn.execute(
+            "insert into intake_decisions (group_code, limit_count, kept, ignored) values ('POLICY', 0, 0, 0)"
+            " on conflict (group_code) do update set cutoff_on = null"
+        )
+        api, web, files = FakeClient(), FakeClient(), MemoryFileStore()
+        settings = PolicySettings(data_go_kr_key=KEY, youth_key=KEY, detail_limit=20, api_delay_seconds=0)
+        source = central(api, web)
+        url = "https://www.bokjiro.go.kr/files/form/청년전세임대_안내문.pdf"
+        assert policy_run(source, api, web, store, files, settings).new_count == 1
+        web.files[url] = httpx.ConnectError("연결 끊김")
+        store.conn.execute("update raw_policies set status = 'PENDING'")  # 목록이 바뀌어 다시 열 때처럼
+        for _ in range(MAX_ATTEMPTS - 1):
+            assert policy_run(source, api, web, store, files, settings).new_count == 0
+        assert store.conn.execute("select status, attempts from raw_policies").fetchone() == ("FAILED", MAX_ATTEMPTS - 1)
+        [earlier] = store.latest_files(store.conn.execute("select id from raw_policies").fetchone()[0])
+        assert earlier.text and earlier.found_on == "API" and earlier.s3_key
+        assert policy_run(source, api, web, store, files, settings).new_count == 0  # 이전 첨부를 이어 써 내용이 같음
+        assert store.conn.execute("select status, attempts, latest_version from raw_policies").fetchone() == ("DONE", 0, 1)
+    finally:
+        store.close()
+
+
+def test_follow_up_listed_before_its_original_is_linked(pg, client, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 목록이 최신 글 먼저라 원공고보다 먼저 등록된 후속 안내가 SKIPPED로 남았어요. 목록을 다 읽은 뒤 다시 이어요(실제 표)."""
+    rows = [
+        ("52", "2026년 행복주택 입주자 모집공고(2026. 10. 1.) 서류심사 대상자 발표", date(2026, 10, 10)),
+        ("51", "2026년 행복주택 입주자 모집공고", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    linked = pg.conn.execute("select f.status, p.post_key from raw_posts f join raw_posts p on p.id = f.parent_post_id where f.post_key = '52'").fetchone()
+    assert linked == ("DONE", "51")

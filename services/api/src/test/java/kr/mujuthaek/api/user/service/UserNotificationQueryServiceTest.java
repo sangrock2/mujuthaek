@@ -123,6 +123,19 @@ class UserNotificationQueryServiceTest {
   }
 
   @Test
+  void settingsOfAVeryLargeAudienceAreReadInChunks() {
+    // 2026-11-10 코드 검토: 대상 전부를 IN 목록 하나에 넣어 6만 5천여 명부터 쿼리가 실패해 아무에게도 알림이 가지 않았음
+    settings.save(mapo, new Settings(true, true, false, true, true, true), Instant.now());
+    List<UUID> audience = new java.util.ArrayList<>();
+    for (int i = 0; i < 70_000; i++) {
+      audience.add(UUID.randomUUID());
+    }
+    audience.add(mapo);
+    Map<UUID, NotificationPreference> prefs = query.preferences(audience);
+    assertThat(prefs.get(mapo).enabled("DEADLINE_D1")).isFalse();
+  }
+
+  @Test
   void unknownFieldsHaveNoAudienceAndEachTypeMapsToItsSwitch() {
     assertThat(query.newNoticeAudience("ETC", List.of("11440"), true, null)).isEmpty();
     assertThat(query.newBenefitAudience("ETC", "NATIONWIDE", List.of())).isEmpty();

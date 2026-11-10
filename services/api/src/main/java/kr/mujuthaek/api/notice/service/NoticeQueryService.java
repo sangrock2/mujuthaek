@@ -532,11 +532,15 @@ public class NoticeQueryService {
         row.applyStart(),
         row.applyEnd(),
         row.regionCodes(),
-        row.detailUrl());
+        row.detailUrl(),
+        row.applyNote());
   }
 
-  /** 정책 신청 상태 (판정 목록 openPolicies와 같은 규칙: 마감일을 모르면 상시일 때만 열림). */
-  private static String policyStatus(NoticeQueries.PolicySummaryRow row, LocalDate today) {
+  /**
+   * 정책 신청 상태 (판정 목록 openPolicies와 같은 규칙: 마감일을 모르면 상시이거나 신청 기간 안내(「예산 소진 시까지」)가 있을 때만 열림). 안내만 있는
+   * 정책을 UNKNOWN으로 두어, openPolicies에는 열린 정책인데 새 정책 알림이 가지 않았어요(2026-11-10 코드 검토).
+   */
+  static String policyStatus(NoticeQueries.PolicySummaryRow row, LocalDate today) {
     if (row.applyEnd() != null && row.applyEnd().isBefore(today)) {
       return "CLOSED";
     }
@@ -544,7 +548,10 @@ public class NoticeQueryService {
       return "UPCOMING";
     }
     if (row.applyEnd() == null) {
-      return row.applyAlways() ? "ALWAYS" : "UNKNOWN";
+      if (row.applyAlways()) {
+        return "ALWAYS";
+      }
+      return row.applyNote() != null ? "APPLYING" : "UNKNOWN";
     }
     return "APPLYING";
   }
@@ -552,6 +559,15 @@ public class NoticeQueryService {
   /** 공고 요약 하나 (findSummaries와 같은 규칙). 숨김·공개 전·없는 공고면 빈 값. */
   public java.util.Optional<NoticeSummary> findSummary(UUID noticeId) {
     return java.util.Optional.ofNullable(findSummaries(List.of(noticeId)).get(noticeId));
+  }
+
+  /**
+   * 이 공고(남은 공고)에 합쳐진 공고 ID들. 합쳐도 관심 등록·채팅 메시지는 합쳐진 공고 ID에 그대로 남아요(합치기를 되돌릴 수 있게 옮기지 않음). 그래서 알림
+   * 대상·채팅 목록은 남은 공고 ID와 이 ID들을 함께 봐요 (2026-11-10 코드 검토: 남은 공고 ID로만 찾아 합쳐진 공고의 관심 회원이 마감·정정 알림을 못 받고
+   * 채팅 기록이 사라졌음).
+   */
+  public List<UUID> mergedFrom(UUID noticeId) {
+    return queries.mergedFrom(noticeId);
   }
 
   /**

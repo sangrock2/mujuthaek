@@ -93,6 +93,55 @@ public final class NoticeContent {
     return changed;
   }
 
+  /** 정정이 통째로 바꾸면 안 되는 핵심 섹션(공급·자격·위치). */
+  private static final List<String> CORE_SECTIONS =
+      List.of("supplyGroups", "eligibility", "locations");
+
+  /**
+   * 지금 공개된 버전에는 쓸 항목이 있는데 정정 결과에는 없는(비었거나 모두 보류) 핵심 섹션. 「당첨자 발표일 변경」 같은 짧은 정정 안내는 바뀐 일정만 있어, 통째로 새
+   * 버전으로 바꾸면 공급·자격·위치가 사라지고 원공고로 되돌릴 수도 없었어요(2026-11-10 재검토).
+   */
+  public static List<String> droppedCoreSections(
+      JsonNode previousSnapshot, JsonNode previousHeldItems, ExtractionEvent current) {
+    return droppedCoreSections(
+        previousSnapshot, previousHeldItems, current.notice(), current.heldItems());
+  }
+
+  static List<String> droppedCoreSections(
+      JsonNode previousSnapshot, JsonNode previousHeldItems, JsonNode detail, JsonNode heldItems) {
+    List<String> dropped = new ArrayList<>();
+    for (String section : CORE_SECTIONS) {
+      if (usable(previousSnapshot.path(section), previousHeldItems, section) > 0
+          && (detail == null || usable(detail.path(section), heldItems, section) == 0)) {
+        dropped.add(section);
+      }
+    }
+    return dropped;
+  }
+
+  /** 섹션 항목 중 통째로 보류하지 않은 것의 수(칸 하나만 보류한 항목은 셈). */
+  private static int usable(JsonNode items, JsonNode heldItems, String section) {
+    if (!items.isArray()) {
+      return 0;
+    }
+    int count = 0;
+    for (int i = 0; i < items.size(); i++) {
+      String pointer = "/" + section + "/" + i;
+      boolean whole = false;
+      for (JsonNode held : heldItems == null ? List.<JsonNode>of() : heldItems) {
+        String target = held.path("target").asString("");
+        if (!target.isEmpty() && (pointer.equals(target) || pointer.startsWith(target + "/"))) {
+          whole = true;
+          break;
+        }
+      }
+      if (!whole) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   /** 비교에 쓰는 부분. 받을 때마다 달라지는 칸은 빼요. */
   private static Map<String, JsonNode> comparableParts(ExtractionEvent event) {
     Map<String, JsonNode> parts = new TreeMap<>();
@@ -331,12 +380,22 @@ public final class NoticeContent {
     return new Source(Source.NOTICE, null, null, null, null);
   }
 
-  /** 후속 안내의 일정 (상세 공고의 schedules 그대로). */
+  /**
+   * 후속 안내의 일정 (상세 공고의 schedules에서 보류한 일정을 뺀 것). 후속 안내는 일정만 저장하고 보류 항목(heldItems)은 두지 않아서, 그대로 두면
+   * 보류한 일정이 확정처럼 보였어요(2026-11-10 코드 검토). 본 공고 상세도 보류한 일정은 보여 주지 않아요.
+   */
   public static JsonNode schedules(ExtractionEvent event) {
+    var out = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
     JsonNode schedules = event.notice() == null ? null : event.notice().path("schedules");
-    return schedules != null && schedules.isArray()
-        ? schedules
-        : tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+    if (schedules == null || !schedules.isArray()) {
+      return out;
+    }
+    for (int i = 0; i < schedules.size(); i++) {
+      if (!held(event.heldItems(), "/schedules/" + i)) {
+        out.add(schedules.get(i));
+      }
+    }
+    return out;
   }
 
   /** 상세 공고의 공급 기관·공급 유형 (목록 표시·필터용). */

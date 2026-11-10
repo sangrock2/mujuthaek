@@ -29,6 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -183,6 +184,18 @@ class SecurityIntegrationTest {
     mvc.perform(
             get("/api/admin/reviews/queue")
                 .param("kinds", "ANY")
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isForbidden());
+    // 2026-11-10 코드 검토: kinds를 두 번 보내면 권한은 첫 값만 보고 컨트롤러는 둘 다 받아, 공고 검수 대기열까지 보였음
+    mvc.perform(
+            get("/api/admin/reviews/queue")
+                .param("kinds", "BENEFIT", "NOTICE")
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isForbidden());
+    // 재검토: 「kinds=,」는 빈 목록이라 권한 검사를 그냥 지나갔음(서비스가 400으로 막음)
+    mvc.perform(
+            get("/api/admin/reviews/queue")
+                .param("kinds", ",")
                 .header("Authorization", bearer(claimsAdmin)))
         .andExpect(status().isForbidden());
 
@@ -537,27 +550,56 @@ class SecurityIntegrationTest {
     mvc.perform(post("/api/users/me/withdrawal")).andExpect(status().isUnauthorized());
   }
 
+  /** 발급하는 티켓과 같은 모양(43자 URL Base64). */
+  private static String ticketLike(char c) {
+    return String.valueOf(c).repeat(43);
+  }
+
   @Test
   void reauthStartForcesLoginAndMarksSession() throws Exception {
+    String ticket1 = ticketLike('a');
     var naver =
-        mvc.perform(get("/oauth2/authorization/naver").param("withdraw", "ticket-1"))
+        mvc.perform(get("/oauth2/authorization/naver").param("withdraw", ticket1))
             .andExpect(status().is3xxRedirection())
             .andReturn();
     assertThat(naver.getResponse().getRedirectedUrl())
         .contains("auth_type=reauthenticate")
-        .doesNotContain("ticket-1");
-    assertThat(WithdrawalSession.ticket(naver.getRequest())).contains("ticket-1");
+        .doesNotContain(ticket1);
+    assertThat(WithdrawalSession.ticket(naver.getRequest())).contains(ticket1);
 
     var kakao =
-        mvc.perform(get("/oauth2/authorization/kakao").param("withdraw", "ticket-2")).andReturn();
+        mvc.perform(get("/oauth2/authorization/kakao").param("withdraw", ticketLike('b')))
+            .andReturn();
     assertThat(kakao.getResponse().getRedirectedUrl()).contains("prompt=login");
     var google =
-        mvc.perform(get("/oauth2/authorization/google").param("withdraw", "ticket-3")).andReturn();
+        mvc.perform(get("/oauth2/authorization/google").param("withdraw", ticketLike('c')))
+            .andReturn();
     assertThat(google.getResponse().getRedirectedUrl()).contains("prompt=select_account");
 
     var normal = mvc.perform(get("/oauth2/authorization/kakao")).andReturn(); // 일반 로그인은 그대로
     assertThat(normal.getResponse().getRedirectedUrl()).doesNotContain("prompt=");
     assertThat(WithdrawalSession.ticket(normal.getRequest())).isEmpty();
+  }
+
+  @Test
+  void reauthStartWithAMalformedTicketMakesNoSession() throws Exception {
+    // 2026-11-10 코드 검토: 인증 없이 부르는 로그인 시작이 티켓을 길이 검사 없이 세션에 넣어, 큰 값(폼 본문 2MB까지)을 되풀이해 메모리를 채울 수 있었음
+    for (String bad :
+        new String[] {"x".repeat(100_000), "ticket-1", ticketLike('a') + "=", "가".repeat(43)}) {
+      var result =
+          mvc.perform(get("/oauth2/authorization/kakao").param("withdraw", bad))
+              .andExpect(status().isNotFound())
+              .andReturn();
+      assertThat(result.getRequest().getSession(false)).isNull();
+    }
+    var posted =
+        mvc.perform(
+                post("/oauth2/authorization/kakao")
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .content("withdraw=" + "y".repeat(200_000)))
+            .andExpect(status().is4xxClientError()) // 로그인 시작이 아니라 없는 주소(POST라 404나 405)
+            .andReturn();
+    assertThat(posted.getRequest().getSession(false)).isNull();
   }
 
   @Test

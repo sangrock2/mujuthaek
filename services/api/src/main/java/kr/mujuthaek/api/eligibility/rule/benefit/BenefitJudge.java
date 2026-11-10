@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import kr.mujuthaek.api.eligibility.rule.Applicant;
 import kr.mujuthaek.api.eligibility.rule.Bands;
 import kr.mujuthaek.api.eligibility.rule.IncomeBenchmarks;
@@ -283,10 +284,16 @@ public final class BenefitJudge {
     return item(c, s, s == UNKNOWN ? Bands.BOUNDARY : reason(s, "자산이 기준을 넘어요"), List.of());
   }
 
-  /** 사는 곳이 그 지역이면 충족. 아니면 이사하면 받을 수 있어서 확인 필요예요 (찾아볼 지역의 혜택을 보여 주니까요). */
+  /**
+   * 사는 곳이 그 지역이면 충족. 아니면 이사하면 받을 수 있어서 확인 필요예요 (찾아볼 지역의 혜택을 보여 주니까요). 일반구가 있는 시의 혜택은 그 구 주민도 사는
+   * 곳이에요(재검토: 장안구 주민에게 수원시 혜택이 「이사하면 받을 수 있어요」로 나왔음).
+   */
   private static Item residence(Condition c, Applicant a) {
     List<String> regions = strings(c, "regions");
-    if (a.regionCode() != null && regions.stream().anyMatch(a.regionCode()::startsWith)) {
+    if (a.regionCode() != null
+        && regions.stream()
+            .anyMatch(
+                r -> a.regionCode().startsWith(r) || CityDistricts.inCity(r, a.regionCode()))) {
       return item(c, MET, null, List.of());
     }
     return unknown(c, "이 지역으로 이사하면 받을 수 있어요");

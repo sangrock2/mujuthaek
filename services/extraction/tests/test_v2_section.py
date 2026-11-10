@@ -12,6 +12,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from test_pipeline import answers, run
 from test_v2_contract import sparse
+from test_v2_criteria import condition, criteria_text
 from test_v2_document import TEXT, ToolCallingFake
 from test_v2_llm import FlakyFake
 
@@ -25,6 +26,7 @@ from mujuthaek_extraction.v2.agents.cut import CutCallMiddleware, complete_items
 from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.contract import NOTICE_SCOPE
+from mujuthaek_extraction.v2.criteria import criteria_chunks
 from mujuthaek_extraction.v2.document import parse
 from mujuthaek_extraction.v2.llm import retry
 from mujuthaek_extraction.v2.tools.typed import add_tool
@@ -246,7 +248,6 @@ def test_format_errors_that_make_the_assembler_drop_items_or_the_whole_answer_ar
 
 
 def test_section_agents_share_one_prefix_add_items_with_typed_tools_and_the_notice_is_published_like_v1(monkeypatch):
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     recorded = answers()
     # 구조(공고·위치·공급)는 V1 방식(공급표 코드 + 한 번 호출)이라 시험에서는 그 결과를 꽂음
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
@@ -435,7 +436,6 @@ def test_verification_separates_defects_to_fix_from_warnings_to_check():
 
 def test_an_agent_that_keeps_failing_stops_alone_and_the_notice_goes_on(monkeypatch):
     # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤 → 재시도로도 안 되면 그 담당만 멈추고 섹션은 사람 확인으로
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     monkeypatch.setattr(retry, "FIRST_DELAY_SECONDS", 0.0)
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
@@ -500,7 +500,6 @@ def test_finishing_with_an_omission_warning_left_is_sent_back_once_with_only_tho
 
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):
     # 2026-11-07 유료 확인 dudc-8934: 자격 담당이 기준표 가산 행을 넣다 8번째 호출에서 끊겼는데 범위가 비어 「다 넣음」이 되어 항목 13개가 빠진 채 게시됨
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     assert section.MODEL_CALLS["eligibility"] == 12 > section.MAX_MODEL_CALLS  # 자격 담당만 상한이 큼(기준표 행 예외)
     monkeypatch.setattr(section, "MODEL_CALLS", {"eligibility": 2})
     recorded = answers()
@@ -588,6 +587,36 @@ def test_evidence_written_outside_the_item_is_tucked_into_the_item_it_belongs_to
     assert nested["added"] == ["lost"] and "하위 칸의 근거(p1.2)" in nested["note"]
     assert refused["error"] == "BAD_ARGS" and forgot["added"] == [] and "evidence 칸이 비었습니다" in forgot["failed"][0]["errors"][0]
     assert {row["id"]: row["evidence"] for row in draft.items["eligibility"]} == {"first": ["p1.1"], "top": ["p1.1"], "lost": ["p1.2"]}
+
+
+def test_content_free_junk_at_the_top_of_the_arguments_is_ignored_but_real_content_is_still_refused():
+    # 2026-11-10 23건 유료 jbdc-16011: 자격 담당 인자가 「…}]},"evidence:["],"note":"."}」처럼 끝나 맨 위 군더더기 칸(note·oops·x·garbage)
+    # 하나로 호출 전체가 거절됨(12차례 중 4차례, 첫 차례 항목 29개 포함) → 호출 상한에 끊김
+    text = "\n".join(["--- 1쪽 ---", "■ 소득 : 70% 이하", "- 자녀별 가산 : 1명 10%p, 2명 이상 20%p"])
+    income = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][2].items() if k not in ("quoteRefs", "originalText")})
+    bare = {k: v for k, v in income["exceptions"][0].items() if k != "originalText"}
+
+    def criterion(item_id, **more):
+        return {**income, "id": item_id, "exceptions": [{**bare, "id": f"{item_id}-x", "evidence": ["p1.2"]}], **more}
+
+    turns = [
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("first", evidence=["p1.1"]), criterion("lost"), "evidence:["], note=".")]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("count", evidence=["p1.1"])], garbage=1, x="x")]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("scoped", evidence=["p1.1"])], scope={"level": "NOTICE"})]),
+        AIMessage(content="", tool_calls=[call("add_eligibility", items=[criterion("noted", evidence=["p1.1"])], note="소득 기준은 표 3을 따름")]),
+        AIMessage(content="끝"),
+    ]
+    draft = SectionDraft(("eligibility",))
+    context = SectionContext(document=parse(text), draft=draft, documents=("text",))
+    agent = create_agent(ToolCallingFake(messages=iter(turns)), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], context_schema=SectionContext)
+    result = agent.invoke({"messages": [HumanMessage("자격 담당")]}, context=context)
+    tucked, ignored, scoped, noted = [json.loads(m.content) for m in result["messages"] if m.type == "tool"]
+    assert tucked["added"] == ["first", "lost"] and "알 수 없는 칸(note)은 담긴 것이 없어 무시했습니다" in tucked["note"]
+    assert "하위 칸의 근거(p1.2)" in tucked["note"]  # 「evidence:[」 바로잡기도 그대로
+    assert ignored["added"] == ["count"] and "(garbage, x)" in ignored["note"]
+    assert scoped["error"] == "BAD_ARGS" and "scope" in scoped["message"]  # 내용이 있는 모르는 칸은 예전처럼 거절
+    assert noted["error"] == "BAD_ARGS" and "note" in noted["message"]
+    assert [row["id"] for row in draft.items["eligibility"]] == ["first", "lost", "count"]
 
 
 def test_a_refused_fix_of_an_added_item_keeps_it_and_says_not_to_remove_it():
@@ -732,7 +761,6 @@ def test_an_add_call_cut_off_at_the_output_limit_keeps_the_items_that_came_whole
 
 def test_an_agent_cut_off_without_an_add_call_to_keep_sends_its_section_to_review(monkeypatch):
     # 넣기가 아닌 호출이 잘리면 살릴 것이 없어 실행할 호출 없이 끝남: 끝내기 전에 멈춘 담당처럼 섹션을 사람 확인으로
-    monkeypatch.setenv("EXTRACTION_ENGINE", "v2")
     recorded = answers()
     monkeypatch.setattr(graph, "AGENTS", {"structure": lambda spec, state, rt: ([json.loads(recorded["structure"][0])], [])})
     rows = [{**sparse({k: v for k, v in row.items() if k != "quoteRefs"}), "evidence": ["p1.1"]} for row in ai_part(example("housing"))["eligibility"]]
@@ -1040,58 +1068,77 @@ def test_the_resolver_rewrites_only_warned_items_and_its_draft_is_used_only_when
     assert resolve_with() == (resolve_with()[0], None, {})  # 경고가 없으면 부르지 않음
 
 
-def test_the_resolver_looks_at_each_warned_item_in_its_own_conversation_at_the_same_time(monkeypatch):
-    # 2026-11-07 3건 표본 dcco-24812: 경고 항목 3개를 한 대화에서 고쳐 첫 차례 출력 8천 토큰·55초, 모두 112초가 자격 담당 뒤에 더해짐.
-    # 항목마다 따로 동시에 보고, 항목마다 고른 결과만 합침(한 항목의 해결 담당이 경고를 없애려고 항목을 빼도 다른 항목의 고침은 씀)
+def _text_only(document):
+    """경고를 받은 자격 항목(조건식 없이 글로 남김)과 그 항목을 조건식으로 고친 규칙."""
     age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
-    document = parse(TEXT)
-    text_only = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
-    text_only["originalText"] = document.text("p1.2")
+    row = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
+    row["originalText"] = document.text("p1.2")
+    return row, {**age["rule"], "reason": None}
 
-    def issues(spec, draft, state, rt, documents):
-        return [
-            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": "조건식 없이 글로만 남겼습니다."}
-            for i, row in enumerate(draft.items["eligibility"])
-            if row["rule"]["status"] == "UNSTRUCTURED"
-        ]
 
-    replies = {
-        "age": [call("update_item", section="eligibility", item_id="age", changes={"rule": {**age["rule"], "reason": None}})],
-        "age2": [call("remove_item", section="eligibility", item_id="age2")],
-    }
+def resolver_agents(replies, conversations, tasks):
+    """해결 담당 과제 글에 든 항목 id로 답을 고르는 가짜 모델의 에이전트(동시에 도는 대화마다 다른 답). replies의 앞 id부터 맞춰 봅니다."""
 
     class ByItem(ToolCallingFake):
-        """해결 담당 과제 글에 든 항목 id로 답을 고르는 가짜 모델(동시에 도는 대화마다 다른 답)."""
-
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             task = next(str(m.content) for m in messages if isinstance(m, HumanMessage) and "해결 담당" in str(m.content))
+            tasks.append(task)
             item = next(item for item in replies if f'"id": "{item}"' in task)
             reply = AIMessage(content="", tool_calls=[*replies[item], call("finish", summary="봤어요.")])
             return ChatResult(generations=[ChatGeneration(message=reply)])
-
-    conversations = []
 
     def agent(model, name, state, documents, middleware):
         conversations.append(name)
         tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
         return create_agent(ByItem(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
 
-    monkeypatch.setattr(section, "_agent", agent)
+    return agent
+
+
+def test_items_with_the_same_warning_are_resolved_in_one_conversation_and_other_warnings_in_their_own(monkeypatch):
+    # 2026-11-10 유료 확인 jbdc-16011: 경고 21개 중 14개가 같은 원문 값(110%)을 가리킴. 항목마다 따로 본 대화 14개 중 하나가 그 기준을 넣자
+    # 나머지 13개 경고도 함께 풀림(해결 담당 51호출 $0.136) → 같은 경고는 한 대화에서 봄. 묶음마다 고른 결과만 합침
+    document = parse(TEXT)
+    age, structured = _text_only(document)
+    suspected = "기준값 바로 뒤에 다른 기준값(110%)이 있는데 예외로 넣지 않았습니다. 가산·완화 기준이 빠졌는지 확인하세요 「{}」"
+
+    def issues(spec, draft, state, rt, documents):
+        rows = draft.items["eligibility"]
+        shared = all(row["rule"]["status"] == "UNSTRUCTURED" for row in rows if row["id"] in ("age", "age2"))
+        found = []
+        for i, row in enumerate(rows):
+            if row["id"] in ("age", "age2") and shared:  # 한 항목이 그 값을 쓰면 같은 값을 가리키던 경고가 함께 풀림
+                found.append({"code": "EXCEPTION_SUSPECTED", "target": f"/eligibility/{i}", "item": row["id"], "description": suspected.format(row["id"])})
+            if row["id"] == "age3" and row["rule"]["status"] == "UNSTRUCTURED":
+                found.append(
+                    {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": "age3", "description": "조건식 없이 글로만 남겼습니다."}
+                )
+        return found
+
+    replies = {
+        "age": [call("update_item", section="eligibility", item_id="age", changes={"rule": structured})],
+        "age3": [call("remove_item", section="eligibility", item_id="age3")],  # 경고를 없애려고 뺌: 쓰지 않음
+    }
+    conversations, tasks = [], []
+    monkeypatch.setattr(section, "_agent", resolver_agents(replies, conversations, tasks))
     monkeypatch.setattr(section, "_issues", issues)
-    draft = SectionDraft(("eligibility",), items={"eligibility": [dict(text_only), {**text_only, "id": "age2"}]})
+    draft = SectionDraft(("eligibility",), items={"eligibility": [dict(age), {**age, "id": "age2"}, {**age, "id": "age3"}]})
     spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=1000)
     rt = SimpleNamespace(models=SimpleNamespace(budget=None))
     resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
-    assert conversations == ["resolver", "resolver"]  # 항목마다 새 대화
-    assert record["adopted"] and (record["targets"], record["before"], record["after"]) == (2, 2, 1)
-    assert {item: run["adopted"] for item, run in record["items"].items()} == {"age": True, "age2": False}
-    assert [(row["id"], row["rule"]["status"]) for row in resolved.items["eligibility"]] == [("age", "STRUCTURED"), ("age2", "UNSTRUCTURED")]
-    assert [row["rule"]["status"] for row in draft.items["eligibility"]] == ["UNSTRUCTURED", "UNSTRUCTURED"]  # 담당 초안은 그대로
+    assert conversations == ["resolver", "resolver"] and record["runs"] == 2  # 경고 묶음마다 새 대화(동시에)
+    group = next(task for task in tasks if '"id": "age2"' in task)
+    assert '"id": "age"' in group and "같은 경고(같은 원문 값)" in group and "적용되지 않는 항목은 그대로" in group
+    assert {item: (run["group"], run["adopted"]) for item, run in record["items"].items()} == {"age": (["age", "age2"], True), "age3": (["age3"], False)}
+    assert record["adopted"] and (record["targets"], record["before"], record["after"]) == (3, 3, 1) and "left" not in record
+    statuses = [(row["id"], row["rule"]["status"]) for row in resolved.items["eligibility"]]
+    assert statuses == [("age", "STRUCTURED"), ("age2", "UNSTRUCTURED"), ("age3", "UNSTRUCTURED")]
+    assert [row["rule"]["status"] for row in draft.items["eligibility"]] == ["UNSTRUCTURED"] * 3  # 담당 초안은 그대로
 
 
-def test_the_resolver_is_on_by_default_and_runs_three_items_at_a_time_with_a_smaller_output_limit(monkeypatch):
+def test_the_resolver_is_on_by_default_and_runs_three_conversations_at_a_time_up_to_six(monkeypatch):
     # 2026-11-08 유료 확인 dudc-8934: 경고 항목 12개를 한꺼번에 자격 출력 한도(3.6만)로 불러, 호출마다 최악 비용을 미리 잡는 예산이 공고
-    # 상한에 닿아 10개가 시작도 못 함. 사용자 결정으로 기본 켬(false로 끔)
+    # 상한에 닿아 10개가 시작도 못 함. 사용자 결정으로 기본 켬(false로 끔). 2026-11-10: 대화는 RESOLVER_RUNS개까지(남은 경고는 사람 확인)
     monkeypatch.delenv(section.RESOLVER_ENV, raising=False)
     assert section.resolver_on()
     monkeypatch.setenv(section.RESOLVER_ENV, "FALSE")
@@ -1099,36 +1146,24 @@ def test_the_resolver_is_on_by_default_and_runs_three_items_at_a_time_with_a_sma
     monkeypatch.setenv(section.RESOLVER_ENV, "true")
     assert section.resolver_on()
 
-    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k != "quoteRefs"})
     document = parse(TEXT)
-    text_only = {**age, "rule": {"status": "UNSTRUCTURED", "reason": "글로 남겨요.", "expression": None}, "evidence": ["p1.2"]}
-    text_only["originalText"] = document.text("p1.2")
-    names = [f"age{n}" for n in range(5)]
+    age, structured = _text_only(document)
+    names = [f"age{n}" for n in range(8)]
 
-    def issues(spec, draft, state, rt, documents):
+    def issues(spec, draft, state, rt, documents):  # 항목마다 다른 경고
         return [
-            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": "조건식 없이 글로만 남겼습니다."}
+            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": f"글로만 남겼습니다({row['id']})."}
             for i, row in enumerate(draft.items["eligibility"])
             if row["rule"]["status"] == "UNSTRUCTURED"
         ]
 
-    class ByItem(ToolCallingFake):
-        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-            task = next(str(m.content) for m in messages if isinstance(m, HumanMessage) and "해결 담당" in str(m.content))
-            item = next(name for name in names if f'"id": "{name}"' in task)
-            fix = call("update_item", section="eligibility", item_id=item, changes={"rule": {**age["rule"], "reason": None}})
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[fix, call("finish", summary="봤어요.")]))])
-
-    def agent(model, name, state, documents, middleware):
-        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
-        return create_agent(ByItem(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
-
-    workers, limits = [], []
+    replies = {name: [call("update_item", section="eligibility", item_id=name, changes={"rule": structured})] for name in names}
+    workers, limits, conversations, tasks = [], [], [], []
     pool = section.ThreadPoolExecutor
     monkeypatch.setattr(section, "ThreadPoolExecutor", lambda max_workers: workers.append(max_workers) or pool(max_workers=max_workers))
-    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_agent", resolver_agents(replies, conversations, tasks))
     monkeypatch.setattr(section, "_issues", issues)
-    draft = SectionDraft(("eligibility",), items={"eligibility": [{**text_only, "id": name} for name in names]})
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{**age, "id": name} for name in names]})
     spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=36_000)
     rt = SimpleNamespace(models=SimpleNamespace(budget=None))
 
@@ -1136,5 +1171,383 @@ def test_the_resolver_is_on_by_default_and_runs_three_items_at_a_time_with_a_sma
         limits.append(max_output_tokens)
 
     resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), chat, [])
-    assert workers == [section.RESOLVER_WORKERS] == [3] and limits == [section.RESOLVER_OUTPUT_TOKENS] * 5
-    assert record["adopted"] and [row["rule"]["status"] for row in resolved.items["eligibility"]] == ["STRUCTURED"] * 5  # 다섯 항목 모두 고침
+    assert workers == [section.RESOLVER_WORKERS] * 2 == [3, 3] and limits == [section.RESOLVER_OUTPUT_TOKENS] * 6
+    assert record["runs"] == section.RESOLVER_RUNS == 6 and record["left"] == [["age6"], ["age7"]]
+    assert [row["rule"]["status"] for row in resolved.items["eligibility"]] == ["STRUCTURED"] * 6 + ["UNSTRUCTURED"] * 2
+
+
+def test_after_each_round_the_resolver_skips_warnings_that_earlier_fixes_cleared(monkeypatch):
+    # 차례마다 고친 것을 합쳐 다시 검증: 앞 차례 고침으로 풀린 경고는 보지 않음(같은 원문 값을 여러 항목이 가리키던 jbdc-16011처럼)
+    document = parse(TEXT)
+    age, structured = _text_only(document)
+    names = ["age0", "age1", "age2", "age3"]
+
+    def issues(spec, draft, state, rt, documents):
+        rows = draft.items["eligibility"]
+        found = [
+            {"code": "CRITERION_NOT_STRUCTURED", "target": f"/eligibility/{i}/rule", "item": row["id"], "description": f"글로만 남겼습니다({row['id']})."}
+            for i, row in enumerate(rows)
+            if row["id"] != "age3" and row["rule"]["status"] == "UNSTRUCTURED"
+        ]
+        if rows[0]["rule"]["status"] == "UNSTRUCTURED":  # age0을 고치면 풀리는 age3 경고
+            found.append({"code": "EXCEPTION_SUSPECTED", "target": "/eligibility/3", "item": "age3", "description": "다른 기준값(110%)"})
+        return found
+
+    replies = {name: [call("update_item", section="eligibility", item_id=name, changes={"rule": structured})] for name in names}
+    conversations, tasks = [], []
+    monkeypatch.setattr(section, "_agent", resolver_agents(replies, conversations, tasks))
+    monkeypatch.setattr(section, "_issues", issues)
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{**age, "id": name} for name in names]})
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=1000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+    resolved, record = section._resolve(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+    assert len(conversations) == 3 and not any('"id": "age3"' in task for task in tasks)
+    assert (record["runs"], record["before"], record["after"]) == (3, 4, 0) and "left" not in record
+    assert [row["rule"]["status"] for row in resolved.items["eligibility"]] == ["STRUCTURED"] * 3 + ["UNSTRUCTURED"]
+
+
+def test_warnings_pointing_at_the_same_source_values_are_one_group_and_bigger_groups_come_first(monkeypatch):
+    suspected = "기준값 바로 뒤에 다른 기준값({})이 있는데 예외로 넣지 않았습니다. 가산·완화 기준이 빠졌는지 확인하세요 「{}」"
+    issues = [
+        {"code": "CRITERION_NOT_STRUCTURED", "item": "a", "description": "조건식 없이 글로만 남겼습니다."},
+        {"code": "EXCEPTION_SUSPECTED", "item": "b", "description": suspected.format("110%", "120%, 2명 110%")},
+        {"code": "EXCEPTION_SUSPECTED", "item": "c", "description": suspected.format("110%", "100%, 2인 110%")},  # 글은 달라도 같은 값
+        {"code": "EXCEPTION_SUSPECTED", "item": "a", "description": suspected.format("110%", "140%, 110%")},  # a는 첫 경고 묶음에서 함께 봄
+        {"code": "EXCEPTION_SUSPECTED", "item": "d", "description": suspected.format("110%, 150%", "…")},  # 다른 값이면 다른 묶음
+        {"code": "LOWER_BOUND_IN_ELIGIBILITY", "item": "e", "description": "하한"},  # 해결 담당이 보지 않는 경고
+        {"code": "EXCEPTION_SUSPECTED", "description": "항목 없음"},
+    ]
+    groups = section._warned_groups(issues, set())
+    assert [(signature, [issue["item"] for issue in members]) for signature, members in groups] == [
+        (("EXCEPTION_SUSPECTED", "110%"), ["b", "c"]),
+        (("CRITERION_NOT_STRUCTURED", "조건식 없이 글로만 남겼습니다."), ["a", "a"]),
+        (("EXCEPTION_SUSPECTED", "110%, 150%"), ["d"]),
+    ]
+    assert section._warned_groups(issues, {groups[0][0]}) == groups[1:]  # 이미 본 묶음은 뺌
+    monkeypatch.setattr(section, "RESOLVER_GROUP_ITEMS", 1)
+    assert [issue["item"] for issue in section._warned_groups(issues, set())[0][1]] == ["b"]
+
+
+def test_criteria_table_helpers_add_their_rows_first_and_the_eligibility_agent_is_told_what_they_did(monkeypatch):
+    # 2026-11-10 유료 확인 jbdc-16011: 32행 소득표를 자격 담당 혼자 넣으며 회차마다 27값·15값만 넣음 → 표를 대상이 바뀌는 곳에서 나눠
+    # 묶음마다 새 대화가 그 행만 넣고(동시에), 넣은 항목은 표 id를 앞에 붙여 자격 담당 초안에 합침. 끝내지 못한 묶음은 남은 행을 담당에게 넘김
+    document = parse(criteria_text())
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k not in ("quoteRefs", "originalText")})
+    tasks = []
+
+    class ByChunk(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            task = str(messages[1].content)
+            tasks.append(task)
+            first = "r16~r19" not in task
+            add = call("add_eligibility", items=[{**age, "id": "income", "evidence": ["t1-1.r0" if first else "t1-1.r16"]}])
+            calls = [add, call("finish", summary="넣었어요.")] if first else [add]  # 둘째 묶음은 끝내지 못하고 호출 상한
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls))])
+
+    names, limits = [], []
+
+    def agent(model, name, state, documents, middleware):
+        names.append(name)
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        return create_agent(ByChunk(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
+
+    def chat(name, max_output_tokens=None):
+        limits.append((name, max_output_tokens))
+
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_table_issues", lambda *args: [])
+    monkeypatch.setattr(section, "TABLE_CALLS", 1)
+    draft = SectionDraft(("eligibility",))
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), instructions="자격을 넣습니다.", max_output_tokens=36_000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+    records = section._tables(spec, draft, {"document": document}, rt, ("text",), chat, [])
+    assert names == [section.TABLE] * 2 and limits == [("eligibility", section.TABLE_OUTPUT_TOKENS)] * 2  # 응답 대기 한도는 자격 담당과 같게
+    assert [row["id"] for row in draft.items["eligibility"]] == ["t1-1-income", "t1-1-income-2"] and draft.version > 0
+    assert [(r["rows"], r["items"], r["stopped"]) for r in records] == [
+        ("t1-1 행 r0~r15", ["t1-1-income"], None),
+        ("t1-1 행 r16~r19", ["t1-1-income-2"], "모델 호출 상한(1번)"),
+    ]
+    first = next(task for task in tasks if "r0~r15" in task)
+    assert "맡은 행: t1-1.r0, t1-1.r1, " in first and "다른 표·본문 글" in first and "t1-1.r16" not in first
+    note = section.task(spec, {}, records)
+    assert "# 기준표 담당이 먼저 넣은 것" in note and "t1-1-income: 대상 전체 — STRUCTURED" in note
+    assert "t1-1 행 r0~r15(일반공급, 다자녀가구 특별공급, 노부모부양 특별공급, 신혼부부 특별공급): 항목 1개" in note
+    assert "t1-1 행 r16~r19(신생아 특별공급): 기준표 담당이 다 넣지 못했습니다(모델 호출 상한(1번)). 넣은 항목 1개 말고" in note
+    assert section.task(spec, {}) == section.task(spec, {}, [])  # 기준표 담당이 없으면 할 일 글은 그대로
+
+
+def test_a_criteria_table_helper_hears_only_its_own_problems_and_the_missing_rows_it_was_given(monkeypatch):
+    # 다른 기준·다른 표의 누락(자격 담당 몫)을 알리면 맡은 행 밖의 일을 함
+    document = parse(criteria_text())
+    _, newborn = criteria_chunks(document)
+    candidate = {"eligibility": [condition("신생아 특별공급", 100)], "selectionRules": []}
+    found = [
+        {"code": "EXCEPTION_SUSPECTED", "target": "/eligibility/0", "item": "newborn", "description": "예외 의심"},
+        {"code": "EXCEPTION_SUSPECTED", "target": "/eligibility/1", "item": "general", "description": "다른 담당의 항목"},
+        {"code": "ELIGIBILITY_OMISSION_SUSPECTED", "target": "/quality/coverage/eligibility", "description": "다른 자격 기준이 없습니다"},
+        {"code": "ITEM_NOT_ADDED", "target": "/eligibility", "item": "refused", "description": "거절"},
+    ]
+    monkeypatch.setattr(section, "_checked", lambda *args: (found, candidate))
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "newborn"}]}, rejected={("eligibility", "refused"): ["틀림"]})
+    issues = section._table_issues(SimpleNamespace(sections=("eligibility",)), draft, {"document": document}, None, ("text",), newborn)
+    codes = [(issue["code"], issue.get("item")) for issue in issues]
+    assert codes == [("CRITERIA_TABLE_OMISSION_SUSPECTED", None), ("EXCEPTION_SUSPECTED", "newborn"), ("ITEM_NOT_ADDED", "refused")]
+    assert issues[0]["description"].startswith("원문 자격 기준표 3행의 기준값 140%, 120%, 200%")  # 맡은 신생아 행만
+
+
+def run_after_helpers(monkeypatch, found, given=None):
+    """기준표 담당이 항목 하나를 넣은 뒤 자격 담당을 돌림. 자격 담당(가짜)은 차례마다 끝내기만 부르고, 받은 메시지를 차례마다 남김."""
+    document = parse(TEXT)
+    age, _ = _text_only(document)
+    merged = {**age, "id": "t1-1-age"}
+
+    def tables(spec, draft, state, rt, documents, chat, usage):
+        draft.items.setdefault("eligibility", []).append(dict(merged))
+        draft.version += 1
+        usage.append({"agent": section.TABLE, "costUsd": 0.001})
+        return [{"table": "t1-1", "rows": "t1-1 행 r0~r15", "groups": ["일반공급"], "stopped": None, "items": ["t1-1-age"], "brief": ["t1-1-age: …"]}]
+
+    turns = []
+
+    class Main(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            turns.append(list(messages))
+            reply = AIMessage(content="", tool_calls=[call("finish", summary="기준표 담당 항목을 봤어요.")])
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def agent(model, name, state, documents, middleware):
+        return create_agent(
+            Main(messages=iter([])), tools=[add_tool("eligibility", ("text",)), *WRITE_TOOLS], middleware=middleware, context_schema=SectionContext
+        )
+
+    monkeypatch.setattr(section, "_tables", given or tables)
+    monkeypatch.setattr(section, "_issues", lambda *args: found(*args) if callable(found) else list(found))
+    monkeypatch.setattr(section, "document_ids", lambda material: ["text"])
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setenv(section.RESOLVER_ENV, "false")
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), instructions="자격을 넣습니다.", max_output_tokens=1000)
+    rt = SimpleNamespace(models=SimpleNamespace(chat=lambda name, max_output_tokens=None: None, budget=None))
+    return (turns, *section.run_section(spec, {"document": document, "material": None}, rt))
+
+
+def test_the_eligibility_agent_starts_with_the_helpers_items_and_note_and_no_report_before_its_first_turn(monkeypatch):
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [])
+    assert len(turns[0]) == 2 and "# 기준표 담당이 먼저 넣은 것" in turns[0][1].content  # 원문·할 일만(시작하자마자 검증 결과를 붙이지 않음)
+    assert trace["tables"][0]["items"] == ["t1-1-age"] and [row["id"] for row in trace["draft"]["items"]["eligibility"]] == ["t1-1-age"]
+    assert [row["id"] for row in parts[0]["eligibility"]] == ["t1-1-age"] and usage[0]["agent"] == section.TABLE
+
+
+def test_a_first_turn_that_only_finishes_after_the_helpers_is_sent_back_with_the_verification(monkeypatch):
+    # 코드 검토(2026-11-10): 기준표 담당 항목을 넣은 뒤 검증을 「이미 봄」으로 두어, 첫 차례가 끝내기뿐이면 검증 없이 끝나 본문 자격 기준이 빠진 채
+    # 기준표 항목만으로 다 넣음이 됨. 검증을 미리 해 두고 끝내기를 그 결과로 거둠
+    found = [{"code": "ELIGIBILITY_OMISSION_SUSPECTED", "target": "/quality/coverage/eligibility", "description": "원문의 무주택 기준이 없습니다"}]
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, found)
+    assert len(turns) >= 2 and len(turns[0]) == 2  # 첫 차례 전에는 그대로, 끝내기를 거두고 차례를 더 받음
+    assert any(isinstance(m, HumanMessage) and "원문의 무주택 기준이 없습니다" in str(m.content) for m in turns[1])
+
+
+def test_a_failing_check_after_the_helpers_stops_only_this_agent(monkeypatch):
+    # 재검토(2026-11-10): 미리 하는 검증이 try 밖이라, 검증이 예외를 내면 담당만이 아니라 공고 처리 전체가 실패했음
+    def broken(*args):
+        raise RuntimeError("검증기 결함")
+
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, broken)
+    assert trace["stopped"] and "검증기 결함" in trace["stopped"]
+    assert [row["id"] for row in trace["draft"]["items"]["eligibility"]] == ["t1-1-age"]  # 넣은 항목은 두고 이 담당만 멈춤
+
+
+def test_rows_a_stopped_table_helper_left_send_the_section_to_review_when_still_missing(monkeypatch):
+    # 2026-11-10 재검토: 기준표 담당이 호출 상한에 끊긴 묶음의 남은 행은 할 일 글로만 넘어가, 자격 담당이 넣지 않고 끝내면 EXTRACTED로 남았음
+    def stopped_tables(spec, draft, state, rt, documents, chat, usage):
+        document = state["document"]
+        age, _ = _text_only(document)
+        draft.items.setdefault("eligibility", []).append({**age, "id": "t1-1-age"})
+        draft.version += 1
+        return [
+            {"table": "t1-1", "rows": "t1-1 행 r0~r15", "groups": [], "stopped": "모델 호출 상한(6번)", "items": ["t1-1-age"], "brief": [], "spots": [3, 4]}
+        ]
+
+    seen = []
+    monkeypatch.setattr(section, "_checked", lambda *args: ([], {"eligibility": [], "selectionRules": []}))
+
+    def missed(candidate, text, rows):
+        seen.append(rows)
+        return ([("| 신생아 | 140% |", ["140%"], None)], {})
+
+    monkeypatch.setattr(section, "missed_criteria_rows", missed)
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [], given=stopped_tables)
+    assert seen == [frozenset({3, 4})]  # 끝내지 못한 묶음의 행만 셈
+    assert trace["draft"]["coverage"]["eligibility"]["status"] == "PARTIAL" and "1행" in trace["draft"]["coverage"]["eligibility"]["reason"]
+
+    # 남은 행을 자격 담당이 넣었으면 그대로
+    monkeypatch.setattr(section, "missed_criteria_rows", lambda candidate, text, rows: ([], {}))
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [], given=stopped_tables)
+    assert "eligibility" not in trace["draft"]["coverage"]
+
+
+def test_rows_a_criteria_table_helper_could_not_add_are_handed_to_the_eligibility_agent(monkeypatch):
+    # 코드 검토(2026-11-10): 기준표 담당이 PARTIAL로 끝내거나 거절된 항목을 남겨도 합칠 때 버려, 자격 담당은 「항목 N개, 다시 넣지 않음」만 받음
+    document = parse(criteria_text())
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k not in ("quoteRefs", "originalText")})
+
+    class Partial(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            add = call("add_eligibility", items=[{**age, "id": "income", "evidence": ["t1-1.r0"]}, {**age, "id": "bad", "evidence": []}])
+            cover = call("set_coverage", section="eligibility", status="PARTIAL", reason="기관추천 행을 넣지 못함")
+            reply = AIMessage(content="", tool_calls=[add, cover, call("finish", summary="일부만 넣었어요.")])
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def agent(model, name, state, documents, middleware):
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        return create_agent(Partial(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
+
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_table_issues", lambda *args: [])
+    monkeypatch.setattr(section, "criteria_chunks", lambda document: criteria_chunks(document)[1:])  # 신생아 묶음 하나
+    draft = SectionDraft(("eligibility",))
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), instructions="자격을 넣습니다.", max_output_tokens=36_000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+    records = section._tables(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+    assert [(r["items"], r["refused"], r["partial"], r["stopped"]) for r in records] == [(["t1-1-income"], ["t1-1-bad"], "기관추천 행을 넣지 못함", None)]
+    assert ("eligibility", "t1-1-bad") in draft.pending and draft.pending[("eligibility", "t1-1-bad")]["id"] == "t1-1-bad"
+    assert [issue["item"] for issue in section._not_added(draft)] == ["t1-1-bad"]  # 자격 담당이 「고칠 것」으로 받음
+    assert draft.coverage == {}  # 섹션 상태는 자격 담당이 정함
+    note = section.table_note(records)
+    assert "기준표 담당이 다 넣지 못했습니다(기관추천 행을 넣지 못함)" in note and "이 행의 남은 기준은 이 담당이 넣습니다" in note
+    assert "넣을 때 거절된 항목(update_item으로 틀린 칸만 고쳐 넣음): t1-1-bad" in note
+
+
+def test_criteria_table_helpers_are_on_by_default_and_a_failure_in_them_leaves_the_rows_to_the_eligibility_agent(monkeypatch):
+    monkeypatch.delenv(section.TABLE_ENV, raising=False)
+    assert section.tables_on()
+    monkeypatch.setenv(section.TABLE_ENV, "FALSE")
+    assert not section.tables_on()
+    document = parse(criteria_text())
+    draft = SectionDraft(("eligibility",))
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), max_output_tokens=36_000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("고장")
+
+    monkeypatch.setattr(section, "_agent", broken)  # 대화를 만들다 오류: 그 묶음만 멈추고 남은 행은 자격 담당이 넣음
+    records = section._tables(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+    assert [record["stopped"] for record in records] == ["RuntimeError: 고장"] * 2 and draft.items == {}
+    assert section.table_note(records).count("이 행의 남은 기준은 이 담당이 넣습니다") == 2
+    monkeypatch.setattr(section, "criteria_chunks", broken)  # 기준표를 찾다 오류: 기준표 담당 없이 진행
+    assert section._tables(spec, draft, {"document": document}, rt, ("text",), None, []) == []
+
+
+def test_the_resolver_copy_keeps_items_that_were_not_added():
+    # 2026-11-10 코드 검토: 해결 담당이 고쳐 볼 사본이 거절·대기 항목을 버려, 사본 검증에서 ITEM_NOT_ADDED가 사라져 「문제가 줄었다」로
+    # 보였음 → 아무것도 풀지 않은 답도 채택 관문을 지남
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "e1"}]})
+    draft.rejected[("eligibility", "e2")] = ["/eligibility/1/rule: 형식 오류"]
+    draft.pending[("eligibility", "e2")] = {"id": "e2"}
+    copied = section._copy(SimpleNamespace(sections=("eligibility",)), draft)
+    assert copied.rejected == draft.rejected and copied.pending == draft.pending
+    copied.rejected.clear()
+    assert draft.rejected  # 사본을 고쳐도 원래 초안은 그대로
+
+    # 재검토: 실제로 버그였던 채택 관문까지 봄. 아무것도 풀지 않은 사본은 넣지 못한 항목 문제가 그대로라 채택하지 않음
+    spec = SimpleNamespace(sections=("eligibility",))
+    untouched = section._copy(spec, draft)
+    before, after = section._not_added(draft), section._not_added(untouched)
+    assert before and not section._settled(draft, untouched, {"e1"}, before, after)
+    solved = section._copy(spec, draft)
+    solved.items["eligibility"].append(solved.pending.pop(("eligibility", "e2")))
+    solved.rejected.clear()
+    assert section._settled(draft, solved, {"e1"}, before, section._not_added(solved))  # 풀면 채택
+
+
+def test_an_update_writes_to_the_item_where_it_is_now_even_if_an_earlier_item_was_removed_meanwhile(monkeypatch):
+    # 2026-11-10 코드 검토: 한 차례의 update_item·remove_item은 동시에 돌아, 고치기가 자리를 먼저 찾고 검사하는 사이 앞 항목이 빠지면
+    # 다른 항목(e5)을 덮어써 사라지고 옛 항목이 남았음
+    from mujuthaek_extraction.v2.tools import write
+
+    rows = [{"id": "e2", "description": "앞"}, {"id": "e4", "description": "고칠 것"}, {"id": "e5", "description": "자산"}]
+    draft = SectionDraft(("eligibility",), items={"eligibility": [dict(r) for r in rows]})
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+
+    def remove_e2_meanwhile(*args, **kwargs):
+        draft.items["eligibility"].pop(0)  # 같은 차례의 remove_item(e2)이 검사 사이에 끝남
+        return []
+
+    monkeypatch.setattr(write, "_problems", remove_e2_meanwhile)
+    monkeypatch.setattr(write, "fill_original_text", lambda section, item, document: item)
+    monkeypatch.setattr(write, "fill_scope", lambda section, item, documents: item)
+    answer = json.loads(write.update_item.func("eligibility", "e4", {"description": "고침"}, SimpleNamespace(context=context)))
+    assert answer == {"ok": "eligibility/e4 고침"}
+    assert draft.items["eligibility"] == [{"id": "e4", "description": "고침"}, {"id": "e5", "description": "자산"}]
+
+
+def _same_turn(monkeypatch, name, calls):
+    """한 차례의 도구가 동시에 도는 것을 흉내: 두 호출이 모두 고칠 항목을 읽은 뒤(name 함수 앞)에야 쓰게 하고 답을 돌려줍니다."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from mujuthaek_extraction.v2.tools import write
+
+    barrier, real = threading.Barrier(len(calls)), getattr(write, name)
+
+    def after_both_read(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(write, name, after_both_read)
+    with ThreadPoolExecutor(len(calls)) as pool:
+        return [json.loads(answer) for answer in pool.map(lambda run: run(), calls)]
+
+
+def test_two_fixes_of_the_same_item_in_one_turn_keep_one_and_tell_the_other_to_fix_again(monkeypatch):
+    # 2026-11-10 재검토: 고칠 항목을 잠금 밖에서 읽어, 같은 항목을 고치는 두 호출이 둘 다 「고침」으로 답하고 앞 고침이 사라짐
+    from mujuthaek_extraction.v2.tools import write
+
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    assert json.loads(write.add(context, "schedules", [schedule]))["added"] == ["apply"]
+    runtime = SimpleNamespace(context=context)
+    fixes = [
+        lambda label=label: write.update_item.func("schedules", "apply", {"description": label}, runtime) for label in ("신청 기간이에요.", "접수 기간이에요.")
+    ]
+    answers = _same_turn(monkeypatch, "_apply", fixes)
+    assert sorted(answer.get("error", "ok") for answer in answers) == ["CHANGED_MEANWHILE", "ok"]
+    kept = ("신청 기간이에요.", "접수 기간이에요.")[next(i for i, answer in enumerate(answers) if "ok" in answer)]
+    assert len(draft.items["schedules"]) == 1 and draft.items["schedules"][0]["description"] == kept
+
+    # 넣을 때 거절된 항목을 같은 차례에 두 번 고쳐도 한 번만 넣음
+    later = {**schedule, "id": "later", "evidence": ["p9.9"]}
+    assert json.loads(write.add(context, "schedules", [later]))["failed"][0]["id"] == "later"
+    monkeypatch.undo()
+    fixes = [lambda: write.update_item.func("schedules", "later", {"evidence": ["p1.2"]}, runtime) for _ in range(2)]
+    answers = _same_turn(monkeypatch, "_apply", fixes)
+    assert sorted(answer.get("error", "ok") for answer in answers) == ["CHANGED_MEANWHILE", "ok"]
+    assert [row["id"] for row in draft.items["schedules"]] == ["apply", "later"] and draft.pending == {} and draft.rejected == {}
+
+
+def test_the_same_id_added_twice_in_one_turn_is_added_once(monkeypatch):
+    # 2026-11-10 재검토: 같은 id 검사가 잠금 밖이라, 한 차례에 같은 항목을 두 번 넣으면 둘 다 들어감
+    from mujuthaek_extraction.v2.tools import write
+
+    schedule = {**sparse({k: v for k, v in ai_part(example("housing"))["schedules"][0].items() if k != "quoteRefs"}), "id": "apply", "evidence": ["p1.2"]}
+    draft = SectionDraft(("schedules",))
+    context = SectionContext(document=parse(TEXT), draft=draft, documents=("text",))
+    answers = _same_turn(monkeypatch, "_problems", [lambda: write.add(context, "schedules", [schedule]) for _ in range(2)])
+    assert sorted(len(answer["added"]) for answer in answers) == [0, 1]
+    assert "이미 있는 id" in next(answer for answer in answers if not answer["added"])["failed"][0]["errors"][0]
+    assert [row["id"] for row in draft.items["schedules"]] == ["apply"]
+
+
+def test_a_section_left_with_items_refused_when_added_goes_to_review():
+    # 2026-11-10 재검토: 거절된 항목(소득 상한 등)을 끝내 넣지 못하고 끝난 섹션이 「다 넣음」으로 남아 그 기준이 조용히 빠진 채 게시됨
+    draft = SectionDraft(("eligibility", "schedules", "documents"))
+    draft.items["eligibility"] = [{"id": "age"}]
+    draft.rejected[("eligibility", "income")] = ["/evidence: 근거가 없습니다."]
+    draft.coverage["schedules"] = {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}
+    draft.rejected[("schedules", "late")] = ["/startsAt: 날짜 형식"]
+    draft.coverage["documents"] = {"status": "EXTRACTED"}
+    section._mark_not_added(draft)
+    assert draft.coverage["eligibility"]["status"] == "PARTIAL" and "1개(income)" in draft.coverage["eligibility"]["reason"]
+    assert draft.coverage["schedules"] == {"status": "PARTIAL", "reason": "표 끝 행을 못 읽었어요."}  # 담당이 적은 이유를 둠
+    assert draft.coverage["documents"] == {"status": "EXTRACTED"}  # 거절이 남지 않은 섹션은 그대로

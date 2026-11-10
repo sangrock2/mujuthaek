@@ -2,9 +2,11 @@ package kr.mujuthaek.api.user.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import kr.mujuthaek.api.benefit.service.BenefitQueryService;
 import kr.mujuthaek.api.benefit.service.BenefitSummary;
@@ -57,7 +59,7 @@ public class FavoriteService {
     String type = targetType(targetType);
     UUID resolved = resolve(type, targetId);
     favorites.lockUser(userId); // 같은 회원의 저장은 하나씩: 개수 확인과 넣기 사이에 다른 요청이 끼지 않게
-    if (favorites.exists(userId, type, resolved)) {
+    if (favorites.exists(userId, type, sameTarget(type, targetId, resolved))) {
       return resolved; // 다시 저장해도 그대로 (처음 저장한 시각 유지)
     }
     if (favorites.count(userId) >= MAX_FAVORITES) {
@@ -67,10 +69,27 @@ public class FavoriteService {
     return resolved;
   }
 
-  /** 지우기. 없어도 조용히 끝나요 */
+  /** 지우기. 없어도 조용히 끝나요. 공고는 합치기 전 ID로 저장한 줄도 함께 지워요 */
   @Transactional
   public void remove(UUID userId, String targetType, UUID targetId) {
-    favorites.remove(userId, targetType(targetType), targetId);
+    String type = targetType(targetType);
+    UUID resolved =
+        "NOTICE".equals(type)
+            ? notices.findSummary(targetId).map(NoticeSummary::noticeId).orElse(targetId)
+            : targetId;
+    favorites.remove(userId, type, sameTarget(type, targetId, resolved));
+  }
+
+  /**
+   * 같은 대상으로 볼 ID들. 공고는 요청 ID·남은 공고 ID·거기 합쳐진 공고 ID: 합치기 전에 저장한 줄은 합쳐진 공고 ID에 남아 있어(알림은 그 줄도 봐요), 남은
+   * 공고로 지우면 그 줄이 남아 알림이 계속 가고, 다시 저장하면 두 줄이 됐어요(2026-11-10 재검토).
+   */
+  private List<UUID> sameTarget(String type, UUID requested, UUID resolved) {
+    Set<UUID> ids = new LinkedHashSet<>(List.of(requested, resolved));
+    if ("NOTICE".equals(type)) {
+      ids.addAll(notices.mergedFrom(resolved));
+    }
+    return List.copyOf(ids);
   }
 
   /** 최근 저장한 것부터. {@code targetType}이 비면 모두 */
@@ -195,6 +214,13 @@ public class FavoriteService {
               .orElseThrow(FavoriteService::notFound);
       default -> throw notFound();
     };
+  }
+
+  /** 숨긴 중복 정책 사업에 둔 관심을 남은 사업으로 옮겨요(PolicyHidden). 같은 회원이 둘 다 뒀으면 숨긴 쪽 줄만 지워요. 옮긴·지운 줄 수. */
+  @Transactional
+  public int moveToKeptPolicy(UUID hiddenPolicyId, UUID keptPolicyId) {
+    return favorites.retarget(
+        List.of("STARTUP_SUPPORT", "SPACE_RECRUITMENT"), hiddenPolicyId, keptPolicyId);
   }
 
   /** NOTICE · BENEFIT · STARTUP_SUPPORT · SPACE_RECRUITMENT (대소문자 상관없이) */

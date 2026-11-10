@@ -375,6 +375,9 @@ def test_long_notice_quote_not_found_without_core_values_holds_only_the_descript
         (issue("EVIDENCE_QUOTE_NOT_FOUND", "가상스페이스 입주자 모집공고 안내 문구가 이어진 긴 인용문입니다"), "/notice"),  # 제목을 담음
         (issue("EVIDENCE_QUOTE_NOT_FOUND", "모집 세대수 원룸 1세대 추가모집 안내 문구가 이어진 긴 인용"), "/notice"),  # 수량을 담음
         (issue("EVIDENCE_QUOTE_TOO_SHORT", stitched), "/notice"),  # 찾은 인용이 짧은 것은 그대로
+        # 2026-11-10 코드 검토: 대상 계층·공급 유형을 함께 담은 인용, 여러 인용 중 앞 인용이 다른 칸을 받치는 경우는 공고 전체로 둠
+        (issue("EVIDENCE_QUOTE_NOT_FOUND", "청년 계층 사회주택 입주자격 무주택 요건을 갖춘 사람을 대상으로"), "/notice"),
+        (issue("EVIDENCE_QUOTE_NOT_FOUND", f"청년 계층 입주자격」, 「{stitched}"), "/notice"),
     ]
     for found, target in cases:
         candidate = {"notice": notice, "quality": {"reviewIssues": [found]}, "supplyGroups": []}

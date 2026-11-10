@@ -57,6 +57,9 @@ class PushChannel implements NotificationChannel {
   static final int MAX_TITLE = 100;
   static final int MAX_BODY = 200;
 
+  /** JSON 목록 안 알림함 ID 하나의 크기: 따옴표 둘·쉼표 하나·UUID 36자. */
+  private static final int ID_BYTES = 39;
+
   /** 새 소식 묶음을 누르면 가는 화면 (여러 건이라 한 공고로 보낼 수 없어서 알림함으로) */
   static final String INBOX_PATH = "/notifications";
 
@@ -106,6 +109,8 @@ class PushChannel implements NotificationChannel {
   public String send(UUID userId, String address, List<OutgoingNotification> notifications)
       throws DeliveryException {
     List<PushDevice> devices = read(address);
+    boolean deliveredBefore = deliveredBefore(address); // 앞 차례에 다른 기기가 이미 받았는지(다시 보낼 기기만 남긴 받을 곳)
+    String authBefore = authBefore(address); // 앞 차례에 키를 거절한 기기가 있었는지(그 기기는 다시 보내지 않아 남긴 표시)
     OutgoingNotification first = notifications.getFirst();
     byte[] payload = payload(notifications);
     if (payload.length > WebPushCrypto.MAX_PLAINTEXT_BYTES) {
@@ -159,14 +164,22 @@ class PushChannel implements NotificationChannel {
         log.warn("푸시 서비스가 요청을 거절했어요: host={}, status={}", host, status);
       }
     }
+    // 한 대라도 받았으면 보낸 것이에요(계약 web-push.draft.md). 예전엔 기기 하나의 401·403이 다른 기기의 재시도·수신을 보기 전에 묶음
+    // 전체를 영구 실패로 던졌고, 앞 차례에 받은 기기가 있어도 남은 기기가 죽으면 FAILED였어요(2026-11-10 코드 검토)
+    boolean anyDelivered = deliveredBefore || delivered > 0;
+    authCode = authCode != null ? authCode : authBefore;
+    if (!remaining.isEmpty()) {
+      // 받은 기기 없이 키를 거절한 기기가 있으면 그 코드로 남겨요: 남은 기기가 연결 오류로 재시도를 다 쓰면 마지막 오류가 PUSH_IO라 VAPID 키
+      // 문제가 가려졌어요(2026-11-10 재검토). 키를 거절한 기기는 다시 보내지 않으니 받을 곳에 표시를 남겨 다음 차례에도 알아요
+      String code = authCode != null && !anyDelivered ? authCode : retryCode;
+      throw new DeliveryException(
+          code, write(remaining, anyDelivered, authCode), retryAfter, anyDelivered);
+    }
+    if (anyDelivered) {
+      return null; // 푸시 서비스는 메시지 ID를 따로 주지 않아요 (Location 헤더뿐)
+    }
     if (authCode != null) {
       throw new DeliveryException(authCode, true); // 키 설정 오류: 다시 보내도 모두 실패해요
-    }
-    if (!remaining.isEmpty()) {
-      throw new DeliveryException(retryCode, write(remaining), retryAfter);
-    }
-    if (delivered > 0) {
-      return null; // 푸시 서비스는 메시지 ID를 따로 주지 않아요 (Location 헤더뿐)
     }
     throw new DeliveryException(failCode != null ? failCode : "ALL_EXPIRED", true);
   }
@@ -227,13 +240,23 @@ class PushChannel implements NotificationChannel {
       body.put("tag", INBOX_PATH);
     }
     // 기기가 「떴어요·눌렀어요」를 api에 알릴 알림함 줄 ID (묶음이면 묶인 알림 모두)
-    body.put(
-        "ids",
+    List<UUID> ids =
         notifications.stream()
             .map(OutgoingNotification::inboxId)
             .filter(java.util.Objects::nonNull)
-            .toList());
-    return json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+            .toList();
+    body.put("ids", ids);
+    byte[] bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+    // 묶음이 크면(한 칸에 90건 남짓) ID 목록만으로 한도를 넘어요. 예전엔 묶음 전체를 PUSH_PAYLOAD_TOO_LARGE로 실패해 그 회원이
+    // 푸시를 하나도 못 받았어요(2026-11-10 코드 검토). 알림은 보내고, 한도에 맞을 만큼만 ID를 넣어요(빠진 줄은 「떴어요」 기록만 없음)
+    int keep = ids.size();
+    while (bytes.length > WebPushCrypto.MAX_PLAINTEXT_BYTES && keep > 0) {
+      int over = bytes.length - WebPushCrypto.MAX_PLAINTEXT_BYTES;
+      keep = Math.max(0, keep - (over + ID_BYTES - 1) / ID_BYTES);
+      body.put("ids", ids.subList(0, keep));
+      bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+    }
+    return bytes;
   }
 
   /** 기기가 꺼져 있을 때 푸시 서비스가 들고 있을 시간. 늦게 받으면 틀린 말이 되는 마감 알림은 짧게 */
@@ -272,12 +295,55 @@ class PushChannel implements NotificationChannel {
     return json.writeValueAsString(devices);
   }
 
+  /**
+   * 다시 보낼 받을 곳. 이미 받은 기기가 있거나 키를 거절한 기기가 있었으면 {"delivered":true,"auth":"PUSH_403","devices":[...]}로
+   * 그 사실을 남겨, 다음 차례가 남은 기기만 실패해도 보낸 것으로(받은 기기), 키 문제로(키 거절) 적어요. 둘 다 없으면 예전처럼 기기 목록 그대로.
+   */
+  private String write(List<PushDevice> devices, boolean delivered, String auth) {
+    if (!delivered && auth == null) {
+      return write(devices);
+    }
+    Map<String, Object> wrapped = new LinkedHashMap<>();
+    if (delivered) {
+      wrapped.put("delivered", true);
+    }
+    if (auth != null) {
+      wrapped.put("auth", auth);
+    }
+    wrapped.put("devices", devices);
+    return json.writeValueAsString(wrapped);
+  }
+
   private List<PushDevice> read(String address) throws DeliveryException {
     try {
+      if (address.stripLeading().startsWith("{")) {
+        return json.readValue(json.readTree(address).path("devices").toString(), DEVICES);
+      }
       return json.readValue(address, DEVICES);
     } catch (JacksonException e) {
       throw new DeliveryException("PUSH_ADDRESS_UNREADABLE", true);
     }
+  }
+
+  /** 앞 차례에 받은 기기가 있었는지(받을 곳에 남긴 표시). 발송 작업기가 예상 못한 오류 때도 물어봐요 */
+  @Override
+  public boolean deliveredBefore(String address) {
+    try {
+      return address != null
+          && address.stripLeading().startsWith("{")
+          && json.readTree(address).path("delivered").asBoolean(false);
+    } catch (JacksonException e) {
+      return false;
+    }
+  }
+
+  private String authBefore(String address) {
+    if (!address.stripLeading().startsWith("{")) {
+      return null;
+    }
+    var node = json.readTree(address).path("auth");
+    String auth = node.isMissingNode() || node.isNull() ? null : node.asString();
+    return auth == null || auth.isBlank() ? null : auth;
   }
 
   private static Duration longer(Duration current, Duration other) {

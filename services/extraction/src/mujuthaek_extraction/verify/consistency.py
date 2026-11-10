@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Any
+from typing import Any, NamedTuple
 
 from mujuthaek_extraction.assemble.quotes import normalize
 from mujuthaek_extraction.assemble.values import to_krw
@@ -404,8 +404,15 @@ UNIT_COUNTS = "UNIT_COUNTS_EXCEED_TOTAL"
 
 
 def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
-    totals = [c for c in candidate["notice"]["counts"] if c["kind"] == "OFFERED" and not c["scope"]["targetGroups"] and isinstance(c["value"], int)]
-    if len(totals) != 1:
+    offered = [c for c in candidate["notice"]["counts"] if c["kind"] == "OFFERED" and isinstance(c["value"], int)]
+    totals = [c["value"] for c in offered if not c["scope"]["targetGroups"]]
+    if len(totals) == 1:
+        total = totals[0]
+    elif not totals and offered:
+        # 공고 모집 수가 대상마다만 있으면(「남성 1·여성 1」「1인 가구 1세대」) 그 합이 전체예요. 예전엔 대상 없는 수가 하나일 때만 봐서
+        # 대상이 붙은 공고의 호실 표는 행마다 모집 1이 그대로 게시됐어요(2026-11-10 코드 검토)
+        total = sum(c["value"] for c in offered)
+    else:
         return
     units = [
         (g, str(group.get("unitLabel")))
@@ -413,15 +420,50 @@ def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
         if group.get("itemKind") == "HOUSING_UNIT" and any(c["kind"] == "OFFERED" and c["value"] == 1 for c in group["counts"])
     ]
     distinct = {label for _, label in units}
-    if len(distinct) <= totals[0]["value"]:
+    if len(distinct) <= total:
         return
     for g, _ in units:
         find(
             "V7",
             UNIT_COUNTS,
             f"/supplyGroups/{g}/counts",
-            f"호실 {len(distinct)}곳을 모집 1로 셌는데 공고 전체 모집 수는 {totals[0]['value']}입니다. 어느 호실이 이번 모집인지 원문 확인이 필요합니다",
+            f"호실 {len(distinct)}곳을 모집 1로 셌는데 공고 전체 모집 수는 {total}입니다. 어느 호실이 이번 모집인지 원문 확인이 필요합니다",
         )
+
+
+# 같은 단지·주택형의 모집 수가 표 두 곳에서 다름: 대상 없이 센 주택형 모집 수가 같은 주택형의 대상별 모집 수 합과 다르면, 대상 없는 수가
+# 이번 모집이 아니라 대상 주택 규모(건설·공급 호수)일 수 있어 그 수량을 보류합니다(틀린 값보다 누락). 대상별 수는 계층마다 따로 센 더 자세한 수라 둡니다.
+# 2026-11-10 23건 유료 확인 dcco-24804(추가모집): 「□ 임대대상 : 64호」 아래 형별 「공급 호수」(11·28·25 = 형·계층별 표의 건설 호수 합)를
+# 열 의미 답이 모집 수로 읽어 게시됨. 같은 형의 계층별 모집 수 합은 2+7·11+2·7+6. 앞선 답은 같은 열을 건설 호수로 읽었음(회차마다 흔들리는 판단)
+TYPE_COUNTS = "TYPE_COUNTS_DISAGREE"
+
+
+def _check_type_counts(candidate: dict[str, Any], find: Any) -> None:
+    untargeted: dict[tuple[Any, str], list[tuple[int, int]]] = {}
+    targeted: dict[tuple[Any, str], list[int]] = {}
+    for g, group in enumerate(candidate["supplyGroups"]):
+        code = str(group.get("housingTypeCode") or "").strip()
+        if not code:
+            continue
+        key = (group.get("locationId"), code)
+        for count in group["counts"]:
+            if count["kind"] != "OFFERED" or not isinstance(count["value"], int):
+                continue
+            if count["scope"]["targetGroups"]:
+                targeted.setdefault(key, []).append(count["value"])
+            else:
+                untargeted.setdefault(key, []).append((g, count["value"]))
+    for key, counts in untargeted.items():
+        summed = sum(targeted.get(key) or [])
+        for g, value in counts:
+            if key in targeted and value != summed:
+                find(
+                    "V7",
+                    TYPE_COUNTS,
+                    f"/supplyGroups/{g}/counts",
+                    f"주택형 {key[1]} 모집 수 {value}가 같은 주택형의 대상별 모집 수 합({summed})과 다릅니다. "
+                    "대상 주택 규모(건설·공급 호수)일 수 있어 원문 확인이 필요합니다",
+                )
 
 
 # ---- V8 누락 탐지 ----
@@ -616,11 +658,14 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
             ranges.setdefault(source_id, []).append((head.start(), len(text) if following < 0 else following))
     if not ranges:
         return
-    from_image = {
+    located = {
         e["id"]
         for e in candidate.get("evidence") or []
         if e["locator"]["kind"] == "TEXT_RANGE" and any(a <= e["locator"]["start"] < b for a, b in ranges.get(e["sourceId"], []))
     }
+    # 두 번 읽어 다른 줄(판독 불일치)은 그림 밖에 같은 글이 있어도 봅니다: 그 글은 다른 대상의 문장일 수 있음(2026-11-10 코드 검토: 그림 표
+    # 「신혼부부 | 월평균소득 70% 이하」가 불일치인데 본문 「청년 계층: 월평균소득 70% 이하」 때문에 그림 근거에서 빠져 보류 없이 게시됨)
+    _check_disputed_reading(candidate, sources, located, find)
     # 그림 판독 글자를 근거로 했어도 같은 글이 그림 밖 원문 글자나 수집기가 읽은 게시글 제목(원본 참조 sourceTitle)에도 있으면 판독에 기대지
     # 않은 값입니다(띄어쓰기를 빼고 비교, 짧은 글은 우연히 겹칠 수 있어 그대로 그림 근거). 2026-11-09 23건 sh-311005: 표지 그림의
     # 「에어스페이스 신림3호점」을 공고 제목 근거로 써 공고 전체(찾은 값 138개)가 검수로 감. 첨부 PDF가 있으면 원문은 PDF 글자뿐이고
@@ -628,10 +673,9 @@ def _check_image_evidence(candidate: dict[str, Any], sources: SourceBundle, find
     outside = [normalize(piece) for source_id, text in sources.texts.items() for piece in _outside(text, ranges.get(source_id, []))]
     outside += [normalize(str(ref.get("sourceTitle") or "")) for ref in candidate.get("sourceReferences") or [] if isinstance(ref, dict)]
     quotes = {e["id"]: normalize(e.get("quote") or "") for e in candidate.get("evidence") or []}
-    from_image = {i for i in from_image if len(quotes.get(i, "")) < IMAGE_QUOTE_MIN_CHARS or not any(quotes[i] in text for text in outside)}
+    from_image = {i for i in located if len(quotes.get(i, "")) < IMAGE_QUOTE_MIN_CHARS or not any(quotes[i] in text for text in outside)}
     if not from_image:
         return
-    _check_disputed_reading(candidate, sources, from_image, find)
     if _evidence_ids(candidate["notice"]) & from_image:
         find("V8", "EVIDENCE_FROM_IMAGE", "/notice", "공고 정보의 근거가 AI가 그림에서 옮긴 글자입니다. 원문 그림과 맞는지 확인하세요.")
     for index, item in enumerate(candidate["eligibility"]):
@@ -1068,13 +1112,16 @@ def _unlisted_forms(documents: list[dict[str, Any]], text: str) -> list[str]:
 # 글 속에서 내라고 한 서류(「신청 시 희망주택목록을 함께 제출」「입주대기 취소 신청서 제출 후 신청 가능」「입주신청확인서제출」). 표·별지 서식이
 # 아니라 위 검사들이 보지 못함(2026-11-09 23건 남은 서류 놓침 gbdc-a909·jbdc-15611·sh-310976: V2 서류 담당이 넣지 않음).
 # 서류 이름 끝말 바로 뒤의 「제출」만 보고, 「받아서 제출」처럼 동사는 서류가 아닙니다. 「제출하더라도」「제출 전에 …」「제출 후 … 수정 불가」 같은
-# 주의 문장, 소명·이의신청 글, 절차 표의 단계 행(「8단계 | 청약신청서 제출」)은 뺍니다. 저장 결과 102개 실행(23건)에서 걸린 것은 실제로 내는 서류뿐
+# 주의 문장, 소명·이의신청 글, 절차 표의 단계 행(「8단계 | 청약신청서 제출」)은 뺍니다. 저장 결과 102개 실행(23건)에서 걸린 것은 실제로 내는 서류뿐.
+# 「구비」「지참」도 내라는 말입니다(2026-11-09 jbdc-16011 「2020.12.21. 이후 발급한 여권은 여권정보증명서를 함께 구비해야 인정」을 서류 담당이
+# 넣지 않음). 「공동인증서·카카오톡인증서 구비」는 인터넷 청약 로그인용 전자 인증서라 서류가 아님. 저장 결과 1,126개 실행에서 넓혀서 새로 걸린 것은
+# 이 셋뿐(인증서 둘은 뺌)
 SUBMITTED = re.compile(
-    r"([가-힣A-Za-z0-9·ㆍ]+(?:서|목록|명단|사본|등본|초본))\s*(?:을|를)?\s*(?:함께\s*|반드시\s*|별도로\s*|추가로\s*|각각\s*)?제출"
+    r"([가-힣A-Za-z0-9·ㆍ]+(?:서|목록|명단|사본|등본|초본))\s*(?:을|를)?\s*(?:함께\s*|반드시\s*|별도로\s*|추가로\s*|각각\s*)?(?:제출|구비|지참)"
     r"(?!\s*(?:하더라도|하지\s*않|할\s*필요|불필요|않아도|여부|전))"
 )
 SUBMITTED_VERB = re.compile(r"(?:아|어|해|여|와|워|라|려|에|로|면|져|쳐|켜)서$")  # 「받아서」「작성하여서」
-SUBMITTED_GENERIC = re.compile(r"^(?:서류|관련서류|구비서류|제출서류|증빙서류|서류일체|각종서류|증명서류|확인서류|첨부서류|신청서류)$")
+SUBMITTED_GENERIC = re.compile(r"^(?:서류|관련서류|구비서류|제출서류|증빙서류|서류일체|각종서류|증명서류|확인서류|첨부서류|신청서류|.*인증서)$")
 SENTENCE_END = re.compile(r"\n|다\.|\.\s")
 SUBMITTED_CAUTION = re.compile(r"^\s*후\S{0,3}\s.*?(?:수정|취소|변경|삭제|불가)|소명|이의\s*신청")  # 「제출 후 … 수정 불가」, 소명 절차
 # 이름이 짧으면(「신청서」「동의서」) 앞 낱말까지 이름으로 봅니다(「입주대기 취소 신청서」). 조사로 끝나거나 가리키는 말(「이 동의서」)은 이름이 아님
@@ -1425,8 +1472,19 @@ def _varies(labels: list[list[str]]) -> bool:
     return False
 
 
-def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, str]], str | None]]]:
-    """원문 자격 기준표마다 행 → (보여 줄 행 글, 기준값들, 행의 대상). 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다.
+class CriteriaRow(NamedTuple):
+    shown: str  # 보여 줄 행 글(병합 칸을 채운 읽기 도움 줄 ↳이 있으면 그것)
+    values: list[tuple[str, float, str]]  # 기준값 (PERCENT·KRW, 값, 원문 표기)
+    group: str | None  # 행의 대상(계층·공급유형)
+    # 원문 글자에서 그 행 줄의 번호(0부터). 병합 칸이 많은 표는 「|  |  | 맞벌이 | 140% |」처럼 같은 줄이 대상마다 되풀이되어, V2 기준표 담당이
+    # 맡은 행은 줄 글자가 아니라 이 번호로 가리킵니다
+    at: int
+    # 앞쪽 빈 칸 수(위 행에서 병합된 칸). 맞벌이·가구원 수 행처럼 앞 행에 이어지는 행이 더 큼(V2 기준표 담당이 행을 나눌 때 앞 행과 떼지 않음)
+    lead: int = 0
+
+
+def criteria_tables(text: str) -> list[list[CriteriaRow]]:
+    """원문 자격 기준표마다 기준값이 있는 행들. 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다.
     행의 대상은 기준값이 아닌 글자 칸 가운데 가구원 수·자녀 수·맞벌이 표시가 아닌 첫 칸(병합 칸은 위 행 것을 이어받음)."""
     lines = text.split(SHEET_START, 1)[0].split("\n")
     found = []
@@ -1465,7 +1523,8 @@ def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, s
                     carry[c] = cell
                     carry[c + 1 :] = [""] * (len(carry) - c - 1)
             group = next((cell for cell in carry[: len(cells)] if cell and not CONDITION_CELL.match(cell)), None)
-            data.append((aid or " ".join(cell for cell in cells if cell), values, group))
+            lead = next((c for c, cell in enumerate(cells) if cell), len(cells))
+            data.append(CriteriaRow(aid or " ".join(cell for cell in cells if cell), values, group, start + n, lead))
             labels.append(label)
         if len(data) >= 2 and _varies(labels):
             found.append(data)
@@ -1474,7 +1533,7 @@ def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, s
 
 def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
     """원문 자격 기준표의 행 → (보여 줄 행 글, 기준값들)."""
-    return [(shown, values) for table in _criteria_tables(text) for shown, values, _ in table]
+    return [(row.shown, row.values) for table in criteria_tables(text) for row in table]
 
 
 def _name_parts(name: str) -> list[str]:
@@ -1548,11 +1607,13 @@ def _used_criteria(candidate: dict[str, Any]) -> tuple[set[float], set[float]]:
     return percents, amounts
 
 
-def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
-    """기준표 행의 기준값을 쓰는 조건이 없는 행. 행의 대상을 조건 대상 이름과 맞춘 표는 그 대상의 조건(과 대상을 정하지 않은 조건·선정
-    조건식)의 값으로만 셉니다(다른 공급이 같은 비율을 써도 그 공급의 조건이 없으면 빠진 행). 맞추지 못한 표는 모든 조건의 값으로 셉니다."""
-    if not candidate["eligibility"]:
-        return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
+def missed_criteria_rows(
+    candidate: dict[str, Any], text: str, rows: frozenset[int] | None = None
+) -> tuple[list[tuple[str, list[str], str | None]], dict[str, str]]:
+    """기준표 행의 기준값을 쓰는 조건이 없는 행 (보여 줄 행 글, 빠진 값 표기들, 맞춘 대상)과, 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 →
+    원문 이름). 행의 대상을 조건 대상 이름과 맞춘 표는 그 대상의 조건(과 대상을 정하지 않은 조건·선정 조건식)의 값으로만 셉니다(다른 공급이
+    같은 비율을 써도 그 공급의 조건이 없으면 빠진 행). 맞추지 못한 표는 모든 조건의 값으로 셉니다. rows(원문 줄 번호, CriteriaRow.at)를 주면
+    그 행만 셉니다(V2 기준표 담당이 맡은 행)."""
     used = _used_criteria(candidate)
     named = [(item, [part for name in (item.get("scope") or {}).get("targetGroups") or [] for part in _name_parts(name)]) for item in candidate["eligibility"]]
     everyone = {"eligibility": [item for item, names in named if not names], "selectionRules": candidate["selectionRules"]}
@@ -1565,20 +1626,35 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
         return pools[key]
 
     missed: list[tuple[str, list[str], str | None]] = []
-    lacking: dict[str, str] = {}  # 기준표 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 → 원문 이름)
-    for table in _criteria_tables("\n".join(sources.texts.values())):
-        owners = _row_owners(list(dict.fromkeys(group for _, _, group in table if group)), named)
+    lacking: dict[str, str] = {}
+    for table in criteria_tables(text):
+        owners = _row_owners(list(dict.fromkeys(row.group for row in table if row.group)), named)
         covered: dict[str, bool] = {}
-        for shown, values, group in table:
-            percents, amounts = used if owners is None or group is None else pool(owners[group])
-            gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
+        for row in table:
+            if rows is not None and row.at not in rows:
+                continue
+            percents, amounts = used if owners is None or row.group is None else pool(owners[row.group])
+            gone = [raw for kind, value, raw in row.values if value not in (percents if kind == "PERCENT" else amounts)]
             if gone:
-                missed.append((shown, gone, normalize(group) if owners is not None and group is not None else None))
-            if owners is not None and group is not None:
-                covered[group] = covered.get(group, False) or not gone
+                missed.append((row.shown, gone, normalize(row.group) if owners is not None and row.group is not None else None))
+            if owners is not None and row.group is not None:
+                covered[row.group] = covered.get(row.group, False) or not gone
         for group, any_row in covered.items():
             if not any_row:
                 lacking.setdefault(normalize(group), group)
+    return missed, lacking
+
+
+def criteria_omission_description(rows: list[tuple[str, list[str], str | None]]) -> str:
+    """기준표 행 누락(CRITERIA_TABLE_OMISSION_SUSPECTED) 설명. V2 담당에게는 설명 앞 220자만 가므로 빠진 값·첫 행을 앞에 둡니다."""
+    return f"원문 자격 기준표 {len(rows)}행의 기준값 {_shown_values(rows)}을 쓰는 자격 조건·예외가 없습니다(빠진 기준 의심): {_shown_rows(rows)}"
+
+
+def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
+    """기준표 행의 기준값을 쓰는 조건이 없는 행(missed_criteria_rows). 대상 통째 누락과 행 일부 누락을 따로 알립니다."""
+    if not candidate["eligibility"]:
+        return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
+    missed, lacking = missed_criteria_rows(candidate, "\n".join(sources.texts.values()))
     whole = [row for row in missed if row[2] in lacking]
     partial = [row for row in missed if row[2] not in lacking] if len(whole) >= CRITERIA_OMISSION_MIN_ROWS else missed
     # V2 담당에게는 설명 앞 220자만 가므로 대상·빠진 값·첫 행을 앞에 둡니다
@@ -1590,10 +1666,7 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
         )
         find("V8", CRITERIA_GROUP_OMISSION, "/quality/coverage/eligibility", description)
     if len(partial) >= CRITERIA_OMISSION_MIN_ROWS:
-        description = (
-            f"원문 자격 기준표 {len(partial)}행의 기준값 {_shown_values(partial)}을 쓰는 자격 조건·예외가 없습니다(빠진 기준 의심): {_shown_rows(partial)}"
-        )
-        find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
+        find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", criteria_omission_description(partial))
 
 
 def _shown_values(rows: list[tuple[str, list[str], str | None]]) -> str:
@@ -1619,6 +1692,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_price_scope(candidate, found, find)
     _check_consistency(candidate, find)
     _check_unit_counts(candidate, find)
+    _check_type_counts(candidate, find)
     _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
@@ -1631,6 +1705,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_definition_scope(candidate, find)
     _check_subgroup_scope(candidate, find)
     _check_age_boundary_day(candidate, find)
+    _check_child_age_limit(candidate, find)
     return findings
 
 
@@ -1654,6 +1729,37 @@ def _check_age_boundary_day(candidate: dict[str, Any], find: Any) -> None:
                 why = f"원문이 나이 경계일(「{shown}」)을 따로 정해, 만 나이 조건식으로는 그날을 정확히 담지 못합니다. 원문 확인이 필요합니다"
                 find("V7", AGE_BOUNDARY, f"/eligibility/{index}", why)
                 break
+
+
+# 원문 조건 글의 자녀 나이 한정(「6세 이하 자녀를 둔」)이 조건식에 없는 조건: 자녀 수(CHILD_COUNT GTE 1)만 남아 원문보다 넓게 판정됩니다
+# (나이 많은 자녀만 둔 신청자도 지원 가능으로). 2026-11-09 저장 결과 1,123개 실행에서 조건식이 있는데 이렇게 빠진 조건은 6가지(dcco-24804
+# 「만6세 이하(태아포함)자녀를 둔 사람」을 자녀 수만으로, jbdc-16011 한부모·신생아, dudc-8934 신혼부부, gbdc-e544 한부모·유자녀 혼인가구)로
+# 모두 진짜였음(막내 자녀 나이 속성이 생기기 전 실행). 12세 이하만 봅니다(「만19세 미만 자녀 2명 이상」은 자녀 수 기준의 미성년 정의).
+# 조건식이 없는 조건은 조건식 없음 검사가 봅니다. 사람 확인으로 보냅니다(그 조건만 보류)
+CHILD_AGE_LIMIT = "CHILD_AGE_LIMIT_MISSING"
+CHILD_AGE_PHRASE = re.compile(
+    r"(?:만\s*)?(\d{1,2})\s*세\s*(?:이하|미만)(?:\s*\([^)]{0,30}\))?\s*(?:의\s*)?(?:자녀|아동|영유아)|자녀\s*\(\s*(?:만\s*)?(\d{1,2})\s*세\s*(?:이하|미만)"
+)
+YOUNG_CHILD_AGE = 12
+
+
+def _check_child_age_limit(candidate: dict[str, Any], find: Any) -> None:
+    for index, item in enumerate(candidate.get("eligibility") or []):
+        rule = item.get("rule") or {}
+        if rule.get("status") != "STRUCTURED" or not rule.get("expression"):
+            continue
+        text = item.get("originalText") or ""
+        phrase = next((m for m in CHILD_AGE_PHRASE.finditer(text) if int(m.group(1) or m.group(2)) <= YOUNG_CHILD_AGE), None)
+        if phrase is None:
+            continue
+        expressions = [rule["expression"]]
+        for exception in item.get("exceptions") or []:
+            expressions += [exception.get("effectExpression"), (exception.get("when") or {}).get("expression")]
+        if any(atom.get("attribute") == "YOUNGEST_CHILD_AGE_YEARS" for expression in expressions for _, atom in _atoms(expression, "")):
+            continue
+        shown = " ".join(phrase.group(0).split())
+        why = f"원문 조건 글의 자녀 나이 한정(「{shown}」)이 조건식에 없어 조건이 원문보다 넓습니다. 원문 확인이 필요합니다"
+        find("V7", CHILD_AGE_LIMIT, f"/eligibility/{index}", why)
 
 
 # 보증금(또는 분양가) = 계약금 + 잔금. 실측(2026-11-07 23건 대조, jbdc-16011): 원문 계약금 「18,400.000」을 18,400원으로 읽어

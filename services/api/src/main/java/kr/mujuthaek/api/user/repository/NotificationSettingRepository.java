@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,22 +43,28 @@ public class NotificationSettingRepository {
         .optional();
   }
 
-  /** 줄이 있는 회원만 담아요 (없으면 기본값으로 보세요) */
+  /** 한 번에 묻는 회원 수. IN 목록 하나에 모두 넣으면 6만 5천여 명부터 바인드 변수 한도를 넘어 알림이 통째로 실패했어요. */
+  static final int CHUNK = 1000;
+
+  /**
+   * 줄이 있는 회원만 담아요 (없으면 기본값으로 보세요). CHUNK명씩 나눠 물어요(2026-11-10 코드 검토: 전국 대상 새 공고처럼 대상이 많으면 쿼리가 실패해
+   * 아무에게도 가지 않았음, NoticeQueryService.findSummaries와 같은 방식).
+   */
   public Map<UUID, Settings> findAll(Collection<UUID> userIds) {
     Map<UUID, Settings> out = new HashMap<>();
-    if (userIds.isEmpty()) {
-      return out;
+    List<UUID> ids = List.copyOf(new java.util.LinkedHashSet<>(userIds));
+    for (int from = 0; from < ids.size(); from += CHUNK) {
+      jdbc.sql(
+              """
+              select user_id, new_notice, new_support, deadline, correction, follow_up, quiet_enabled
+                from account.notification_settings where user_id in (:ids)
+              """)
+          .param("ids", ids.subList(from, Math.min(ids.size(), from + CHUNK)))
+          .query(
+              rs -> {
+                out.put(rs.getObject("user_id", UUID.class), settings(rs));
+              });
     }
-    jdbc.sql(
-            """
-            select user_id, new_notice, new_support, deadline, correction, follow_up, quiet_enabled
-              from account.notification_settings where user_id in (:ids)
-            """)
-        .param("ids", userIds)
-        .query(
-            rs -> {
-              out.put(rs.getObject("user_id", UUID.class), settings(rs));
-            });
     return out;
   }
 

@@ -173,3 +173,22 @@ def test_column_title_line_follows_header_rows_below_title_and_notice_lines():
 def test_no_title_line_when_no_header_row_is_found():
     listing = read_xlsx(make_xlsx([[1, "가", 3], [2, "나", 4]]))
     assert "[열 제목]" not in listing.text
+
+
+def test_hidden_rows_and_columns_are_not_handed_over_and_are_counted():
+    # 2026-11-10 코드 검토: 이번 공고가 아닌 호실을 지우지 않고 숨긴(필터로 가린) 목록을 첨부하면 숨긴 호실이 공급 묶음으로 게시됐음
+    rows = f'<row r="1">{inline("A1", "호")}{inline("B1", "보증금")}{inline("C1", "이전 보증금")}</row>'
+    rows += f'<row r="2">{inline("A2", "301")}<c r="B2"><v>12000000</v></c><c r="C2"><v>11000000</v></c></row>'
+    rows += f'<row r="3" hidden="1">{inline("A3", "302")}<c r="B3"><v>13000000</v></c></row>'
+    sheet = rows + '</sheetData><cols><col min="3" max="3" hidden="1"/></cols><sheetData>'
+    listing = read_xlsx(raw_xlsx(sheet))
+    assert "| 301 | 12000000 |" in listing.text and "302" not in listing.text and "이전 보증금" not in listing.text
+    assert listing.hidden == 2 and listing.hidden_rows == 1 and "숨긴 행·열 2개" in listing.text
+    assert read_xlsx(raw_xlsx(f'<row r="1">{inline("A1", "호")}</row>')).hidden == 0
+    # 재검토: 병합 범위의 첫 행이 숨긴 행이면 보이는 행의 병합 값(단지명)까지 빠졌음
+    rows = f'<row r="1">{inline("A1", "단지")}{inline("B1", "호")}</row>'
+    rows += f'<row r="2" hidden="1">{inline("A2", "가람단지")}{inline("B2", "101")}</row>'
+    rows += f'<row r="3">{inline("B3", "102")}</row>'
+    merged = rows + '</sheetData><mergeCells count="1"><mergeCell ref="A2:A3"/></mergeCells><sheetData>'
+    listing = read_xlsx(raw_xlsx(merged))
+    assert "| 가람단지 | 102 |" in listing.text and "101" not in listing.text and listing.hidden_rows == 1

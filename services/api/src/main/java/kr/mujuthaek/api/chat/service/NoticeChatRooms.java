@@ -16,8 +16,11 @@ class NoticeChatRooms implements ChatRooms {
     this.notices = notices;
   }
 
+  /** 합쳐진 공고 ID도 함께 넣어요: 합치기 전 메시지는 그 ID에 남아 있어, 남은 공고 ID로만 읽으면 채팅 기록이 사라졌어요(2026-11-10 코드 검토). */
   @Override
   public Optional<ChatRoom> find(UUID noticeId) {
-    return notices.findSummary(noticeId).map(n -> new ChatRoom(n.noticeId(), n.applyEnd()));
+    return notices
+        .findSummary(noticeId)
+        .map(n -> new ChatRoom(n.noticeId(), n.applyEnd(), notices.mergedFrom(n.noticeId())));
   }
 }

@@ -148,6 +148,21 @@ def test_quotes_handed_to_the_assembler_are_widened_until_they_occur_once_in_the
     assert located_text(aided, "t1-1.r0.c1") == "| 505 호 | 2026년 11월 27일 부터 |"
 
 
+def test_a_row_that_repeats_in_the_source_gets_a_unique_neighbor_row_to_place_it():
+    # 2026-11-10 23건 유료 확인 jbdc-16011: 공고 수량의 근거 합계 행이 원문 두 표에 똑같이 있어 결합기가 그 수량을 빼고 공고 전체가 사람 확인으로 감.
+    # 같은 표에서 한 곳뿐인 행(위 행부터)을 함께 붙이면 결합기가 그 근처를 고름(구조 단계만, anchors=True)
+    lines = ["--- 1쪽 ---", "[표 1-1]", "| 기관추천 | 국가유공자 | 30 |", "| 합 계 | | 30 |", "[표 1-2]", "| 다자녀 | 신혼부부 | 30 |", "| 합 계 | | 30 |"]
+    doc = parse("\n".join(lines))
+    count = {"kind": "OFFERED", "value": 30, "evidence": ["t1-2.r1"]}
+    notice = {"title": "공고", "counts": [count], "evidence": ["t1-2.r0"]}
+    plain = to_part("notice", [notice], doc, ("text",))
+    anchored = to_part("notice", [notice], doc, ("text",), anchors=True)
+    assert [q["text"] for q in plain["quotes"]] == ["| 다자녀 | 신혼부부 | 30 |", "| 합 계 | | 30 |"]
+    refs = {q["ref"]: q["text"] for q in anchored["quotes"]}
+    assert [refs[r] for r in anchored["notice"]["counts"][0]["quoteRefs"]] == ["| 합 계 | | 30 |", "| 다자녀 | 신혼부부 | 30 |"]
+    assert doc.neighbors("t1-2.r1") == ["| 다자녀 | 신혼부부 | 30 |"] and doc.neighbors("p9.9") == []
+
+
 def test_items_with_evidence_ids_become_the_same_v1_part():
     data = example("housing")
     source = source_for("housing", data)

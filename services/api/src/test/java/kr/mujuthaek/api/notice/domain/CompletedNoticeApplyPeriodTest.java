@@ -52,6 +52,36 @@ class CompletedNoticeApplyPeriodTest {
   }
 
   @Test
+  void 보류해_빠진_접수_일정이_있으면_끝은_비운다() {
+    // 2026-11-10 코드 검토: 보류한 2순위(10/05~10/07)가 접수 구간에서 빠져 마감이 10/03으로 보였고 마감 알림도 앞당겨졌음
+    assertThat(
+            period(
+                """
+                {"schedule":null,
+                 "applicationWindows":[{"priorityRank":1,"applyStartOn":"2026-10-01","applyEndOn":"2026-10-03"}],
+                 "notice":{"schedules":[
+                   {"id":"rank1","kinds":["APPLICATION"]},
+                   {"id":"rank2","kinds":["APPLICATION"]},
+                   {"id":"winners","kinds":["WINNER_ANNOUNCEMENT"]}]}}
+                """))
+        .containsExactly(LocalDate.of(2026, 10, 1), null);
+  }
+
+  @Test
+  void 접수_일정이_여럿이면_전체_일정_하나로_마감일을_정하지_않는다() {
+    // 2026-11-10 재검토: 공고 전체 접수 일정이 하나면 그 기간만 보고, 범위가 다른 더 늦은 접수(06/12~06/17)를 보지 않아 마감일이 앞당겨졌음
+    assertThat(
+            period(
+                """
+                {"schedule":{"applyStartOn":"2026-06-01","applyEndOn":"2026-06-10"},
+                 "applicationWindows":[{"applyStartOn":"2026-06-01","applyEndOn":"2026-06-10"},
+                                       {"applyStartOn":"2026-06-12","applyEndOn":"2026-06-17"}],
+                 "notice":{"schedules":[{"id":"all","kinds":["APPLICATION"]},{"id":"site","kinds":["APPLICATION"]}]}}
+                """))
+        .containsExactly(LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 17));
+  }
+
+  @Test
   void 접수_구간이_없으면_비어_있다() {
     assertThat(period("{}")).containsExactly(null, null);
     assertThat(period("{\"applicationWindows\":[]}")).containsExactly(null, null);

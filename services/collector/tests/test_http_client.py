@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from mujuthaek_collector.core.http_client import PoliteClient
-from mujuthaek_collector.errors import BlockedError, FileRejected
+from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected
 
 
 def make_client(handler):
@@ -54,8 +54,28 @@ def test_html_instead_of_file_is_rejected():
             return httpx.Response(404)  # robots.txt가 없으면 전체 허용
         return httpx.Response(200, headers={"Content-Type": "text/html"}, text="<html>로그인</html>")
 
-    with make_client(handler) as client, pytest.raises(FileRejected):
+    with make_client(handler) as client, pytest.raises(FileNotReady):  # 점검 화면일 수 있어 다시 받을 수 있는 거절
         client.download("https://a.kr/download.do?id=1")
+
+
+def test_an_attachment_domain_whose_robots_txt_fails_is_tried_again_later():
+    # 2026-11-10 재검토: 첨부 도메인의 robots.txt를 받다 연결 오류·5xx가 나면 영구 거절(FileRejected)이 되어 그 파일 없이 새 버전이 생겼음
+    def failing(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"%PDF")
+
+    with make_client(failing) as client, pytest.raises(FileNotReady):
+        client.download("https://flaky-robots.kr/f.pdf")
+    with make_client(failing) as client, pytest.raises(BlockedError):  # 목록·상세는 그대로 회차를 멈춤
+        client.text("https://flaky-robots.kr/list.do")
+
+    def disallowed(request):
+        return robots() if request.url.path == "/robots.txt" else httpx.Response(200, content=b"%PDF")
+
+    with make_client(disallowed) as client, pytest.raises(FileRejected) as rejected:  # robots.txt가 막은 경로는 그대로 영구 거절
+        client.download("https://strict-robots.kr/upload/a.pdf")
+    assert not isinstance(rejected.value, FileNotReady)
 
 
 def test_robots_txt_is_fetched_once_across_clients():

@@ -17,6 +17,7 @@ from mujuthaek_platform import outbox
 from mujuthaek_platform.ids import uuid7
 
 MAX_ATTEMPTS = 3  # FAILED 글은 3번까지 다시 시도
+ORPHAN_FOLLOW_UP = "원래 모집공고를 찾지 못한 후속 안내"  # 등록할 때 원공고가 아직 없던 후속 안내(목록 읽기 뒤 다시 찾음)
 
 SKIPPED, PENDING, DONE, FAILED = "SKIPPED", "PENDING", "DONE", "FAILED"
 # 처음 수집 개수 제한 (core/intake.py): 고르기 전까지 기다리는 글, 고를 때 빠져 쓰지 않는 글 (다시 큐에 넣지 않아요)
@@ -103,13 +104,16 @@ class Store(Protocol):
     # 글
     def find_post(self, source_code: str, post_key: str) -> PostRow | None: ...
     def insert_post(self, post: PostRow) -> None: ...
-    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None) -> None: ...
+    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None, list_item: dict[str, Any] | None = None) -> None: ...
     def set_parent(self, post_id: UUID, parent_post_id: UUID) -> None: ...
     def queued_posts(self, source_code: str, board_key: str, limit: int) -> list[PostRow]: ...
     def notices_posted_on(self, source_code: str, posted_on: date) -> list[PostRow]: ...
     def recent_notices(self, source_code: str, limit: int = 300) -> list[PostRow]: ...
     def requeue_open_posts(self, source_code: str, today: date, since_days: int) -> int: ...
+    def orphan_follow_ups(self, source_code: str, since: date) -> list[PostRow]: ...
+    def link_follow_up(self, post_id: UUID, parent_post_id: UUID, status: str, reason: str | None) -> None: ...
     def latest_hash(self, post_id: UUID) -> tuple[int, str] | None: ...
+    def latest_files(self, post_id: UUID) -> list[SavedFile]: ...
     def mark_done(self, post_id: UUID) -> None: ...
     def mark_failed(self, post_id: UUID, error: str) -> None: ...
     def save_version(self, new: NewVersion) -> None: ...
@@ -211,11 +215,16 @@ class PostgresStore:
             ),
         )
 
-    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None) -> None:
+    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None, list_item: dict[str, Any] | None = None) -> None:
+        """목록에서 다시 본 글의 목록 값을 고쳐요. list_item(목록 한 줄 전체)도 새로 둬, 상세 처리가 처음 본 목록 값을 계속 쓰지 않게 해요
+        (2026-11-10 코드 검토: 청년안심주택은 본문을 목록 JSON에서만 만들어 게시글 본문을 고쳐도 새 버전이 되지 않았음)."""
+        item = self._json(list_item) if list_item is not None else None
         self.conn.execute(
-            "update raw_posts set list_status = coalesce(%s, list_status), deadline_on = coalesce(%s, deadline_on), updated_at = now() "
-            "where id = %s and (list_status is distinct from %s or deadline_on is distinct from %s)",
-            (list_status, deadline_on, post_id, list_status, deadline_on),
+            "update raw_posts set list_status = coalesce(%s, list_status), deadline_on = coalesce(%s, deadline_on), "
+            "list_item = coalesce(%s::jsonb, list_item), updated_at = now() "
+            "where id = %s and (list_status is distinct from %s or deadline_on is distinct from %s "
+            "or list_item is distinct from coalesce(%s::jsonb, list_item))",
+            (list_status, deadline_on, item, post_id, list_status, deadline_on, item),
         )
 
     def set_parent(self, post_id: UUID, parent_post_id: UUID) -> None:
@@ -244,14 +253,33 @@ class PostgresStore:
         return [_row_to_post(r) for r in rows]
 
     def requeue_open_posts(self, source_code: str, today: date, since_days: int) -> int:
-        """새벽 정정 확인: 아직 마감 전이거나 마감일을 모르는 최근 공고를 PENDING으로 돌려 다시 열어봐요."""
+        """새벽 정정 확인: 아직 마감 전이거나 마감일을 모르는 최근 공고를 PENDING으로 돌려 다시 열어봐요.
+        다시 시도 횟수(MAX_ATTEMPTS)를 다 쓴 FAILED 글도 하루 한 번 다시 열어요(횟수는 그대로라 실패하면 다음 날까지 쉬어요).
+        예전엔 DONE만 돌려, 가끔 막히는 글이 실패 3번을 채우면 정정 확인에서 빠지고 처음 글은 영영 모이지 않았어요(2026-11-10 재검토)."""
         cursor = self.conn.execute(
-            "update raw_posts set status = 'PENDING', updated_at = now() where source_code = %s and status = 'DONE' "
+            "update raw_posts set status = 'PENDING', updated_at = now() where source_code = %s "
+            "and (status = 'DONE' or (status = 'FAILED' and attempts >= %s)) "
             "and kind in ('NOTICE', 'CORRECTION') and (deadline_on is null or deadline_on >= %s) "
             "and (posted_on is null or posted_on >= %s)",
-            (source_code, today, today - timedelta(days=min(since_days, 90))),
+            (source_code, MAX_ATTEMPTS, today, today - timedelta(days=min(since_days, 90))),
         )
         return cursor.rowcount
+
+    def orphan_follow_ups(self, source_code: str, since: date) -> list[PostRow]:
+        """원공고를 찾지 못해 SKIPPED로 둔 최근 후속 안내(since 이후 게시, 게시일 모르면 포함)."""
+        rows = self.conn.execute(
+            f"select {POST_COLUMNS} from raw_posts where source_code = %s and kind = 'FOLLOW_UP' and status = 'SKIPPED' "
+            "and parent_post_id is null and last_error = %s and (posted_on is null or posted_on >= %s)",
+            (source_code, ORPHAN_FOLLOW_UP, since),
+        ).fetchall()
+        return [_row_to_post(r) for r in rows]
+
+    def link_follow_up(self, post_id: UUID, parent_post_id: UUID, status: str, reason: str | None) -> None:
+        self.conn.execute(
+            "update raw_posts set parent_post_id = %s, status = %s, last_error = %s, updated_at = now() "
+            "where id = %s and status = 'SKIPPED' and parent_post_id is null",
+            (parent_post_id, status, reason, post_id),
+        )
 
     def latest_hash(self, post_id: UUID) -> tuple[int, str] | None:
         row = self.conn.execute(
@@ -259,8 +287,20 @@ class PostgresStore:
         ).fetchone()
         return (row[0], row[1]) if row else None
 
+    def latest_files(self, post_id: UUID) -> list[SavedFile]:
+        """마지막 버전의 첨부(원본이 남아 있는 것)와 그 글자. 첨부를 끝내 받지 못할 때 이전 것을 이어 쓰는 데 써요."""
+        rows = self.conn.execute(
+            "select f.idx, f.name, f.role, f.download_url, f.file_hash, f.size_bytes, f.s3_key, f.stored_until, f.text_status, t.text "
+            "from raw_files f join raw_post_versions v on v.id = f.version_id left join raw_texts t on t.file_id = f.id "
+            "where v.raw_post_id = %s and v.version = (select max(version) from raw_post_versions where raw_post_id = %s) "
+            "and f.s3_key is not null and f.deleted_at is null order by f.idx",
+            (post_id, post_id),
+        ).fetchall()
+        return [SavedFile(*row) for row in rows]
+
     def mark_done(self, post_id: UUID) -> None:
-        self.conn.execute("update raw_posts set status = 'DONE', last_error = null, updated_at = now() where id = %s", (post_id,))
+        # 실패 횟수도 되돌려요: 남겨 두면 가끔 실패하는 글이 날을 넘겨 횟수를 채워 다시 시도 대상에서 빠졌어요(2026-11-10 재검토)
+        self.conn.execute("update raw_posts set status = 'DONE', attempts = 0, last_error = null, updated_at = now() where id = %s", (post_id,))
 
     def mark_failed(self, post_id: UUID, error: str) -> None:
         self.conn.execute(

@@ -2,6 +2,7 @@ package kr.mujuthaek.api.user.security;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
@@ -21,6 +22,9 @@ class KnownProviderAuthorizationRequestResolver implements OAuth2AuthorizationRe
 
   static final String BASE_URI =
       DefaultOAuth2AuthorizationRequestResolver.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI;
+
+  /** 탈퇴 티켓 모양: 무작위 32바이트를 패딩 없는 URL Base64로 (AuthTokenService.randomToken, 43자). */
+  private static final Pattern TICKET = Pattern.compile("[A-Za-z0-9_-]{43}");
 
   private final ClientRegistrationRepository registrations;
   private final DefaultOAuth2AuthorizationRequestResolver delegate;
@@ -42,8 +46,13 @@ class KnownProviderAuthorizationRequestResolver implements OAuth2AuthorizationRe
     if (!known(registrationId)) {
       return null;
     }
-    OAuth2AuthorizationRequest authorization = delegate.resolve(request);
     String ticket = request.getParameter(WithdrawalSession.PARAM);
+    if (ticket != null && !ticket.isBlank() && !TICKET.matcher(ticket).matches()) {
+      // 발급한 티켓 모양이 아니면 세션을 만들지 않고 404예요. 인증 없이 부르는 주소라, 예전엔 길이 검사 없이 세션에 넣어
+      // 폼 본문(2MB까지)으로 큰 값을 되풀이해 세션 메모리를 채울 수 있었어요(2026-11-10 코드 검토)
+      return null;
+    }
+    OAuth2AuthorizationRequest authorization = delegate.resolve(request);
     if (authorization == null || ticket == null || ticket.isBlank()) {
       WithdrawalSession.clear(request);
       return authorization;
