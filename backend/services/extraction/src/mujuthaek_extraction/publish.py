@@ -84,8 +84,37 @@ def sigungu_code(candidate: dict[str, Any]) -> str | None:
     return tools().event_region_code(candidate["locations"], held)
 
 
-def completed_payload(candidate: dict[str, Any], *, provider: str | None = None, regions: Any = None, pages: dict[str, int] | None = None) -> dict[str, Any]:
-    """검증 결과로 reviewStatus를 정해 extraction.completed payload를 만듭니다. 검증 통과에 검수 중인 조건이 없을 때만 AUTO_PASSED입니다."""
+SOURCE_KEY = re.compile(r"^raw/[a-z0-9_]+/")  # 계약 sourceFile.s3Key 형식
+SOURCE_DOCUMENT = re.compile(r"^file-(\d+)$")  # 수집 이벤트 files[i]에서 만든 첨부 문서 ID(intake/adapter.py)
+
+
+def source_files(raw: dict[str, Any], candidate: dict[str, Any]) -> list[dict[str, str]]:
+    """상세의 PDF 첨부(documents, kind PDF) → 우리 S3 위치(계약 payload.sourceFiles, 2026-11-11 공고 원문 PDF 보기).
+    문서 ID file-N은 수집 이벤트 files[N-1]에서 만든 것이라 그 s3Key를 옮깁니다. 해시가 같고 raw/ 아래 경로일 때만 넣고(다른 파일을 가리키지
+    않게), 보관 기한이 지나 위치가 없으면(null) 넣지 않습니다. api는 이 위치로 PDF를 내려주고, 없으면 기관 사이트로 보냅니다."""
+    files = raw.get("files") if isinstance(raw.get("files"), list) else []
+    out: list[dict[str, str]] = []
+    for document in candidate.get("documents") or []:
+        found = SOURCE_DOCUMENT.match(str(document.get("id"))) if document.get("kind") == "PDF" else None
+        index = int(found.group(1)) - 1 if found else -1
+        if not 0 <= index < len(files) or not isinstance(files[index], dict):
+            continue
+        key = files[index].get("s3Key")
+        if isinstance(key, str) and SOURCE_KEY.match(key) and ".." not in key and files[index].get("sha256") == document.get("sha256"):
+            out.append({"documentId": document["id"], "s3Key": key})
+    return out
+
+
+def completed_payload(
+    candidate: dict[str, Any],
+    *,
+    provider: str | None = None,
+    regions: Any = None,
+    pages: dict[str, int] | None = None,
+    files: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """검증 결과로 reviewStatus를 정해 extraction.completed payload를 만듭니다. 검증 통과에 검수 중인 조건이 없을 때만 AUTO_PASSED입니다.
+    files는 PDF 첨부의 S3 위치(source_files)로, 있으면 sourceFiles 칸에 싣습니다."""
     status = candidate["quality"]["verification"]["status"]
     items = conditions(candidate)
     if status == "PASSED" and not any(c["inReview"] for c in items):
@@ -112,17 +141,20 @@ def completed_payload(candidate: dict[str, Any], *, provider: str | None = None,
         "notice": candidate,
         # 판정 틀(사용자 결정 2026-10-20: 이 이벤트에 칸을 더해 틀 객체를 그대로 담음). 틀이 없는 분야·틀 검사 실패면 null
         "judgment": build_judgment(candidate, regions, pages=pages),
+        **({"sourceFiles": files} if files else {}),
     }
 
 
-def approved_payload(candidate: dict[str, Any], *, provider: str | None = None, regions: Any = None) -> dict[str, Any]:
+def approved_payload(
+    candidate: dict[str, Any], *, provider: str | None = None, regions: Any = None, files: list[dict[str, str]] | None = None
+) -> dict[str, Any]:
     """검수자가 승인한 결과. 사람이 보류 항목까지 확인했으므로 보류(heldItems)를 풀고, 조건의 inReview를 모두 내리고,
     보류 때문에 빠졌던 접수 일정도 다시 내보냅니다(계약 application_schedule(approved=True)). reviewStatus는 APPROVED입니다.
     예전엔 승인용 사본에서 보류 목록을 찾다 KeyError로 멈췄고, 고쳐도 상세에 보류 목록이 남아 계약 위반(EVENT_HELD_ITEMS_CONFLICT)이었습니다."""
     # 자동 검증 기록·이슈는 유지합니다. 현재 보류만 해제하고 원 후보는 검수 작업 기록에 보존합니다.
     quality = {k: v for k, v in candidate["quality"].items() if k != "heldItems"}
     reviewed = {**candidate, "quality": quality}
-    payload = completed_payload(reviewed, provider=provider, regions=regions)
+    payload = completed_payload(reviewed, provider=provider, regions=regions, files=files)
     for condition in payload["conditions"]:
         condition.update(inReview=False, reviewReasons=[])
     payload.update(

@@ -1787,7 +1787,18 @@
                 }
               ],
               "description": "선택. page 쪽에 인쇄된 쪽 번호입니다. 모르면 넣지 않거나 null입니다"
+            },
+            "pageDocumentId": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "선택. page가 어느 첨부 PDF의 쪽인지(documents[].id, kind PDF). 원문 글자가 여러 PDF를 이어 붙인 것이라 쪽 번호만으로는 문서를 모를 때 화면이 그 PDF를 열도록 씁니다. 첨부 경계로 문서를 하나로 정할 수 있을 때만 넣고, 모르면 넣지 않습니다"
             }
+          },
+          "dependentRequired": {
+            "pageDocumentId": [
+              "page"
+            ]
           }
         },
         {

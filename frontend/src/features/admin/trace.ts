@@ -1,6 +1,6 @@
 // 관리자 「추출 과정 보기」: GET /api/admin/reviews/{jobId}/trace (추출 서비스 trace_view.py 요약을 api가 그대로 넘겨요)
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api/client";
+import { API_BASE_URL, ApiError, api, authToken, refreshAccessToken } from "@/lib/api/client";
 import { USE_MOCKS } from "@/lib/api/config";
 
 export type TraceToolCall = { name: string | null; args: string | null };
@@ -89,7 +89,57 @@ export type ExtractionTrace = {
   /** 끝내기 전에 멈춘 담당(호출 상한·예산·모델 오류)과 응답을 받지 못한 시도(데우기·구조) */
   stopped: { agent: string | null; label: string; reason: string }[];
   agents: TraceAgent[];
+  /** 원문 글자에 들어간 PDF 차례대로 (id는 관리자 원문 PDF API의 fileId). 예전 응답엔 없어요 */
+  documents?: TraceDocument[];
+  /** 근거 id(줄 p3.12 · 표 행 t4-1.r3 · 칸 t4-1.r3.c2 · 둘째 PDF d2.p3.12) → 원문 PDF 위치 */
+  refs?: Record<string, TraceRef>;
 };
+
+export type TraceDocument = { id: string; name: string; pageCount: number | null };
+/** text: 그 id의 원문 글 (PDF에서 찾아 강조, 예전 작업은 null이라 쪽만 열어요) */
+export type TraceRef = { documentId: string; page: number; text: string | null };
+
+/** 글 속 근거 id 후보 (추출 서비스 v2/sources.py와 같은 규칙) */
+const REF_TOKEN = /[A-Za-z0-9][A-Za-z0-9.-]*/g;
+
+/** 글을 근거 id와 나머지로 나눠요. refs에 있는 id만 근거로 봐요 */
+export function splitRefs(text: string, refs: Record<string, TraceRef> | undefined) {
+  const parts: { text: string; ref?: string }[] = [];
+  if (!refs || Object.keys(refs).length === 0) return [{ text }];
+  let last = 0;
+  for (const m of text.matchAll(REF_TOKEN)) {
+    const ref = m[0].replace(/[.-]+$/, "");
+    if (!refs[ref]) continue;
+    const at = m.index ?? 0;
+    if (at > last) parts.push({ text: text.slice(last, at) });
+    parts.push({ text: ref, ref });
+    last = at + ref.length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
+/** 관리자 원문 PDF 주소 (GET /api/admin/reviews/{jobId}/files/{fileId}). 목업이면 예시 PDF */
+export function tracePdfUrl(jobId: string | null, fileId: string) {
+  return USE_MOCKS || !jobId
+    ? "/mock/notice-n7.pdf"
+    : `${API_BASE_URL}/api/admin/reviews/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}`;
+}
+
+/** 로그인이 필요한 관리자 원문 PDF를 받아요 (토큰이 끝났으면 한 번 다시 받아서) */
+export async function fetchAdminPdf(src: string): Promise<ArrayBuffer> {
+  const send = () =>
+    fetch(src, {
+      headers: {
+        ...(authToken.get() && { Authorization: `Bearer ${authToken.get()}` }),
+      },
+      credentials: "include",
+    });
+  let res = await send();
+  if (res.status === 401 && (await refreshAccessToken())) res = await send();
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
+  return res.arrayBuffer();
+}
 
 /** 검수 대기열 항목 ID(「n:작업 ID」) → 작업 ID. 공고가 아니면(혜택 「b:…」) null */
 export function traceJobOf(reviewItemId: string): string | null {
@@ -155,6 +205,11 @@ export const mockTrace: ExtractionTrace = {
     },
   ],
   stopped: [],
+  documents: [{ id: "file-1", name: "공고문.pdf", pageCount: 8 }],
+  refs: {
+    "p3.2": { documentId: "file-1", page: 3, text: null },
+    "t3-1.r1.c2": { documentId: "file-1", page: 3, text: null },
+  },
   agents: [
     {
       agent: "eligibility",
@@ -173,7 +228,10 @@ export const mockTrace: ExtractionTrace = {
       turns: [
         {
           calls: [
-            { name: "add_eligibility", args: '{"items": [{"id": "age", "category": "AGE"}]}' },
+            {
+              name: "add_eligibility",
+              args: '{"items": [{"id": "age", "category": "AGE", "evidence": ["p3.2", "t3-1.r1.c2"]}]}',
+            },
           ],
           results: [
             {

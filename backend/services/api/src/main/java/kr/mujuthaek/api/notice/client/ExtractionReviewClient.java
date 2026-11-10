@@ -151,6 +151,14 @@ public class ExtractionReviewClient {
     return call(() -> http.get().uri("/reviews/{id}/trace", jobId).retrieve().body(JsonNode.class));
   }
 
+  /**
+   * 작업 원본의 첨부 위치(추출 GET /reviews/{id}/files): {files: [{documentId, name, fileType, s3Key,
+   * sha256}]}. 관리자 원문 PDF 보기에서 이 위치로 S3를 읽어요. 문서 ID는 추출 결과 documents[].id와 같아요.
+   */
+  public JsonNode files(String jobId) {
+    return call(() -> http.get().uri("/reviews/{id}/files", jobId).retrieve().body(JsonNode.class));
+  }
+
   /** 처리 통계(최근 days일·오늘). */
   /** 처리 기록 (추출 GET /reviews/activity): 공고·혜택 검수 승인·반려·다시 열기, 최근 순. */
   public JsonNode activity(int days) {

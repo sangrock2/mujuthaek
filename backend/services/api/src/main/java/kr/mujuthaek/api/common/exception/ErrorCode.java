@@ -30,6 +30,8 @@ public enum ErrorCode {
   NOTICE_REVIEW_CONFLICT(HttpStatus.CONFLICT, "이미 처리됐거나 새 버전으로 바뀐 검수 항목이에요"),
   NOTICE_REVIEW_INVALID(HttpStatus.UNPROCESSABLE_CONTENT, "검수 결과가 공고 형식에 맞지 않아요"),
   NOTICE_REVIEW_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "검수 서버에 연결하지 못했어요. 잠시 뒤에 다시 해 주세요"),
+  NOTICE_FILE_NOT_FOUND(HttpStatus.NOT_FOUND, "원문 파일을 찾을 수 없어요. 기관 사이트에서 원문을 확인해 주세요"),
+  NOTICE_FILE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "원문 파일 저장소에 연결하지 못했어요. 잠시 뒤에 다시 해 주세요"),
 
   // benefit
   BENEFIT_NOT_FOUND(HttpStatus.NOT_FOUND, "혜택을 찾을 수 없어요"),

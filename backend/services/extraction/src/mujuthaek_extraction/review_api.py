@@ -6,7 +6,8 @@
                                      SUPERSEDED: 같은 공고의 새 버전(또는 정정공고)이 발행되어 대체된 건, supersededBy에 대체한 작업·공고·버전
   GET  /reviews/{jobId}              검수 상세 (표준 공고 후보·이슈·받은 이벤트)
   GET  /reviews/{jobId}/trace        추출 과정 (관리자 「추출 과정 보기」, trace_view.py): 담당별 도구 호출·거절·검증 메시지·초안 요약과 호출별 토큰·비용.
-                                     검수 대기에 오르지 않은 작업도 작업 ID로 볼 수 있어요
+                                     검수 대기에 오르지 않은 작업도 작업 ID로 볼 수 있어요. 근거 id → 원문 PDF 쪽 대응표(documents·refs)도 함께 줘요
+  GET  /reviews/{jobId}/files        작업 원본의 첨부 위치(문서 ID·이름·형식·s3Key·해시). api가 관리자 원문 PDF 보기에서 S3를 읽을 때 씁니다
   POST /reviews/{jobId}/approve      승인 → extraction.completed(reviewStatus APPROVED) 다시 발행
                                      본문(선택): {"candidate": 고친 표준 공고 | "edits": [{"path": "/eligibility/3/description", "value": …}],
                                                  "note": "메모", "reviewer": "검수자"}
@@ -52,7 +53,7 @@ from urllib.parse import parse_qs, urlparse
 
 from mujuthaek_extraction.assemble.details import upgrade_stored
 from mujuthaek_extraction.contracts import tools
-from mujuthaek_extraction.publish import approved_payload
+from mujuthaek_extraction.publish import approved_payload, source_files
 from mujuthaek_extraction.store import REVIEW_REASON_SQL, SUPERSEDED, superseded_message
 from mujuthaek_extraction.trace_view import trace_view
 
@@ -61,6 +62,7 @@ CANDIDATE_SCHEMA = "schemas/extracted-notice.v1.json"
 EVENT_SCHEMA = "events/extraction.completed.v1.json"
 REVIEW_PATH = re.compile(r"^/reviews/([0-9a-fA-F-]{36})(?:/(approve|reject))?$")
 TRACE_PATH = re.compile(r"^/reviews/([0-9a-fA-F-]{36})/trace$")
+FILES_PATH = re.compile(r"^/reviews/([0-9a-fA-F-]{36})/files$")
 BENEFIT_REVIEW_PATH = re.compile(r"^/benefit-reviews/([0-9a-fA-F-]{36})(?:/(approve|reject))?$")
 BENEFIT_PATH = re.compile(r"^/benefits/([0-9a-fA-F-]{36})$")
 BENEFIT_EVENT_SCHEMA = "events/policy.extracted.v1.json"
@@ -255,8 +257,16 @@ class ReviewService:
             job = store.job_usage(job_id)
         if job is None:
             return 404, {"error": "작업이 없습니다."}
-        usage = job.pop("usage")
-        return 200, {**job, **trace_view(usage if isinstance(usage, dict) else None)}
+        usage, pdfs, text_led = job.pop("usage"), job.pop("pdfs", None), job.pop("textLed", False)
+        return 200, {**job, **trace_view(usage if isinstance(usage, dict) else None, pdfs, text_led=text_led)}
+
+    def files(self, job_id: str) -> tuple[int, Any]:
+        """작업 원본의 첨부 위치(관리자 원문 PDF 보기, api가 S3에서 읽어 내려줌). 문서 ID는 추출 결과 documents[].id와 같아요."""
+        with self.store_session() as store:
+            files = store.job_files(job_id)
+        if files is None:
+            return 404, {"error": "작업이 없습니다."}
+        return 200, {"files": files}
 
     def approve(self, job_id: str, body: dict[str, Any]) -> tuple[int, Any]:
         """검수 대기 작업을 승인하고 APPROVED 이벤트를 저장합니다. 고친 후보가 오면 그것을 쓰되 계약·같은 공고인지 먼저 확인합니다."""
@@ -287,7 +297,7 @@ class ReviewService:
             raw = (item["rawEvent"] or {}).get("payload") or {}
             if not _same_notice(candidate, raw):
                 return 422, {"error": "후보의 원본·버전·분야가 이 검수 작업의 공고와 다릅니다."}
-            payload = approved_payload(candidate, provider=raw.get("provider"))
+            payload = approved_payload(candidate, provider=raw.get("provider"), files=source_files(raw, candidate))
             event = {**self.new_event("extraction.completed", "extraction", payload), "traceId": (item["rawEvent"] or {}).get("traceId")}
             errors = tools().validate(event, EVENT_SCHEMA)
             if errors:
@@ -508,6 +518,10 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
             if match:
                 job_id = self._job_id(match)
                 return self._send(*service.trace(job_id)) if job_id else self._send(400, {"error": "작업 ID 형식이 아닙니다."})
+            match = FILES_PATH.match(url.path)
+            if match:
+                job_id = self._job_id(match)
+                return self._send(*service.files(job_id)) if job_id else self._send(400, {"error": "작업 ID 형식이 아닙니다."})
             match = BENEFIT_REVIEW_PATH.match(url.path)
             if match and not match[2]:
                 review_id = self._job_id(match)

@@ -342,6 +342,52 @@
         }
       }
     },
+    "/api/v1/notices/{id}/files/{fileId}": {
+      "get": {
+        "tags": [
+          "notice"
+        ],
+        "operationId": "getNoticeFile",
+        "summary": "공고 원문 PDF",
+        "description": "지금 공개 버전의 첨부 PDF 하나를 내려줍니다(수집할 때 우리 저장소에 둔 원본 그대로). 주소는 상세의 files[].viewUrl이고, 화면은 근거의 fileId·page로 그 PDF의 그 쪽을 엽니다. ETag는 파일 해시라 If-None-Match가 같으면 304입니다. 쪽 범위 요청(Range)은 받지 않고 늘 전체를 줍니다. viewUrl이 null인 문서(HWP·그림만·보관 기한 지남·이전 결과)는 받을 수 없어 기관 사이트로 보냅니다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NoticeId"
+          },
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF 파일 (Content-Disposition inline, ETag = 파일 해시)",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "ETag가 같음 (브라우저 캐시 사용)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/FileNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/FileUnavailable"
+          }
+        }
+      }
+    },
     "/api/admin/reviews/queue": {
       "get": {
         "tags": [
@@ -583,6 +629,48 @@
         }
       }
     },
+    "/api/admin/reviews/{id}/trace": {
+      "get": {
+        "tags": [
+          "admin-review"
+        ],
+        "operationId": "getAdminReviewTrace",
+        "summary": "추출 과정",
+        "description": "이 작업을 추출한 과정입니다(추출 서비스 trace_view 요약을 그대로). engine은 V2(섹션 담당 에이전트) 또는 V1(예전 방식, 합계만). totals·byAgent는 호출 수·토큰·비용·시간, agents는 담당마다 차례별 도구 호출·결과·검증 메시지·넣은 항목·넣지 못한 항목입니다. documents·refs는 근거 id(줄 p3.12 · 표 행 t4-1.r3 · 칸 t4-1.r3.c2 · 둘째 PDF d2.p3.12)를 원문 PDF 쪽으로 여는 대응표입니다. 원문 공고 내용만 있고 사용자 정보는 없습니다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "추출 과정 요약",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReviewTrace"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ReviewNotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ReviewUnavailable"
+          }
+        }
+      }
+    },
     "/api/admin/reviews/{id}/approve": {
       "post": {
         "tags": [
@@ -693,6 +781,55 @@
           },
           "503": {
             "$ref": "#/components/responses/ReviewUnavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews/{id}/files/{fileId}": {
+      "get": {
+        "tags": [
+          "admin-review"
+        ],
+        "operationId": "getAdminReviewFile",
+        "summary": "검수 작업의 원문 PDF",
+        "description": "검수 작업(추출 작업) 원본의 첨부 중 PDF 하나를 내려줍니다. 「추출 과정 보기」에서 근거 id를 누르면 그 PDF의 그 쪽을 엽니다. 공개 전인 검수 대기 결과도 볼 수 있게 추출 서비스에 작업 원본의 첨부 위치를 묻습니다. 공개 공고 원문이라 사용자 정보는 없습니다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewId"
+          },
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF 파일 (Content-Disposition inline, ETag = 파일 해시)",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "ETag가 같음 (브라우저 캐시 사용)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/FileNotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/FileUnavailable"
           }
         }
       }
@@ -1991,6 +2128,16 @@
           "type": "string",
           "format": "uuid"
         }
+      },
+      "FileId": {
+        "name": "fileId",
+        "in": "path",
+        "required": true,
+        "description": "문서 ID (공고 상세의 files[].id · 추출 과정의 documents[].id, 예: file-1)",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "responses": {
@@ -2136,6 +2283,26 @@
       },
       "SourceBusy": {
         "description": "다른 수집이 돌고 있거나, 그 출처가 수집 중·멈춤 (code: CONFLICT). detail에 수집기 설명",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileNotFound": {
+        "description": "공고·작업이 없거나(code: NOTICE_NOT_FOUND · NOTICE_REVIEW_NOT_FOUND), 그 문서가 없거나 PDF가 아니거나 보류됐거나 우리 저장소에 원본이 없음 (code: NOTICE_FILE_NOT_FOUND)",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileUnavailable": {
+        "description": "파일 저장소에 연결하지 못함 (code: NOTICE_FILE_UNAVAILABLE). 관리자 경로는 검수 서버에 연결하지 못했을 때도(code: NOTICE_REVIEW_UNAVAILABLE)",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -2505,7 +2672,7 @@
             "items": {
               "$ref": "#/components/schemas/FileLink"
             },
-            "description": "첨부 (기관 링크만)"
+            "description": "첨부 (기관 링크, 우리 저장소에 원문 PDF가 있으면 그 경로 viewUrl)"
           },
           "heldItems": {
             "type": "array",
@@ -3124,7 +3291,8 @@
           "quote",
           "page",
           "printedPage",
-          "documentName"
+          "documentName",
+          "fileId"
         ],
         "properties": {
           "quote": {
@@ -3155,6 +3323,13 @@
               "null"
             ],
             "description": "근거 문서 이름 (첨부 파일 이름 또는 원문 글자 묶음 이름)"
+          },
+          "fileId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "page가 어느 첨부 PDF의 쪽인지 (files[].id). 쪽이 없거나 어느 PDF인지 모르면 null. 화면은 이 파일의 viewUrl이 있을 때만 앱 안에서 그 쪽을 엽니다"
           }
         }
       },
@@ -3162,7 +3337,10 @@
         "type": "object",
         "required": [
           "name",
-          "url"
+          "url",
+          "id",
+          "viewUrl",
+          "pageCount"
         ],
         "properties": {
           "name": {
@@ -3172,8 +3350,33 @@
             ]
           },
           "url": {
-            "type": "string",
-            "description": "기관 원문 첨부 주소"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "기관 원문 첨부 주소 (없으면 null)"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "문서 ID (근거의 fileId와 같음)"
+          },
+          "viewUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "이 서버의 원문 PDF 경로 (GET /api/v1/notices/{id}/files/{fileId}). 우리 저장소에 PDF가 없으면(HWP·보관 기한 지남·이전 결과) null이고 화면은 기관 사이트로 보냅니다"
+          },
+          "pageCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "PDF 쪽 수 (모르면 null)"
           }
         }
       },
@@ -5670,6 +5873,62 @@
             ],
             "maxLength": 200,
             "description": "화면에 보인 값이나 오류 코드"
+          }
+        }
+      },
+      "AdminReviewTrace": {
+        "type": "object",
+        "description": "추출 서비스가 화면용으로 줄인 요약(모양은 추출 서비스 trace_view.py가 정해요). 여기서는 원문 PDF 대응표만 자세히 적습니다",
+        "properties": {
+          "engine": {
+            "type": "string",
+            "enum": [
+              "V1",
+              "V2"
+            ]
+          },
+          "documents": {
+            "type": "array",
+            "description": "원문 글자에 들어간 PDF 차례대로 (id는 관리자 원문 PDF API의 fileId)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pageCount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "refs": {
+            "type": "object",
+            "description": "근거 id → {documentId, page, text}. text는 그 id의 원문 글(화면이 PDF 글자 층에서 찾아 강조, 예전 작업은 null이라 쪽만 엶). 쪽 표시 아래의 PDF 줄·표만 들고, 수집 글자·엑셀·그림 판독 묶음 id는 없습니다",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "documentId": {
+                  "type": "string"
+                },
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
           }
         }
       }

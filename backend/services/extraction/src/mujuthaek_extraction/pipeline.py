@@ -34,12 +34,12 @@ from mujuthaek_extraction.intake import ApiReferenceProvider, IntakeResult, Inta
 from mujuthaek_extraction.intake.adapter import PDF_TEXT_DOCUMENT_ID
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
 from mujuthaek_extraction.judgment import build_judgment
-from mujuthaek_extraction.judgment.pages import attach_locator_pages, evidence_pages
+from mujuthaek_extraction.judgment.pages import attach_locator_pages, evidence_pages, page_documents
 from mujuthaek_extraction.method import LEGACY, STRUCTURED
 from mujuthaek_extraction.model.base import ExtractionModel
 from mujuthaek_extraction.model.factory import NoticeModels
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel, extract_with_fallback
-from mujuthaek_extraction.publish import completed_payload
+from mujuthaek_extraction.publish import completed_payload, source_files
 from mujuthaek_extraction.recheck import RecheckResult, lost_by_recheck, recheck_problems
 from mujuthaek_extraction.rules import discover
 from mujuthaek_extraction.rules.base import FieldRules
@@ -367,10 +367,13 @@ def publish_step(report: VerificationReport, raw_event: dict[str, Any], material
     raw = raw_event["payload"]
     with rt.usage.stage("publish"):
         # 판정 틀의 page: 근거 위치를 PDF 원문의 쪽 표시로 쪽 번호로 바꿉니다
-        pages = evidence_pages(report.candidate, SourceBundle.from_material(material).texts)
-        # 공고 상세 API의 근거 쪽수: PDF 글자 원문 근거의 글자 범위에 같은 쪽 번호를 싣습니다(저장 후보에도 남아 승인 발행에도 쓰임)
-        attach_locator_pages(report.candidate, pages, PDF_TEXT_DOCUMENT_ID)
-        payload = completed_payload(report.candidate, provider=raw.get("provider"), regions=rt.regions, pages=pages)
+        texts = SourceBundle.from_material(material).texts
+        pages = evidence_pages(report.candidate, texts)
+        # 공고 상세 API의 근거 쪽수: PDF 글자 원문 근거의 글자 범위에 같은 쪽 번호와 그 쪽의 첨부 PDF를 싣습니다(저장 후보에도 남아 승인 발행에도 쓰임)
+        pdfs = [(str(p.get("documentId")), str(p.get("name"))) for p in material.pdf_pages]
+        documents = page_documents(report.candidate, pages, texts.get(PDF_TEXT_DOCUMENT_ID) or "", PDF_TEXT_DOCUMENT_ID, pdfs)
+        attach_locator_pages(report.candidate, pages, PDF_TEXT_DOCUMENT_ID, documents)
+        payload = completed_payload(report.candidate, provider=raw.get("provider"), regions=rt.regions, pages=pages, files=source_files(raw, report.candidate))
         event = {**rt.new_event(EVENT_TYPE, PRODUCER, payload), "traceId": raw_event.get("traceId")}
         errors = tools().validate(event, EVENT_SCHEMA)
     return Publication(payload, event, errors, pages)

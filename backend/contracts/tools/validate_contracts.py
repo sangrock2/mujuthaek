@@ -303,6 +303,13 @@ def event_errors(payload):
         errors.append("EVENT_SCHEDULE_CONFLICT /payload/schedule")
     if "applicationWindows" in payload and payload["applicationWindows"] != application_windows(notice, approved=approved):
         errors.append("EVENT_WINDOWS_CONFLICT /payload/applicationWindows")
+    # 원문 PDF 위치(선택): 상세의 PDF 문서를 한 번씩만 가리켜야 합니다(api가 문서 ID로 S3 위치를 찾습니다)
+    pdfs = {d["id"] for d in notice["documents"] if d["kind"] == "PDF"}
+    seen = set()
+    for index, item in enumerate(payload.get("sourceFiles") or []):
+        if item["documentId"] not in pdfs or item["documentId"] in seen or ".." in item["s3Key"]:
+            errors.append(f"EVENT_SOURCE_FILE_CONFLICT /payload/sourceFiles/{index}")
+        seen.add(item["documentId"])
     return errors
 
 
@@ -723,6 +730,15 @@ def semantic_errors(data, ready=False):
             page = locator.get("page")
             if page is not None and document["pageCount"] is not None and page > document["pageCount"]:
                 error("PAGE_OUT_OF_RANGE", path)
+            # 쪽이 속한 첨부 PDF(선택): 있는 PDF 문서여야 하고, 그 PDF 쪽 수를 알면 쪽 번호가 그 안이어야 합니다
+            if "pageDocumentId" in locator:
+                paged = documents.get(locator["pageDocumentId"])
+                if paged is None:
+                    error("DANGLING_SOURCE", path)
+                elif paged["kind"] != "PDF":
+                    error("LOCATOR_SOURCE_CONFLICT", path)
+                elif page is not None and paged["pageCount"] is not None and page > paged["pageCount"]:
+                    error("PAGE_OUT_OF_RANGE", path)
     for count_id, count in counts.items():
         count_path = count_paths[count_id]
         parent_id = count["parentCountId"]

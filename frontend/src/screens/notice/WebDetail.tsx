@@ -23,7 +23,8 @@ import { PdfViewer } from "@/components/notice/PdfViewer";
 import { RegulationNotice } from "@/components/notice/RegulationNotice";
 import { WebRankCard } from "@/components/notice/RankCard";
 import { VerdictBadge } from "@/components/ui/Badge";
-import { dueText, formatPeriod, statusLabel, pdfSections } from "@/features/notice/format";
+import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
+import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
 import { bySite, directionsUrl, toUnit, useNoticeUnits } from "@/features/notice/units";
 import { UnitPrices } from "@/components/notice/UnitPrices";
@@ -431,13 +432,12 @@ export function WebDetail({ id }: { id: string }) {
   const doc = withMine(n.doc, j.judgment?.mineTypes ?? []);
   const money = j.judgment?.money;
   const benefits = n.benefits ?? [];
-  const pdfUrl = doc.source.pdfUrl;
-  /** 원문 PDF가 있으면 옆에 열고, 없으면 기관 사이트로 */
-  const openOriginal = (page = 1, label?: string) => {
-    track("notice_source_open", { ...noticeParams(n), via: pdfUrl ? "pdf" : "site" });
-    if (pdfUrl) pdf.show(page, label);
-    else window.open(doc.source.detailUrl, "_blank", "noreferrer");
-  };
+  /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 옆에 열고, 없으면 기관 사이트로 */
+  const original = noticeOriginal(doc, pdf, (via) =>
+    track("notice_source_open", { ...noticeParams(n), via }),
+  );
+  const openOriginal = original.openOriginal;
+  const pdfUrl = original.viewer?.src;
   /** 주택목록에서 고른 집 단지의 생활권으로 */
   const showLife = (siteId: string) => {
     setLifeSite(siteId);
@@ -538,7 +538,7 @@ export function WebDetail({ id }: { id: string }) {
               <NoticeSections
                 doc={doc}
                 variant="web"
-                onOpenPage={pdfUrl ? openOriginal : undefined}
+                onOpenPage={original.hasPdf ? openOriginal : undefined}
               />
 
               {benefits.length > 0 && (
@@ -585,9 +585,7 @@ export function WebDetail({ id }: { id: string }) {
                 loading={j.loading}
                 error={j.error}
                 variant="web"
-                onOpenOriginal={(page) =>
-                  openOriginal(page ?? doc.pages.eligibility ?? 1, "신청 자격")
-                }
+                onOpenOriginal={original.openEligibility}
               />
 
               {n.ranking && <WebRankCard ranking={n.ranking} />}
@@ -654,19 +652,7 @@ export function WebDetail({ id }: { id: string }) {
           </div>
         </WebMain>
       </div>
-      {pdfUrl && (
-        <PdfViewer
-          open={pdf.open}
-          onClose={pdf.close}
-          src={pdfUrl}
-          fileName={doc.source.fileName}
-          detailUrl={doc.source.detailUrl}
-          target={pdf.target}
-          sections={pdfSections(doc)}
-          onJump={pdf.show}
-          variant="web"
-        />
-      )}
+      {original.viewer && <PdfViewer {...original.viewer} variant="web" />}
     </WebPage>
   );
 }

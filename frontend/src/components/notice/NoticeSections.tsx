@@ -21,6 +21,7 @@ import type {
   NoticeScheduleItem,
   NoticeSectionKey,
   NoticeSelectionKind,
+  PdfAnchor,
 } from "@/mocks/notice-doc";
 
 type Variant = "web" | "mobile";
@@ -28,8 +29,8 @@ type Variant = "web" | "mobile";
 type SectionsProps = {
   doc: NoticeDoc;
   variant: Variant;
-  /** 원문 PDF가 있을 때만: 해당 쪽 열기 */
-  onOpenPage?: (page: number, label: string) => void;
+  /** 원문 PDF가 있을 때만: 해당 쪽 열기 (anchor: 그 쪽 근거가 어느 PDF의 어느 문장인지, 실제 응답만) */
+  onOpenPage?: (page: number, label: string, anchor?: PdfAnchor) => void;
 };
 
 /** detail: 예외 조건. checking: 원문과 다시 확인하는 중 */
@@ -262,7 +263,7 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
         {page && onOpenPage && (
           <button
             type="button"
-            onClick={() => onOpenPage(page, sectionTitles[k].toc)}
+            onClick={() => onOpenPage(page, sectionTitles[k].toc, doc.anchors?.[k])}
             className="text-brand-strong inline-flex min-h-[40px] flex-none cursor-pointer items-center gap-[4px] border-0 bg-transparent p-0 text-[13px] font-bold"
           >
             <FileText size={15} aria-hidden />
