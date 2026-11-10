@@ -233,8 +233,11 @@ export function withMine(doc: NoticeDoc, mineTypes: string[]): NoticeDoc {
 
 type JudgmentState = { judgment: NoticeJudgment | null; loading: boolean; error: boolean };
 
-/** 실제 API: 내 조건(구간 값)으로 공고 하나를 판정해요. 조건이 든 결과라 짧게만 둬요 */
-function useApiJudgment(notice: StandardNotice | undefined): JudgmentState {
+/**
+ * 공고 판정 · 준비할 돈에 보낼 판정 입력 (구간 값). 저장한 조건과 기준값을 다 읽은 뒤에 ready예요.
+ * cashWon은 브라우저에만 있는 쓸 수 있는 돈이에요 (서버로 보내지 않아요)
+ */
+export function useNoticeApplicant() {
   const stored = useConditions();
   const criteria = useCriteria();
   const ready = stored.status === "ready" && !criteria.isPending;
@@ -244,6 +247,12 @@ function useApiJudgment(notice: StandardNotice | undefined): JudgmentState {
     [stored, criteria.data],
   );
   const cashWon = stored.status === "ready" ? availableCashWon(stored.session) : null;
+  return { ready, applicant, cashWon };
+}
+
+/** 실제 API: 내 조건(구간 값)으로 공고 하나를 판정해요. 조건이 든 결과라 짧게만 둬요 */
+function useApiJudgment(notice: StandardNotice | undefined): JudgmentState {
+  const { ready, applicant, cashWon } = useNoticeApplicant();
   const id = notice?.id ?? "";
 
   const q = useQuery({

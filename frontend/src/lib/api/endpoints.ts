@@ -9,6 +9,10 @@ export const endpoints = {
   regions: "/api/v1/regions",
   /** 판정 기준값 (기준 소득 월액, 자산·자동차 구간 경계, 순위 요건) */
   eligibilityCriteria: "/api/v1/eligibility/criteria",
+  /** 보증금 하나로 준비할 돈 {applicant, depositWon} → 고른 대출 · 준비할 돈 (공고 판정과 같은 계산) */
+  prepareCost: "/api/v1/eligibility/prepare-cost",
+  /** 청약 가점 {applicant: 생년월일 · 혼인 · 무주택 시작 · 부양가족 · 통장 가입 연월} → 항목별 점수 */
+  subscriptionScore: "/api/v1/eligibility/subscription-score",
   /** 맞춤 목록: 필터 + 판정 입력(구간 값)을 보내면 판정 결과가 붙은 공고 목록 */
   noticesSearch: "/api/v1/notices/search",
   /** 지도: 범위 안 공고 핀 (많으면 지역 묶음). 공개 정보라 판정은 없어요 */
@@ -23,6 +27,11 @@ export const endpoints = {
   homeSummary: "/api/v1/home/summary",
   /** 공고 상세 (공개 정보) */
   noticeDetail: (id: string) => `/api/v1/notices/${encodeURIComponent(id)}`,
+  /** 공고 정정 이력 (버전 · 글 종류 · 바뀐 목록 값 · 받은 시각). 공개 정보 */
+  noticeVersions: (id: string) => `/api/v1/notices/${encodeURIComponent(id)}/versions`,
+  /** 공고 지역의 규제지역 안내 (판정 값은 바꾸지 않아요). 공개 정보 */
+  noticeRegulation: (id: string) =>
+    `/api/v1/eligibility/notices/${encodeURIComponent(id)}/regulation`,
   /** 공고 주택목록 (호별, 커서) */
   noticeUnits: (id: string) => `/api/v1/notices/${encodeURIComponent(id)}/units`,
   /** 사업공간 맞춤 목록: 판정 입력(사는 곳 · 사업 입력) → 공간마다 판정, 종류별 개수 */
@@ -35,6 +44,8 @@ export const endpoints = {
   supportEvaluate: (id: string) => `/api/v1/supports/${encodeURIComponent(id)}/evaluate`,
   /** 단지 하나의 생활권 (항목 점수 · 가까운 시설 · 세권 태그). 공개 정보 */
   areaSite: (siteId: string) => `/api/v1/areas/sites/${encodeURIComponent(siteId)}`,
+  /** 생활권 점수 기준표 (지표별 구간 · 항목 비중)와 데이터 출처. 하루 캐시 */
+  areaCriteria: "/api/v1/areas/criteria",
   /** 공고 하나의 판정 (조건별 결과) */
   noticeEvaluate: (id: string) => `/api/v1/eligibility/notices/${encodeURIComponent(id)}/evaluate`,
   /** 웹 푸시 기기 등록(PUT)·해제(DELETE). 본문은 subscription.toJSON() 그대로 */

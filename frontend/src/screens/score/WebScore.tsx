@@ -4,22 +4,18 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { WebHeader } from "@/components/layout/WebHeader";
 import { WebMain, WebPage } from "@/components/layout/Responsive";
+import {
+  ScoreFields,
+  scoreHelp,
+  scoreItemKeys,
+  scoreMax,
+  ScoreStatus,
+  scoreTitles,
+} from "@/components/score/ScoreFields";
 import { Badge } from "@/components/ui/Badge";
-import { ringStyle, SCORE_MAX, type ScoreItemKey } from "@/features/score/score";
+import { ringStyle, SCORE_MAX } from "@/features/score/score";
 import { useScoreCalculator } from "@/features/score/useScoreCalculator";
 import { routes } from "@/lib/routes";
-
-const titles: Record<ScoreItemKey, string> = {
-  homeless: "무주택 기간",
-  dependents: "부양가족 수",
-  account: "청약통장 가입 기간",
-};
-
-const help: Record<ScoreItemKey, string> = {
-  homeless: "만 30세부터 세요. 그 전에 혼인했다면 혼인신고일부터 세요.",
-  dependents: "나를 뺀 세대원 수예요. 직계존속은 3년 이상 같은 등본에 있어야 인정돼요.",
-  account: "주택청약종합저축에 처음 가입한 날부터 세요.",
-};
 
 function AltLink({ title, desc }: { title: string; desc: string }) {
   return (
@@ -37,7 +33,8 @@ function AltLink({ title, desc }: { title: string; desc: string }) {
 }
 
 export function WebScore() {
-  const { profile, items, total, diff, set } = useScoreCalculator();
+  const calc = useScoreCalculator();
+  const { profile, pointsOf, total, diff, score } = calc;
 
   return (
     <WebPage>
@@ -59,7 +56,7 @@ export function WebScore() {
         <div className="flex flex-col gap-[6px]">
           <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">청약 가점 계산</h1>
           <span className="text-text-sub text-[16px]">
-            내 조건으로 미리 채웠어요. 바꿔 보면 점수가 바로 바뀌어요
+            내 조건으로 채울 수 있는 칸은 미리 채웠어요. 날짜를 넣으면 점수를 계산해 드려요
           </span>
         </div>
 
@@ -69,53 +66,48 @@ export function WebScore() {
             className="flex min-w-0 flex-col gap-[12px]"
             style={{ flex: "999 1 560px" }}
           >
-            {items.map((it) => (
-              <div
-                key={it.key}
-                className="rounded-card bg-surface flex flex-col gap-[14px] px-[26px] py-[24px]"
-              >
-                <div className="flex items-baseline justify-between gap-[12px]">
-                  <span className="flex flex-col gap-[2px]">
-                    <span className="tracking-title text-[19px] font-extrabold">
-                      {titles[it.key]}
+            {scoreItemKeys.map((key) => {
+              const item = pointsOf(key);
+              const max = scoreMax[key];
+              const points = item?.points ?? null;
+              return (
+                <div
+                  key={key}
+                  className="rounded-card bg-surface flex flex-col gap-[14px] px-[26px] py-[24px]"
+                >
+                  <div className="flex items-baseline justify-between gap-[12px]">
+                    <span className="flex flex-col gap-[2px]">
+                      <span className="tracking-title text-[19px] font-extrabold">
+                        {scoreTitles[key]}
+                      </span>
+                      <span className="text-text-sub text-[14px]">최대 {max}점</span>
                     </span>
-                    <span className="text-text-sub text-[14px]">최대 {it.max}점</span>
+                    <span className="tracking-h1 text-brand text-[30px] font-extrabold">
+                      {points ?? "–"}
+                      <span className="text-text text-[16px]">점</span>
+                    </span>
+                  </div>
+                  <ScoreFields item={key} calc={calc} variant="web" />
+                  <span className="bg-fill h-[8px] overflow-hidden rounded-[4px]">
+                    <span
+                      className="bg-brand block h-full rounded-[4px]"
+                      style={{ width: `${Math.round(((points ?? 0) / max) * 100)}%` }}
+                    />
                   </span>
-                  <span className="tracking-h1 text-brand text-[30px] font-extrabold">
-                    {it.points}
-                    <span className="text-text text-[16px]">점</span>
+                  <span className="flex flex-col gap-[2px] text-[14px] leading-[1.6]">
+                    {item && <strong>{item.reason}</strong>}
+                    <span className="text-text-sub">{scoreHelp[key]}</span>
                   </span>
                 </div>
-                <select
-                  aria-label={titles[it.key]}
-                  value={it.index}
-                  onChange={(e) => set(it.key, Number(e.target.value))}
-                  className="rounded-control border-line bg-surface text-text min-h-[54px] border border-solid px-[14px] text-[16px] font-semibold"
-                >
-                  {it.options.map((o, i) => (
-                    <option key={o.label} value={i}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="bg-fill h-[8px] overflow-hidden rounded-[4px]">
-                  <span
-                    className="bg-brand block h-full rounded-[4px]"
-                    style={{ width: it.width }}
-                  />
-                </span>
-                <span className="text-text-sub text-[14px] leading-[1.6]">
-                  {help[it.key]}
-                  {it.key === "homeless" && ` ${profile.homelessNote}`}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </section>
 
           <aside className="flex min-w-0 flex-col gap-[16px]" style={{ flex: "1 1 340px" }}>
             <section
               aria-label="총점"
               aria-live="polite"
+              aria-busy={calc.updating}
               className="rounded-card-lg bg-surface flex flex-col items-center gap-[16px] p-[28px]"
             >
               <div
@@ -124,11 +116,12 @@ export function WebScore() {
               >
                 <div className="rounded-pill bg-surface flex size-[146px] flex-col items-center justify-center">
                   <span className="text-[48px] leading-none font-extrabold tracking-[-0.05em]">
-                    {total}
+                    {score ? total : "–"}
                   </span>
                   <span className="text-text-sub text-[15px]">{SCORE_MAX}점 만점</span>
                 </div>
               </div>
+              <ScoreStatus calc={calc} className="text-center" />
               <div className="rounded-tile bg-bg box-content flex w-full flex-col gap-[6px] px-[16px] py-[14px]">
                 <span className="text-text-sub flex justify-between text-[14px]">
                   <span>{profile.cutoff.label}</span>
@@ -136,12 +129,14 @@ export function WebScore() {
                 </span>
                 <span className="flex items-center justify-between">
                   <span className="text-[20px] font-extrabold">{profile.cutoff.score}점</span>
-                  <Badge
-                    tone={diff >= 0 ? "ok" : "check"}
-                    className="px-[10px] py-[4px] text-[14px] font-extrabold"
-                  >
-                    {diff >= 0 ? `${diff}점 넘어요` : `${-diff}점 부족해요`}
-                  </Badge>
+                  {score && (
+                    <Badge
+                      tone={diff >= 0 ? "ok" : "check"}
+                      className="px-[10px] py-[4px] text-[14px] font-extrabold"
+                    >
+                      {diff >= 0 ? `${diff}점 넘어요` : `${-diff}점 부족해요`}
+                    </Badge>
+                  )}
                 </span>
               </div>
             </section>
@@ -161,8 +156,9 @@ export function WebScore() {
             </section>
 
             <span className="text-text-sub px-[4px] text-[13px] leading-[1.6]">
-              가점제는 주로 <strong className="text-text">민영주택</strong> 청약에 쓰여요. 최종
-              점수는 청약홈의 확인 결과를 기준으로 해요.
+              가점제는 주로 <strong className="text-text">민영주택</strong> 청약에 쓰여요. 오늘
+              기준으로 계산했고, 연월만 넣은 칸은 그 달 1일부터 세요. 최종 점수는 청약홈의 확인
+              결과를 기준으로 해요. 넣은 값은 저장하지 않아요.
             </span>
           </aside>
         </div>

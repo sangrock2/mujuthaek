@@ -12,7 +12,9 @@ import { EligibilityCard } from "@/components/notice/EligibilityCard";
 import { LifeCard } from "@/components/notice/LifeCard";
 import { NoticeHeldBanner, NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
 import { NoticeTags } from "@/components/notice/NoticeTags";
+import { NoticeVersions } from "@/components/notice/NoticeVersions";
 import { PdfViewer } from "@/components/notice/PdfViewer";
+import { RegulationNotice } from "@/components/notice/RegulationNotice";
 import { MRankCard } from "@/components/notice/RankCard";
 import { VerdictBadge } from "@/components/ui/Badge";
 import { dueText, formatPeriod, statusLabel, pdfSections } from "@/features/notice/format";
@@ -27,6 +29,7 @@ import {
 import { SitesMap } from "@/components/notice/SitesMap";
 import { unitStatus, useUnitPicker } from "@/features/notice/useUnitPicker";
 import { UnitPrices } from "@/components/notice/UnitPrices";
+import { UnitPrepValue } from "@/components/notice/UnitPrep";
 import type { StandardNotice } from "@/mocks/notice";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
 import { useNotice } from "@/features/notice/queries";
@@ -215,7 +218,7 @@ function MApiUnits({
             </span>
           )}
           <span className="text-[14px]">
-            준비할 돈 <strong className="text-brand-strong">{selected.prep}</strong>
+            준비할 돈 <UnitPrepValue unit={selected} />
           </span>
           {((selected.siteId && selected.lifeScore !== undefined) || directions) && (
             <div className="grid grid-cols-2 gap-[8px] pt-[4px]">
@@ -326,6 +329,7 @@ export function MDetail({ id }: { id: string }) {
               )}
             </div>
           )}
+          <RegulationNotice noticeId={n.id} variant="mobile" />
         </section>
 
         {money && (
@@ -371,6 +375,7 @@ export function MDetail({ id }: { id: string }) {
         {n.ranking && <MRankCard ranking={n.ranking} />}
 
         <NoticeHeldBanner doc={doc} variant="mobile" />
+        <NoticeVersions noticeId={n.id} variant="mobile" />
         <NoticeToc doc={doc} variant="mobile" />
         <NoticeSections doc={doc} variant="mobile" onOpenPage={pdfUrl ? openOriginal : undefined} />
 

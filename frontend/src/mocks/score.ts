@@ -1,16 +1,21 @@
-// 화면용 예시 데이터 (디자인 WebScore · MScore). 실제 값은 API에서 받아요.
+// 화면용 예시 데이터 (디자인 WebScore · MScore). 실제 점수는 API(POST /eligibility/subscription-score)에서 받아요.
+import type { ScoreInput } from "@/features/score/score";
 
 export type ScoreProfile = {
-  /** 내 조건으로 미리 채운 선택지 순서 (무주택 기간 · 부양가족 수 · 청약통장 가입 기간) */
-  prefill: { homeless: number; dependents: number; account: number };
-  /** 무주택 기간 설명 뒤에 붙는 내 상황 (PC) */
-  homelessNote: string;
+  /** 저장한 조건이 없을 때 목업 모드에서 미리 채우는 예시 입력 */
+  example: ScoreInput;
   /** 비교 예시: 최근 당첨 최저 가점 */
   cutoff: { label: string; score: number };
 };
 
 export const scoreProfile: ScoreProfile = {
-  prefill: { homeless: 0, dependents: 0, account: 3 },
-  homelessNote: "지금 만 29세 미혼이라 0점이에요.",
+  example: {
+    birthDate: "1997-03-15",
+    marital: "SINGLE",
+    homeOwner: false,
+    homelessSince: "1997-03",
+    dependents: 0,
+    joinedOn: "2023-05",
+  },
   cutoff: { label: "○○ 민영 아파트 최근 당첨 최저 가점", score: 54 },
 };

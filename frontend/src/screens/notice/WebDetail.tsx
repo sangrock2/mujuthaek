@@ -18,13 +18,16 @@ import { LifeCard } from "@/components/notice/LifeCard";
 import { NoticeTags } from "@/components/notice/NoticeTags";
 import { WebUnitFilter } from "@/components/notice/UnitFilter";
 import { NoticeHeldBanner, NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
+import { NoticeVersions } from "@/components/notice/NoticeVersions";
 import { PdfViewer } from "@/components/notice/PdfViewer";
+import { RegulationNotice } from "@/components/notice/RegulationNotice";
 import { WebRankCard } from "@/components/notice/RankCard";
 import { VerdictBadge } from "@/components/ui/Badge";
 import { dueText, formatPeriod, statusLabel, pdfSections } from "@/features/notice/format";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
 import { bySite, directionsUrl, toUnit, useNoticeUnits } from "@/features/notice/units";
 import { UnitPrices } from "@/components/notice/UnitPrices";
+import { UnitPrepValue } from "@/components/notice/UnitPrep";
 import { SitesMap } from "@/components/notice/SitesMap";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
 import { useNotice } from "@/features/notice/queries";
@@ -292,13 +295,13 @@ function BlockUnits({ units, map, more, excel = true, onShowLife, sites }: Block
                   </span>
                 ))}
                 <span className="text-[15px]">
-                  준비할 돈 <strong className="text-brand-strong">{selected.prep}</strong>
+                  준비할 돈 <UnitPrepValue unit={selected} />
                 </span>
               </>
             ) : (
               <span className="text-[15px]">
                 보증금 <strong>{selected.deposit}</strong> · <strong>{selected.rent}</strong> ·
-                준비할 돈 <strong className="text-brand-strong">{selected.prep}</strong>
+                준비할 돈 <UnitPrepValue unit={selected} />
               </span>
             )}
           </div>
@@ -508,6 +511,7 @@ export function WebDetail({ id }: { id: string }) {
                       )}
                     </div>
                   )}
+                  <RegulationNotice noticeId={n.id} variant="web" />
                 </div>
               </section>
 
@@ -529,6 +533,7 @@ export function WebDetail({ id }: { id: string }) {
               )}
 
               <NoticeHeldBanner doc={doc} variant="web" />
+              <NoticeVersions noticeId={n.id} variant="web" />
               <NoticeToc doc={doc} variant="web" />
               <NoticeSections
                 doc={doc}

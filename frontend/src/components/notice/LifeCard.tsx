@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useSiteLife } from "@/features/notice/area";
+import { useAreaCriteria, useSiteLife } from "@/features/notice/area";
 import { cn } from "@/lib/cn";
 import type { NoticeLifeSite, StandardNotice } from "@/mocks/notice";
 
@@ -75,6 +75,65 @@ function SiteDetail({ site, web }: { site: NoticeLifeSite; web: boolean }) {
         </span>
       )}
     </div>
+  );
+}
+
+/** 점수를 어떻게 매겼는지와 데이터 출처 (병원 정보는 공공누리 제1유형이라 출처를 꼭 적어요). 기준표를 못 받으면 숨겨요 */
+function CriteriaDetails({ web }: { web: boolean }) {
+  const criteria = useAreaCriteria();
+  if (!criteria) return null;
+  return (
+    <details className="border-line-soft border-t border-solid pt-[12px]">
+      <summary className="text-text-sub flex min-h-[36px] cursor-pointer items-center text-[14px] font-bold">
+        점수 기준 · 데이터 출처
+      </summary>
+      <div className="flex flex-col gap-[12px] pt-[6px]">
+        {criteria.categories.length > 0 && (
+          <div className="flex flex-col gap-[8px]">
+            <span className="text-text-sub text-[13px]">
+              항목마다 0~100점이에요. 구간 사이는 거리·개수에 따라 고르게 바뀌어요
+            </span>
+            <dl className="m-0 flex flex-col gap-[8px]">
+              {criteria.categories.map((c) => (
+                <div key={c.key} className={cn("flex", web ? "gap-[12px]" : "flex-col gap-[2px]")}>
+                  <dt className={cn("text-[14px] font-bold", web && "w-[64px] flex-none")}>
+                    {c.label}
+                  </dt>
+                  <dd className="text-text-sub m-0 flex flex-col gap-[2px] text-[13px] leading-[1.5]">
+                    {c.lines.map((l) => (
+                      <span key={l}>{l}</span>
+                    ))}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+        {criteria.sources.length > 0 && (
+          <div className="flex flex-col gap-[4px]">
+            <span className="text-[14px] font-bold">데이터 출처</span>
+            <ul className="text-text-sub m-0 flex list-none flex-col gap-[2px] p-0 text-[13px] leading-[1.5]">
+              {criteria.sources.map((src) => (
+                <li key={src.text}>
+                  {src.text}
+                  {src.license &&
+                    (src.licenseUrl ? (
+                      <>
+                        {" · "}
+                        <a href={src.licenseUrl} target="_blank" rel="noreferrer">
+                          {src.license}
+                        </a>
+                      </>
+                    ) : (
+                      ` · ${src.license}`
+                    ))}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -170,6 +229,7 @@ export function LifeCard({ life, variant, siteId, onSiteChange }: Props) {
           <SiteDetail site={site} web={web} />
         </>
       )}
+      <CriteriaDetails web={web} />
     </section>
   );
 }
