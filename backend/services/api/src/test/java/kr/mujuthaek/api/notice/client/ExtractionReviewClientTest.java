@@ -58,6 +58,32 @@ class ExtractionReviewClientTest {
   }
 
   @Test
+  void traceReadsTheExtractionProcessAndMapsMissingJobToNotFound() {
+    var client = client(null);
+    server
+        .expect(requestTo(BASE + "/reviews/" + JOB + "/trace"))
+        .andExpect(method(HttpMethod.GET))
+        .andRespond(
+            withSuccess(
+                "{\"jobId\":\"" + JOB + "\",\"engine\":\"V2\",\"agents\":[]}",
+                MediaType.APPLICATION_JSON));
+    assertThat(client.trace(JOB).get("engine").asString()).isEqualTo("V2");
+    server.verify();
+
+    var missing = client(null);
+    server
+        .expect(requestTo(BASE + "/reviews/" + JOB + "/trace"))
+        .andRespond(
+            withStatus(HttpStatus.NOT_FOUND)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"error\":\"작업이 없습니다.\"}"));
+    assertThatThrownBy(() -> missing.trace(JOB))
+        .isInstanceOf(CustomException.class)
+        .extracting(e -> ((CustomException) e).errorCode())
+        .isEqualTo(ErrorCode.NOTICE_REVIEW_NOT_FOUND);
+  }
+
+  @Test
   void rejectPostsNote() {
     var client = client(null);
     server

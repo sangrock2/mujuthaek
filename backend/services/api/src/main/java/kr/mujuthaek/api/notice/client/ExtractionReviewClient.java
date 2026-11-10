@@ -146,6 +146,11 @@ public class ExtractionReviewClient {
     return call(() -> http.get().uri("/reviews/{id}", jobId).retrieve().body(JsonNode.class));
   }
 
+  /** 추출 과정(추출 GET /reviews/{id}/trace): 담당별 도구 호출·거절·검증 메시지·초안 요약과 호출별 토큰·비용. */
+  public JsonNode trace(String jobId) {
+    return call(() -> http.get().uri("/reviews/{id}/trace", jobId).retrieve().body(JsonNode.class));
+  }
+
   /** 처리 통계(최근 days일·오늘). */
   /** 처리 기록 (추출 GET /reviews/activity): 공고·혜택 검수 승인·반려·다시 열기, 최근 순. */
   public JsonNode activity(int days) {

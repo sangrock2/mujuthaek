@@ -14,6 +14,7 @@ import kr.mujuthaek.api.notice.dto.response.AdminReviewDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewListResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewQueueResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewStatsResponse;
+import tools.jackson.databind.JsonNode;
 
 @Tag(
     name = "관리자 공고 검수",
@@ -91,6 +92,18 @@ public interface AdminReviewApiSpec {
   @ApiResponse(responseCode = "404", description = "NOTICE_REVIEW_NOT_FOUND — 없는 검수 항목이에요")
   @ApiResponse(responseCode = "503", description = "NOTICE_REVIEW_UNAVAILABLE — 검수 서버에 연결하지 못했어요")
   AdminReviewDetailResponse detail(@Parameter(description = "검수 작업 ID") UUID id);
+
+  @Operation(
+      summary = "추출 과정",
+      description =
+          "이 작업을 추출한 과정을 줘요(추출 서비스 요약을 그대로). engine은 V2(섹션 담당 에이전트) 또는 V1(예전 방식, 합계만). "
+              + "totals·byAgent는 호출 수·토큰(입력·캐시 읽기·출력)·비용(달러)·시간, agents는 담당마다 차례별 도구 호출(calls)·"
+              + "결과(results, failed면 거절·오류)·검증 메시지(verify), 넣은 항목 수(items)·범위(coverage)·넣지 못한 항목(rejected)·"
+              + "끝낼 때 남긴 요약(summary), 해결 담당(resolver)·기준표 담당(tables) 기록이에요. 원문 공고 내용만 있고 사용자 정보는 없어요.")
+  @ApiResponse(responseCode = "200", description = "추출 과정 요약")
+  @ApiResponse(responseCode = "404", description = "NOTICE_REVIEW_NOT_FOUND — 없는 작업이에요")
+  @ApiResponse(responseCode = "503", description = "NOTICE_REVIEW_UNAVAILABLE — 검수 서버에 연결하지 못했어요")
+  JsonNode trace(@Parameter(description = "추출 작업 ID(검수 작업 ID와 같아요)") UUID id);
 
   @Operation(
       summary = "공고 검수 승인",

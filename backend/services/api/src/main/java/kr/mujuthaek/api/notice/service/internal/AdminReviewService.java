@@ -290,6 +290,18 @@ public class AdminReviewService {
         window(body == null ? null : body.path("today")));
   }
 
+  /**
+   * 추출 과정(관리자 「추출 과정 보기」). 추출 서비스가 화면용으로 줄인 요약(trace_view.py)을 그대로 넘겨요: 담당·도구 이름이 추출 서비스 안의 이름이라
+   * 여기서 다시 모양을 정하면 추출 쪽이 바뀔 때마다 두 곳을 고쳐야 해서요. 원문 공고 내용만 있고 사용자 정보는 없어요.
+   */
+  public JsonNode trace(String id) {
+    JsonNode body = client.trace(id);
+    if (body == null || body.isNull()) {
+      throw new CustomException(ErrorCode.NOTICE_REVIEW_NOT_FOUND);
+    }
+    return body;
+  }
+
   public AdminReviewDetailResponse detail(String id) {
     JsonNode item = client.detail(id);
     if (item == null) {
