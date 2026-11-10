@@ -158,7 +158,7 @@ echo "복사 중… (큰 테이블은 몇 분 걸려요)"
   echo "$DROP_FK"
   pg src pg_dump "${dump_args[@]}" 2> >(grep -v "circular foreign-key\|detail: \|hint: " >&2)
   echo "$ADD_FK"
-} | PG_STDIN=1 pg dev psql -q -v ON_ERROR_STOP=1 --single-transaction > /dev/null
+} | PG_STDIN=1 pg dev psql -q -v ON_ERROR_STOP=1 --single-transaction -f - > /dev/null
 
 pg dev psql -q -c "analyze $(IFS=,; echo "${TABLES[*]}");" > /dev/null
 echo "끝: 개발 DB 줄 수"

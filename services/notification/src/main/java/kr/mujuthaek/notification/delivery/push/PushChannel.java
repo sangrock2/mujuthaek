@@ -57,6 +57,9 @@ class PushChannel implements NotificationChannel {
   static final int MAX_TITLE = 100;
   static final int MAX_BODY = 200;
 
+  /** JSON 목록 안 알림함 ID 하나의 크기: 따옴표 둘·쉼표 하나·UUID 36자. */
+  private static final int ID_BYTES = 39;
+
   /** 새 소식 묶음을 누르면 가는 화면 (여러 건이라 한 공고로 보낼 수 없어서 알림함으로) */
   static final String INBOX_PATH = "/notifications";
 
@@ -227,13 +230,23 @@ class PushChannel implements NotificationChannel {
       body.put("tag", INBOX_PATH);
     }
     // 기기가 「떴어요·눌렀어요」를 api에 알릴 알림함 줄 ID (묶음이면 묶인 알림 모두)
-    body.put(
-        "ids",
+    List<UUID> ids =
         notifications.stream()
             .map(OutgoingNotification::inboxId)
             .filter(java.util.Objects::nonNull)
-            .toList());
-    return json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+            .toList();
+    body.put("ids", ids);
+    byte[] bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+    // 묶음이 크면(한 칸에 90건 남짓) ID 목록만으로 한도를 넘어요. 예전엔 묶음 전체를 PUSH_PAYLOAD_TOO_LARGE로 실패해 그 회원이
+    // 푸시를 하나도 못 받았어요(2026-11-10 코드 검토). 알림은 보내고, 한도에 맞을 만큼만 ID를 넣어요(빠진 줄은 「떴어요」 기록만 없음)
+    int keep = ids.size();
+    while (bytes.length > WebPushCrypto.MAX_PLAINTEXT_BYTES && keep > 0) {
+      int over = bytes.length - WebPushCrypto.MAX_PLAINTEXT_BYTES;
+      keep = Math.max(0, keep - (over + ID_BYTES - 1) / ID_BYTES);
+      body.put("ids", ids.subList(0, keep));
+      bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+    }
+    return bytes;
   }
 
   /** 기기가 꺼져 있을 때 푸시 서비스가 들고 있을 시간. 늦게 받으면 틀린 말이 되는 마감 알림은 짧게 */

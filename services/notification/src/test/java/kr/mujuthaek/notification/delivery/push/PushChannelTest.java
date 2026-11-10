@@ -237,6 +237,29 @@ class PushChannelTest {
   }
 
   @Test
+  void aLargeDigestIsSentWithOnlyAsManyIdsAsFit() throws Exception {
+    // 2026-11-10 코드 검토: 한 칸에 90건 남짓이 쌓이면 ID 목록만으로 한도를 넘어, 묶음 전체가 PUSH_PAYLOAD_TOO_LARGE로 실패했음
+    List<OutgoingNotification> many = new java.util.ArrayList<>();
+    for (int i = 0; i < 150; i++) {
+      many.add(
+          new OutgoingNotification(
+              NotificationType.NEW_SUPPORT,
+              "새 정책: 청년 월세 " + i,
+              "b",
+              "/benefits/" + i,
+              java.util.UUID.randomUUID()));
+    }
+    byte[] payload = channel.payload(many);
+    assertThat(payload.length).isLessThanOrEqualTo(WebPushCrypto.MAX_PLAINTEXT_BYTES);
+    assertThat(text(payload))
+        .contains("\"title\":\"새 소식 150건\"")
+        .contains(many.get(0).inboxId().toString());
+
+    channel.send(user, address("https://fcm.googleapis.com/a"), many); // 실패하지 않고 보냄
+    assertThat(sender.sent).hasSize(1);
+  }
+
+  @Test
   void ttlAndUrgencyFollowTheType() throws Exception {
     assertThat(PushChannel.ttl(NotificationType.DEADLINE_D1, false)).hasHours(12);
     assertThat(PushChannel.ttl(NotificationType.DEADLINE_D3, false)).hasHours(48);
