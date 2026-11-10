@@ -22,6 +22,15 @@ class Price:
     output: float  # 추론 토큰 포함
     checked: str
 
+    def usd(self, input_tokens: int, cached: int, writes: int, output_tokens: int) -> float:
+        """사용량 → 비용. input_tokens는 캐시 읽기(cached)·캐시 쓰기(writes)를 포함한 전체 입력입니다(V1 응답·V2 채팅 답이 같이 씀)."""
+        plain = max(input_tokens - cached - writes, 0)
+        return (plain * self.input + cached * self.cached_input + writes * self.cache_write + output_tokens * self.output) / 1_000_000
+
+    def worst_usd(self, chars: int, max_output_tokens: int) -> float:
+        """보내기 전 최악 비용: 입력 글자 수를 모두 캐시 쓰기 토큰으로(한국어는 대개 토큰 수 ≤ 글자 수), 출력 한도를 모두 씀."""
+        return (chars * self.cache_write + max_output_tokens * self.output) / 1_000_000
+
 
 IMAGE_TOKENS = 3_000  # 그림 한 장의 입력 토큰 상한 추정(쪽 그림 120dpi 기준, 실제보다 넉넉하게)
 PRICES = {
@@ -31,12 +40,7 @@ PRICES = {
 
 
 def cost_usd(model: str, response: ModelResponse) -> float:
-    price = PRICES[model]
-    total = response.input_tokens or 0
-    cached = response.cached_input_tokens or 0
-    writes = response.cache_write_tokens or 0
-    plain = max(total - cached - writes, 0)
-    return (plain * price.input + cached * price.cached_input + writes * price.cache_write + (response.output_tokens or 0) * price.output) / 1_000_000
+    return PRICES[model].usd(response.input_tokens or 0, response.cached_input_tokens or 0, response.cache_write_tokens or 0, response.output_tokens or 0)
 
 
 @dataclass
@@ -66,13 +70,12 @@ class Budget:
     _entries: dict[int, str] = field(default_factory=dict, init=False, repr=False, compare=False)  # 표 → 장부 ID
 
     def worst_case(self, request: ModelRequest) -> float:
-        price = PRICES[self.model]
         # 토큰 수를 모르므로 글자 수를 상한으로 씁니다(한국어는 대개 토큰 수 ≤ 글자 수).
         chars = len(request.system) + len(request.user) + len(request.instructions) + IMAGE_TOKENS * len(request.images)
         # 출력 형식(JSON 스키마)도 입력으로 함께 보냅니다. 공유 형식을 쓰면 더 큰 쪽이 가므로 둘 중 큰 것을 셉니다(검토 2026-10-20)
         chars += max((len(json.dumps(s, ensure_ascii=False)) for s in (request.output_schema, request.shared_schema) if s), default=0)
         chars += request.tool_chars()  # 도구 설명과 앞선 차례(도구 호출·결과)도 입력으로 갑니다
-        return (chars * price.cache_write + request.max_output_tokens * price.output) / 1_000_000
+        return PRICES[self.model].worst_usd(chars, request.max_output_tokens)
 
     def _fits(self, worst: float) -> bool:
         held = sum(self._held.values()) if self._held else 0.0  # 잡아 둔 것이 없으면 정확히 0 (순서대로 부를 때 이전과 같은 계산)
