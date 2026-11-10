@@ -2,7 +2,8 @@
 
 import { ReportButton } from "@/components/report/ReportButton";
 import { useState } from "react";
-import { ArrowRight } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import { WebHeader } from "@/components/layout/WebHeader";
 import { WebMain, WebPage } from "@/components/layout/Responsive";
 import { Badge, VerdictBadge } from "@/components/ui/Badge";
@@ -39,6 +40,24 @@ const placeholder: Benefit = {
 
 const eligLabel = { ok: "충족", check: "확인 필요", no: "해당 안 돼요" } as const;
 const eligTone = { ok: "ok", check: "check", no: "neutral" } as const;
+
+/** 대출 혜택(준비할 돈에 반영되는 혜택): 정확한 소득 · 순자산으로 상품마다 확인하는 화면으로 */
+function LoanCheckLink() {
+  return (
+    <Link
+      href={routes.loans}
+      className="rounded-tile bg-brand-soft text-text hover:text-text flex items-center justify-between gap-[12px] px-[18px] py-[14px] no-underline"
+    >
+      <span className="flex flex-col gap-[2px]">
+        <span className="text-brand-strong text-[15px] font-extrabold">대출 자격 확인하기</span>
+        <span className="text-text-sub text-[14px]">
+          정확한 소득 · 순자산으로 버팀목 · 디딤돌 상품마다 받을 수 있는지 봐요
+        </span>
+      </span>
+      <ChevronRight size={18} className="text-brand-strong flex-none" aria-hidden />
+    </Link>
+  );
+}
 
 /** 고른 혜택: 목록 값으로 먼저 그리고, 상세·판정을 받으면 채워요 */
 function SelectedBenefit({ base }: { base: Benefit }) {
@@ -96,6 +115,7 @@ function BenefitDetail({ b }: { b: Benefit }) {
           <dd className="m-0 mt-[6px] text-[15px] leading-[1.5] font-semibold">{b.overlap}</dd>
         </div>
       </dl>
+      {b.budget && <LoanCheckLink />}
 
       <div className="flex flex-col">
         <div className="mb-[4px] flex items-center justify-between">

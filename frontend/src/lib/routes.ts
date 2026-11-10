@@ -16,6 +16,8 @@ export const routes = {
   homes: "/homes",
   notice: (id: string) => `/notices/${id}`,
   score: "/score",
+  /** 대출 자격 확인 (정확한 소득·순자산을 이 화면에서만 넣어요) */
+  loans: "/loans",
   alerts: "/alerts",
   me: "/me",
   search: "/search",
@@ -28,6 +30,8 @@ export const routes = {
   terms: "/terms",
   privacy: "/privacy",
   install: "/install",
+  /** 「무주택자들은 어떻게 만들었나요」 소개 */
+  howItWorks: "/how-it-works",
   admin: "/admin",
   adminReview: "/admin/review",
   adminExtraction: "/admin/extraction",

@@ -7,13 +7,14 @@ import { routes } from "@/lib/routes";
 const menu = [
   { href: routes.announcements, label: "공지사항" },
   { href: routes.faq, label: "자주 묻는 질문" },
+  { href: routes.howItWorks, label: "어떻게 만들었나요" },
   { href: routes.terms, label: "이용약관" },
   { href: routes.privacy, label: "개인정보처리방침" },
 ] as const;
 
 export type ContentMenuHref = (typeof menu)[number]["href"];
 
-/** 고객센터(공지 · FAQ · 약관 · 개인정보처리방침) PC 바탕: 고객센터 헤더 + 하단 링크 */
+/** 고객센터(공지 · FAQ · 만든 방법 · 약관 · 개인정보처리방침) PC 바탕: 고객센터 헤더 + 하단 링크 */
 export function WebContentShell({
   current,
   children,
