@@ -335,11 +335,15 @@ function housingOf(d: ApiNoticeDetail, sites: ApiNoticeDetail["sites"]): NoticeD
   }));
 }
 
-/** 일정 목록 → 화면 값, 날짜순 (날짜 없는 일정은 뒤로). id가 비어 오면 순서로 채워요(목록 key가 겹치지 않게) */
+/**
+ * 일정 목록 → 화면 값, 날짜순. 시작일이 없으면 끝 날짜로 견주고(공고일·마감처럼 하루만 적힌 일정이 맨 뒤로 가던 것), 날짜가 아예 없으면 뒤로.
+ * id가 비어 오면 순서로 채워요(목록 key가 겹치지 않게)
+ */
 function schedulesOf(list: ApiSchedule[], today: string, idPrefix: string): NoticeScheduleItem[] {
+  const when = (s: NoticeScheduleItem) => s.start ?? s.end ?? "9999";
   return list
     .map((s, i) => ({ ...scheduleItem(s, today), id: s.id || `${idPrefix}-${i}` }))
-    .sort((a, b) => (a.start ?? "9999").localeCompare(b.start ?? "9999"));
+    .sort((a, b) => when(a).localeCompare(when(b)));
 }
 
 /**

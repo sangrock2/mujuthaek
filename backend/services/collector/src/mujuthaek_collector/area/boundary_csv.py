@@ -34,7 +34,9 @@ LAYERS = (
 )
 SIDO_COUNT = 16  # 2026-09 기준 시도 zip 16개 (광주는 전남광주 통합특별시로)
 
-csv.field_size_limit(sys.maxsize)
+# 경계 좌표(WKT) 칸이 기본 한도(128KB)보다 커요. sys.maxsize는 Windows에서 C long(32비트)을 넘어 OverflowError라
+# 어느 OS에서나 받는 32비트 최댓값(약 2GB)으로 둬요(실제 칸은 수 MB 이하)
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 
 @dataclass
