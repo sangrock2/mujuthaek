@@ -49,16 +49,48 @@ function plusYears(a: Ymd, n: number): Ymd {
   return { y, m: a.m, d: Math.min(a.d, last) };
 }
 
-/** 꽉 찬 년 수 (java Period.between(start, ref).getYears()) */
-function fullYears(start: Ymd, ref: Ymd) {
-  const months = (ref.y - start.y) * 12 + (ref.m - start.m) - (ref.d < start.d ? 1 : 0);
-  return Math.floor(months / 12);
+/** 꽉 찬 개월 수, 기준일이 앞이면 0 (java ChronoUnit.MONTHS.between) */
+function monthsBetween(start: Ymd, ref: Ymd) {
+  if (before(ref, start)) return 0;
+  return (ref.y - start.y) * 12 + (ref.m - start.m) - (ref.d < start.d ? 1 : 0);
 }
 
-/** 연월(그 달 1일)부터 꽉 찬 개월 수. 기준일이 앞이면 0 (백엔드 Periods.fullMonths) */
-function fullMonths(from: string, ref: Ymd) {
-  const f = ymd(from);
-  return Math.max(0, (ref.y - f.y) * 12 + (ref.m - f.m));
+/** 꽉 찬 년 수 (java Period.between(start, ref).getYears()) */
+function fullYears(start: Ymd, ref: Ymd) {
+  return Math.floor(monthsBetween(start, ref) / 12);
+}
+
+/**
+ * 연월 "2026-11" → 그 달 말일(가장 짧은 기간) 또는 1일(가장 긴 기간). 연월만 받아 어느 날인지 몰라서, 점수는 말일로 세어 부풀리지
+ * 않고 1일이면 더 높을 때 이유에 알려요 (백엔드 Periods.shortestFullMonths·fullMonths)
+ */
+function monthDay(s: string, endOfMonth: boolean): Ymd {
+  const { y, m } = ymd(s);
+  return { y, m, d: endOfMonth ? new Date(Date.UTC(y, m, 0)).getUTCDate() : 1 };
+}
+
+const maybeMore = (reason: string, points: number, best: number) =>
+  best > points ? `${reason} · 날짜에 따라 ${best}점일 수 있어요` : reason;
+
+/** 무주택 기간을 세기 시작하는 날: 만 30세, 그 전에 혼인했으면 혼인신고일, 무주택이 된 날이 더 늦으면 그날 */
+function homelessStart(a: ScoreInput, endOfMonth: boolean): Ymd {
+  const thirty = plusYears(ymd(a.birthDate!), 30);
+  let start = thirty;
+  if (a.marital === "MARRIED") {
+    const married = monthDay(a.marriedOn!, endOfMonth);
+    if (before(married, thirty)) start = married;
+  }
+  const from = monthDay(a.homelessSince!, endOfMonth);
+  return before(start, from) ? from : start;
+}
+
+const homelessPoints = (start: Ymd, ref: Ymd) =>
+  before(ref, start) ? 0 : Math.min(MAX_HOMELESS, 2 + 2 * fullYears(start, ref));
+
+function subscriptionPoints(months: number) {
+  if (months < 6) return 1;
+  if (months < 12) return 2;
+  return Math.min(MAX_SUBSCRIPTION, 2 + Math.floor(months / 12));
 }
 
 function homeless(a: ScoreInput, ref: Ymd, missing: string[]): ScoreItem {
@@ -77,27 +109,31 @@ function homeless(a: ScoreInput, ref: Ymd, missing: string[]): ScoreItem {
     missing.push("applicant.homelessSince");
     return item(null, "무주택 시작 연월을 넣으면 계산돼요");
   }
-  const thirty = plusYears(ymd(a.birthDate), 30);
-  let start = thirty;
-  if (a.marital === "MARRIED") {
-    if (!a.marriedOn) {
-      missing.push("applicant.marriedOn");
-      return item(null, "혼인신고 연월을 넣으면 계산돼요");
-    }
-    const married = ymd(a.marriedOn);
-    if (before(married, thirty)) start = married;
+  if (a.marital === "MARRIED" && !a.marriedOn) {
+    missing.push("applicant.marriedOn");
+    return item(null, "혼인신고 연월을 넣으면 계산돼요");
   }
-  const from = ymd(a.homelessSince);
-  if (before(start, from)) start = from;
+  const start = homelessStart(a, true);
+  const best = homelessPoints(homelessStart(a, false), ref);
   if (before(ref, start)) {
-    const young = start === thirty && a.marital !== "MARRIED";
+    const thirty = plusYears(ymd(a.birthDate), 30);
+    const young =
+      start.y === thirty.y &&
+      start.m === thirty.m &&
+      start.d === thirty.d &&
+      a.marital !== "MARRIED";
     return item(
       0,
-      young ? "만 30세 전 미혼이라 0점이에요" : "무주택 기간을 세기 시작하기 전이라 0점이에요",
+      maybeMore(
+        young ? "만 30세 전 미혼이라 0점이에요" : "무주택 기간을 세기 시작하기 전이라 0점이에요",
+        0,
+        best,
+      ),
     );
   }
   const years = fullYears(start, ref);
-  return item(Math.min(MAX_HOMELESS, 2 + 2 * years), years === 0 ? "1년 미만" : `${years}년 이상`);
+  const points = homelessPoints(start, ref);
+  return item(points, maybeMore(years === 0 ? "1년 미만" : `${years}년 이상`, points, best));
 }
 
 function dependents(a: ScoreInput, missing: string[]): ScoreItem {
@@ -125,11 +161,12 @@ function subscription(a: ScoreInput, ref: Ymd, missing: string[]): ScoreItem {
     missing.push("applicant.subscription.joinedOn");
     return item(null, "청약통장 가입 연월을 넣으면 계산돼요");
   }
-  const months = fullMonths(a.joinedOn, ref);
-  if (months < 6) return item(1, "6개월 미만");
-  if (months < 12) return item(2, "1년 미만");
-  const years = Math.floor(months / 12);
-  return item(Math.min(MAX_SUBSCRIPTION, 2 + years), `${years}년 이상`);
+  const months = monthsBetween(monthDay(a.joinedOn, true), ref);
+  const points = subscriptionPoints(months);
+  const best = subscriptionPoints(monthsBetween(monthDay(a.joinedOn, false), ref));
+  const reason =
+    months < 6 ? "6개월 미만" : months < 12 ? "1년 미만" : `${Math.floor(months / 12)}년 이상`;
+  return item(points, maybeMore(reason, points, best));
 }
 
 /** 가점 계산 (백엔드와 같은 규칙). today는 "2026-11-11" (한국 날짜) */
