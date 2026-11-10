@@ -1470,6 +1470,8 @@ class CriteriaRow(NamedTuple):
     # 원문 글자에서 그 행 줄의 번호(0부터). 병합 칸이 많은 표는 「|  |  | 맞벌이 | 140% |」처럼 같은 줄이 대상마다 되풀이되어, V2 기준표 담당이
     # 맡은 행은 줄 글자가 아니라 이 번호로 가리킵니다
     at: int
+    # 앞쪽 빈 칸 수(위 행에서 병합된 칸). 맞벌이·가구원 수 행처럼 앞 행에 이어지는 행이 더 큼(V2 기준표 담당이 행을 나눌 때 앞 행과 떼지 않음)
+    lead: int = 0
 
 
 def criteria_tables(text: str) -> list[list[CriteriaRow]]:
@@ -1512,7 +1514,8 @@ def criteria_tables(text: str) -> list[list[CriteriaRow]]:
                     carry[c] = cell
                     carry[c + 1 :] = [""] * (len(carry) - c - 1)
             group = next((cell for cell in carry[: len(cells)] if cell and not CONDITION_CELL.match(cell)), None)
-            data.append(CriteriaRow(aid or " ".join(cell for cell in cells if cell), values, group, start + n))
+            lead = next((c for c, cell in enumerate(cells) if cell), len(cells))
+            data.append(CriteriaRow(aid or " ".join(cell for cell in cells if cell), values, group, start + n, lead))
             labels.append(label)
         if len(data) >= 2 and _varies(labels):
             found.append(data)

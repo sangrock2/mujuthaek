@@ -57,16 +57,13 @@ def criteria_chunks(document: DocumentModel) -> list[Chunk]:
 
 
 def _split(table: Table, rows: list[CriteriaRow], positions: list[int]) -> list[Chunk]:
-    """행 대상이 바뀌는 곳에서 끊어 CHUNK_ROWS 이하로 묶습니다. 대상 하나가 CHUNK_ROWS를 넘으면 그 대상을 고르게 나눕니다(16행 + 2행 같은
-    자투리 묶음을 만들지 않게)."""
+    """행 대상이 바뀌는 곳에서 끊어 CHUNK_ROWS 이하로 묶습니다. 대상 하나가 CHUNK_ROWS를 넘으면 그 대상을 고르게 나눕니다(_pieces)."""
     runs: list[list[int]] = []  # 같은 대상이 이어진 행들(rows의 순번)
     start = 0
     for end in range(1, len(rows) + 1):
         if end < len(rows) and rows[end].group == rows[start].group:
             continue
-        run = list(range(start, end))
-        size = -(-len(run) // -(-len(run) // CHUNK_ROWS))  # 나눌 조각 수로 고르게(올림)
-        runs += [run[i : i + size] for i in range(0, len(run), size)]
+        runs += _pieces(list(range(start, end)), rows)
         start = end
     packs: list[list[int]] = []
     for run in runs:
@@ -83,3 +80,31 @@ def _split(table: Table, rows: list[CriteriaRow], positions: list[int]) -> list[
         )
         for pack in packs
     ]
+
+
+def _pieces(run: list[int], rows: list[CriteriaRow]) -> list[list[int]]:
+    """대상 하나의 행(rows의 순번)을 CHUNK_ROWS 안팎으로 고르게 나눕니다(16행 + 2행 같은 자투리 묶음을 만들지 않게). 위 칸이 병합된 이어진 행
+    (맞벌이·가구원 수 행, 앞 빈 칸이 더 많음)은 앞 행과 떼지 않습니다: 한 공급방식의 외벌이·맞벌이 행이 다른 담당에게 가면 기본 조건과 예외가
+    따로 넣어짐(코드 검토에서 찾음)."""
+    if len(run) <= CHUNK_ROWS:
+        return [run]
+    lead = min(rows[i].lead for i in run[1:])
+    units: list[list[int]] = [[run[0]]]
+    for i in run[1:]:
+        if rows[i].lead <= lead:
+            units.append([])
+        units[-1].append(i)
+    # 조각 수를 먼저 정하고(올림), 단위 경계 가운데 고른 자리(행 수의 k/조각 수)에 가장 가까운 곳에서 자름. 앞에서부터 목표 크기까지 채우면
+    # 18행(2행 단위)이 8 + 8 + 2로 다시 자투리가 생김
+    count = -(-len(run) // CHUNK_ROWS)
+    ends, total = [], 0
+    for unit in units[:-1]:
+        total += len(unit)
+        ends.append(total)
+    cuts = {min(ends, key=lambda end: abs(end - k * len(run) / count)) for k in range(1, count)} if ends else set()
+    pieces: list[list[int]] = [[]]
+    for unit in units:
+        pieces[-1] += unit
+        if sum(map(len, pieces)) in cuts:
+            pieces.append([])
+    return [piece for piece in pieces if piece]

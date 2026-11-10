@@ -1272,7 +1272,7 @@ def test_criteria_table_helpers_add_their_rows_first_and_the_eligibility_agent_i
     note = section.task(spec, {}, records)
     assert "# 기준표 담당이 먼저 넣은 것" in note and "t1-1-income: 대상 전체 — STRUCTURED" in note
     assert "t1-1 행 r0~r15(일반공급, 다자녀가구 특별공급, 노부모부양 특별공급, 신혼부부 특별공급): 항목 1개" in note
-    assert "t1-1 행 r16~r19(신생아 특별공급): 기준표 담당이 끝내지 못했습니다(모델 호출 상한(1번)). 넣은 항목 1개 말고" in note
+    assert "t1-1 행 r16~r19(신생아 특별공급): 기준표 담당이 다 넣지 못했습니다(모델 호출 상한(1번)). 넣은 항목 1개 말고" in note
     assert section.task(spec, {}) == section.task(spec, {}, [])  # 기준표 담당이 없으면 할 일 글은 그대로
 
 
@@ -1295,7 +1295,8 @@ def test_a_criteria_table_helper_hears_only_its_own_problems_and_the_missing_row
     assert issues[0]["description"].startswith("원문 자격 기준표 3행의 기준값 140%, 120%, 200%")  # 맡은 신생아 행만
 
 
-def test_the_eligibility_agent_starts_with_the_helpers_items_and_note_and_no_report_before_its_first_turn(monkeypatch):
+def run_after_helpers(monkeypatch, found):
+    """기준표 담당이 항목 하나를 넣은 뒤 자격 담당을 돌림. 자격 담당(가짜)은 차례마다 끝내기만 부르고, 받은 메시지를 차례마다 남김."""
     document = parse(TEXT)
     age, _ = _text_only(document)
     merged = {**age, "id": "t1-1-age"}
@@ -1306,11 +1307,11 @@ def test_the_eligibility_agent_starts_with_the_helpers_items_and_note_and_no_rep
         usage.append({"agent": section.TABLE, "costUsd": 0.001})
         return [{"table": "t1-1", "rows": "t1-1 행 r0~r15", "groups": ["일반공급"], "stopped": None, "items": ["t1-1-age"], "brief": ["t1-1-age: …"]}]
 
-    first = []
+    turns = []
 
     class Main(ToolCallingFake):
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-            first.append(list(messages))
+            turns.append(list(messages))
             reply = AIMessage(content="", tool_calls=[call("finish", summary="기준표 담당 항목을 봤어요.")])
             return ChatResult(generations=[ChatGeneration(message=reply)])
 
@@ -1320,15 +1321,61 @@ def test_the_eligibility_agent_starts_with_the_helpers_items_and_note_and_no_rep
         )
 
     monkeypatch.setattr(section, "_tables", tables)
-    monkeypatch.setattr(section, "_issues", lambda *args: [])
+    monkeypatch.setattr(section, "_issues", lambda *args: list(found))
     monkeypatch.setattr(section, "document_ids", lambda material: ["text"])
     monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setenv(section.RESOLVER_ENV, "false")
     spec = SimpleNamespace(name="eligibility", sections=("eligibility",), instructions="자격을 넣습니다.", max_output_tokens=1000)
     rt = SimpleNamespace(models=SimpleNamespace(chat=lambda name, max_output_tokens=None: None, budget=None))
-    parts, usage, trace = section.run_section(spec, {"document": document, "material": None}, rt)
-    assert len(first[0]) == 2 and "# 기준표 담당이 먼저 넣은 것" in first[0][1].content  # 원문·할 일만(시작하자마자 검증 결과를 붙이지 않음)
+    return (turns, *section.run_section(spec, {"document": document, "material": None}, rt))
+
+
+def test_the_eligibility_agent_starts_with_the_helpers_items_and_note_and_no_report_before_its_first_turn(monkeypatch):
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, [])
+    assert len(turns[0]) == 2 and "# 기준표 담당이 먼저 넣은 것" in turns[0][1].content  # 원문·할 일만(시작하자마자 검증 결과를 붙이지 않음)
     assert trace["tables"][0]["items"] == ["t1-1-age"] and [row["id"] for row in trace["draft"]["items"]["eligibility"]] == ["t1-1-age"]
     assert [row["id"] for row in parts[0]["eligibility"]] == ["t1-1-age"] and usage[0]["agent"] == section.TABLE
+
+
+def test_a_first_turn_that_only_finishes_after_the_helpers_is_sent_back_with_the_verification(monkeypatch):
+    # 코드 검토(2026-11-10): 기준표 담당 항목을 넣은 뒤 검증을 「이미 봄」으로 두어, 첫 차례가 끝내기뿐이면 검증 없이 끝나 본문 자격 기준이 빠진 채
+    # 기준표 항목만으로 다 넣음이 됨. 검증을 미리 해 두고 끝내기를 그 결과로 거둠
+    found = [{"code": "ELIGIBILITY_OMISSION_SUSPECTED", "target": "/quality/coverage/eligibility", "description": "원문의 무주택 기준이 없습니다"}]
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, found)
+    assert len(turns) >= 2 and len(turns[0]) == 2  # 첫 차례 전에는 그대로, 끝내기를 거두고 차례를 더 받음
+    assert any(isinstance(m, HumanMessage) and "원문의 무주택 기준이 없습니다" in str(m.content) for m in turns[1])
+
+
+def test_rows_a_criteria_table_helper_could_not_add_are_handed_to_the_eligibility_agent(monkeypatch):
+    # 코드 검토(2026-11-10): 기준표 담당이 PARTIAL로 끝내거나 거절된 항목을 남겨도 합칠 때 버려, 자격 담당은 「항목 N개, 다시 넣지 않음」만 받음
+    document = parse(criteria_text())
+    age = sparse({k: v for k, v in ai_part(example("housing"))["eligibility"][0].items() if k not in ("quoteRefs", "originalText")})
+
+    class Partial(ToolCallingFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            add = call("add_eligibility", items=[{**age, "id": "income", "evidence": ["t1-1.r0"]}, {**age, "id": "bad", "evidence": []}])
+            cover = call("set_coverage", section="eligibility", status="PARTIAL", reason="기관추천 행을 넣지 못함")
+            reply = AIMessage(content="", tool_calls=[add, cover, call("finish", summary="일부만 넣었어요.")])
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def agent(model, name, state, documents, middleware):
+        tools_ = [add_tool("eligibility", ("text",)), *WRITE_TOOLS]
+        return create_agent(Partial(messages=iter([])), tools=tools_, middleware=middleware, context_schema=SectionContext)
+
+    monkeypatch.setattr(section, "_agent", agent)
+    monkeypatch.setattr(section, "_table_issues", lambda *args: [])
+    monkeypatch.setattr(section, "criteria_chunks", lambda document: criteria_chunks(document)[1:])  # 신생아 묶음 하나
+    draft = SectionDraft(("eligibility",))
+    spec = SimpleNamespace(name="eligibility", sections=("eligibility",), instructions="자격을 넣습니다.", max_output_tokens=36_000)
+    rt = SimpleNamespace(models=SimpleNamespace(budget=None))
+    records = section._tables(spec, draft, {"document": document}, rt, ("text",), lambda name, max_output_tokens=None: None, [])
+    assert [(r["items"], r["refused"], r["partial"], r["stopped"]) for r in records] == [(["t1-1-income"], ["t1-1-bad"], "기관추천 행을 넣지 못함", None)]
+    assert ("eligibility", "t1-1-bad") in draft.pending and draft.pending[("eligibility", "t1-1-bad")]["id"] == "t1-1-bad"
+    assert [issue["item"] for issue in section._not_added(draft)] == ["t1-1-bad"]  # 자격 담당이 「고칠 것」으로 받음
+    assert draft.coverage == {}  # 섹션 상태는 자격 담당이 정함
+    note = section.table_note(records)
+    assert "기준표 담당이 다 넣지 못했습니다(기관추천 행을 넣지 못함)" in note and "이 행의 남은 기준은 이 담당이 넣습니다" in note
+    assert "넣을 때 거절된 항목(update_item으로 틀린 칸만 고쳐 넣음): t1-1-bad" in note
 
 
 def test_criteria_table_helpers_are_on_by_default_and_a_failure_in_them_leaves_the_rows_to_the_eligibility_agent(monkeypatch):

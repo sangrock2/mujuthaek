@@ -116,7 +116,10 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     limit = ModelCallLimitMiddleware(run_limit=calls, exit_behavior="end")
     model = chat(spec.name, max_output_tokens=spec.max_output_tokens)  # V1 섹션 호출과 같은 출력 한도(첫 차례에 다 넣음)
     verify = VerifyMiddleware(calls)
-    verify.seen = draft.version  # 기준표 담당이 넣은 항목은 담당의 첫 차례 뒤에 함께 검증(시작하자마자 알리지 않음)
+    if draft.version:
+        # 기준표 담당이 넣은 항목: 담당의 첫 차례 전에는 알리지 않되 검증은 미리 해 둠. 그래야 첫 차례가 끝내기뿐이어도 그 결과로 거둠
+        # (검증 없이 끝나면 본문 자격 기준이 빠진 채 기준표 항목만으로 다 넣음이 됨)
+        verify.seen, verify.issues = draft.version, context.check()
     agent = _agent(model, spec.name, state, documents, [limit, verify, CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
@@ -439,8 +442,9 @@ def _tables(
     records = []
     for chunk, (helper, record, calls) in zip(chunks, runs, strict=True):
         usage.extend(calls)
-        merged = _merge_table(draft, helper, chunk)
-        records.append({**record, "items": [item["id"] for item in merged], "brief": [_brief(item) for item in merged]})
+        merged, refused = _merge_table(draft, helper, chunk)
+        record = {**record, "items": [item["id"] for item in merged], "brief": [_brief(item) for item in merged]}
+        records.append({**record, "refused": refused} if refused else record)
     return records
 
 
@@ -470,30 +474,45 @@ def _run_table(
         elif cut_off(final):
             stopped = f"출력 한도({output}토큰)에서 잘림"
     record = {"table": chunk.table, "rows": chunk.label, "groups": list(chunk.groups), "stopped": stopped, "turns": _trace(last.get("messages") or [])}
+    # 담당이 끝냈어도 섹션을 PARTIAL·FAILED로 적었으면 맡은 행을 다 넣지 못한 것: 자격 담당에게 남은 행을 넘김(table_note)
+    partial = [entry.get("reason") or entry.get("status") for entry in helper.coverage.values() if entry.get("status") in ("PARTIAL", "FAILED")]
+    if partial:
+        record["partial"] = "; ".join(str(reason) for reason in partial)
     return helper, record, context.usage
 
 
-def _merge_table(draft: SectionDraft, helper: SectionDraft, chunk: Chunk) -> list[dict[str, Any]]:
-    """기준표 담당이 넣은 항목을 담당 초안에 옮깁니다. id는 표 id로 시작하게 하고(「t10-1-…」) 겹치면 뒤에 번호를 붙입니다.
-    누락 기록도 바뀐 id로 옮깁니다. 넣을 때 거절된 채 남은 항목은 옮기지 않습니다(그 행은 자격 담당이 빠진 행으로 받음)."""
+def _merge_table(draft: SectionDraft, helper: SectionDraft, chunk: Chunk) -> tuple[list[dict[str, Any]], list[str]]:
+    """기준표 담당이 넣은 항목을 담당 초안에 옮기고 (옮긴 항목, 넣을 때 거절된 채 남은 항목 id)를 돌려줍니다. id는 표 id로 시작하게 하고
+    (「t10-1-…」) 겹치면 뒤에 번호를 붙입니다. 누락 기록도 바뀐 id로 옮깁니다. 거절된 항목은 담당 초안의 「넣지 못한 항목」으로 옮겨
+    자격 담당이 검증 결과에서 「고칠 것」으로 받게 합니다(옮기지 않으면 그 행이 알림 없이 빠짐)."""
     prefix = f"{chunk.table}-"
     renamed: dict[str, str] = {}
-    merged = []
+    merged: list[dict[str, Any]] = []
+    refused: list[str] = []
+
+    def new_id(section: str, old: str) -> str:
+        base = old if old.startswith(prefix) else f"{prefix}{old}"
+        item_id, number = base, 2
+        while draft.find(section, item_id) is not None or (section, item_id) in draft.pending:
+            item_id, number = f"{base}-{number}", number + 1
+        return item_id
+
     with draft._lock:
         for section in draft.sections:
             for row in helper.items.get(section, []):
                 item = copy.deepcopy(row)
-                base = item["id"] if item["id"].startswith(prefix) else f"{prefix}{item['id']}"
-                item_id, number = base, 2
-                while draft.find(section, item_id) is not None:
-                    item_id, number = f"{base}-{number}", number + 1
-                renamed[row["id"]] = item["id"] = item_id
+                renamed[row["id"]] = item["id"] = new_id(section, row["id"])
                 draft.items.setdefault(section, []).append(item)
                 merged.append(item)
+        for (section, old), pending in helper.pending.items():
+            item_id = new_id(section, old)
+            draft.pending[(section, item_id)] = {**copy.deepcopy(pending), "id": item_id}
+            draft.rejected[(section, item_id)] = list(helper.rejected.get((section, old)) or ["넣을 때 거절됨"])
+            refused.append(item_id)
         draft.missing += [{**entry, "id": renamed[entry["id"]]} for entry in helper.missing if entry["id"] in renamed]
-        if merged:
+        if merged or refused:
             draft.version += 1
-    return merged
+    return merged, refused
 
 
 def table_task(chunk: Chunk) -> str:
@@ -515,7 +534,8 @@ def table_task(chunk: Chunk) -> str:
 
 
 def table_note(tables: list[dict[str, Any]]) -> str:
-    """자격 담당 할 일 글에 붙이는 기준표 담당 결과: 끝낸 묶음은 넣은 항목 요약(다시 넣지 않게), 끝내지 못한 묶음은 남은 행을 넣으라고."""
+    """자격 담당 할 일 글에 붙이는 기준표 담당 결과: 다 넣은 묶음은 넣은 항목 요약(다시 넣지 않게), 끝내지 못했거나(호출 상한·오류)
+    PARTIAL로 끝낸 묶음은 남은 행을 넣으라고, 거절된 채 남은 항목은 고쳐 넣으라고."""
     lines = [
         "# 기준표 담당이 먼저 넣은 것",
         "아래 표 행의 기준은 기준표 담당이 넣어 초안에 있습니다. 같은 기준을 다른 표·글에서 다시 넣지 않고, 검증 결과에 이 항목의 문제가 있으면 "
@@ -523,13 +543,16 @@ def table_note(tables: list[dict[str, Any]]) -> str:
     ]
     for record in tables:
         groups = f"({', '.join(record['groups'])})" if record.get("groups") else ""
-        if record.get("stopped"):
+        why = record.get("stopped") or record.get("partial")
+        if why:
             lines.append(
-                f"- {record['rows']}{groups}: 기준표 담당이 끝내지 못했습니다({record['stopped'][:60]}). 넣은 항목 {len(record['items'])}개 말고 "
+                f"- {record['rows']}{groups}: 기준표 담당이 다 넣지 못했습니다({str(why)[:60]}). 넣은 항목 {len(record['items'])}개 말고 "
                 "이 행의 남은 기준은 이 담당이 넣습니다."
             )
         else:
             lines.append(f"- {record['rows']}{groups}: 항목 {len(record['items'])}개")
+        if record.get("refused"):
+            lines.append(f"  넣을 때 거절된 항목(update_item으로 틀린 칸만 고쳐 넣음): {', '.join(record['refused'])}")
         lines += [f"  {brief}" for brief in record.get("brief") or []]
     return "\n".join(lines)
 

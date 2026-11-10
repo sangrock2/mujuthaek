@@ -62,10 +62,13 @@ def test_big_criteria_tables_are_split_where_the_row_target_changes():
     source = document.source.split("\n")
     assert [source[spot] for spot in chunks[1].spots] == [document.text(f"t1-1.r{r}") for r in range(16, 20)]  # 검증기가 세는 원문 줄
 
-    # 대상 하나가 16행을 넘으면 그 대상을 고르게 나누고(18행 → 9 + 9), 남은 조각은 다음 대상과 묶음
+    # 대상 하나가 16행을 넘으면 그 대상을 고르게 나누되(18행 → 8 + 10) 한 공급방식의 외벌이·맞벌이 행(위 칸이 병합된 이어진 행)은 떼지 않고,
+    # 남은 조각은 다음 대상과 묶음
     many = {"일반공급": tuple((f"{n}단계", 100 + n, 140 + n) for n in range(9)), "신생아 특별공급": METHODS}
-    chunks = criteria_chunks(parse(criteria_text(groups=("일반공급", "신생아 특별공급"), methods=many)))
-    assert [(len(c.rows), c.groups) for c in chunks] == [(9, ("일반공급",)), (13, ("일반공급", "신생아 특별공급"))]
+    document = parse(criteria_text(groups=("일반공급", "신생아 특별공급"), methods=many))
+    chunks = criteria_chunks(document)
+    assert [(len(c.rows), c.groups) for c in chunks] == [(8, ("일반공급",)), (14, ("일반공급", "신생아 특별공급"))]
+    assert all("외벌이" in document.text(f"t1-1.r{c.rows[0]}") and "맞벌이" in document.text(f"t1-1.r{c.rows[-1]}") for c in chunks)
 
     # 행이 적은 표는 나누지 않음
     assert criteria_chunks(parse(criteria_text(groups=GROUPS[:2]))) == []
