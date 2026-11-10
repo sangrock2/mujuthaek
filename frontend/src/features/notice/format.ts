@@ -42,12 +42,29 @@ export function formatDay(ymd: string, withYear = false): string {
   return `${year}${m}월 ${d}일 (${wd})`;
 }
 
-/** 시작 ~ 끝. 하루면 하나만, 해가 바뀌면 끝에 연도를 붙여요 */
-export function formatPeriod(start: string | null, end: string | null): string | null {
+/** 올해 (한국 날짜) */
+const thisYear = (now: Date) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(now).slice(0, 4);
+
+/**
+ * 시작 ~ 끝. 하루면 하나만. 올해가 아닌 날짜는 연도를 붙이고(예전엔 다음 해 「2월 24일」에 연도가 없어 올해로 읽혔어요), 해가 바뀌면
+ * 끝에도 붙여요: "12월 14일 (월) ~ 2027년 1월 14일 (목)" · "2027년 2월 24일 (수)" · "2027년 1월 4일 (월) ~ 1월 8일 (금)"
+ */
+export function formatPeriod(
+  start: string | null,
+  end: string | null,
+  now = new Date(),
+): string | null {
   if (!start && !end) return null;
-  if (!start || !end || start === end) return formatDay((start ?? end)!);
-  const yearChanges = start.slice(0, 4) !== end.slice(0, 4);
-  return `${formatDay(start)} ~ ${formatDay(end, yearChanges)}`;
+  const year = thisYear(now);
+  if (!start || !end || start === end) {
+    const day = (start ?? end)!;
+    return formatDay(day, day.slice(0, 4) !== year);
+  }
+  const startYear = start.slice(0, 4);
+  const endYear = end.slice(0, 4);
+  const startWithYear = startYear !== year;
+  return `${formatDay(start, startWithYear)} ~ ${formatDay(end, endYear !== startYear)}`;
 }
 
 export const sectionTitles: Record<NoticeSectionKey, { toc: string; heading: string }> = {
