@@ -3,6 +3,7 @@ package kr.mujuthaek.api.user.repository;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -47,21 +48,23 @@ public class FavoriteRepository {
         == 1;
   }
 
-  public int remove(UUID userId, String targetType, UUID targetId) {
+  /** 대상 ID들 중 저장한 줄을 모두 지워요 (합쳐진 공고는 합치기 전 ID로 저장된 줄도 있어요). */
+  public int remove(UUID userId, String targetType, Collection<UUID> targetIds) {
     return jdbc.sql(
-            "delete from account.favorites where user_id = :userId and target_type = :type and target_id = :id")
+            "delete from account.favorites where user_id = :userId and target_type = :type and target_id in (:ids)")
         .param("userId", userId)
         .param("type", targetType)
-        .param("id", targetId)
+        .param("ids", targetIds)
         .update();
   }
 
-  public boolean exists(UUID userId, String targetType, UUID targetId) {
+  /** 대상 ID들 중 하나라도 저장했는지. */
+  public boolean exists(UUID userId, String targetType, Collection<UUID> targetIds) {
     return jdbc.sql(
-                "select count(*) from account.favorites where user_id = :userId and target_type = :type and target_id = :id")
+                "select count(*) from account.favorites where user_id = :userId and target_type = :type and target_id in (:ids)")
             .param("userId", userId)
             .param("type", targetType)
-            .param("id", targetId)
+            .param("ids", targetIds)
             .query(Long.class)
             .single()
         > 0;

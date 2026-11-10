@@ -454,6 +454,39 @@ class ChatApiTest {
   }
 
   @Test
+  void changesToAMessageWrittenBeforeTheMergeReachTheSurvivingRoom() throws Exception {
+    // 2026-11-10 재검토: 합치기 전 메시지의 좋아요·삭제 이벤트를 메시지의 공고 ID(합쳐진 공고)로 보내 남은 방 연결에 가지 않았음
+    LoginUser a = member();
+    UUID before = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into chat.messages (id, notice_id, user_id, author_nickname, content, status, created_at)
+        values (?, ?, ?, ?, '합치기 전 메시지', 'VISIBLE', ?)
+        """,
+        before,
+        MERGED,
+        a.userId(),
+        a.nickname(),
+        OffsetDateTime.now().minusDays(1));
+    MvcResult stream =
+        mvc.perform(get("/api/v1/notices/{id}/chat/stream", MERGED_INTO))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+    mvc.perform(
+            put("/api/v1/chat/messages/{id}/like", before)
+                .header("Authorization", bearer(member())))
+        .andExpect(status().isOk());
+    mvc.perform(delete("/api/v1/chat/messages/{id}", before).header("Authorization", bearer(a)))
+        .andExpect(status().is2xxSuccessful());
+
+    assertThat(body(stream))
+        .contains("event:like.updated")
+        .contains("event:message.deleted")
+        .contains(before.toString());
+  }
+
+  @Test
   void streamSendsCommittedMessagesAndResumesAfterLastEventId() throws Exception {
     UUID room = UUID.randomUUID();
     LoginUser a = member();

@@ -23,4 +23,14 @@ class RegionCodesTest {
     assertThat(RegionCodes.withinAny("41111", List.of("1100000000", "4111000000")))
         .isEqualTo(Verdict.MET);
   }
+
+  @Test
+  void aCountyWhoseNextCodeIsAnotherCountyDoesNotContainIt() {
+    // 2026-11-10 재검토: 끝자리 0 모양으로 시를 정해, 증평군(43745) 주민이 「영동군(43740) 거주」 조건에서 충족이 됐음
+    assertThat(RegionCodes.within("43745", "4374000000")).isEqualTo(Verdict.NOT_MET);
+    assertThat(RegionCodes.within("4374510100", "4374000000")).isEqualTo(Verdict.NOT_MET);
+    assertThat(RegionCodes.within("43740", "4374500000")).isEqualTo(Verdict.NOT_MET);
+    assertThat(RegionCodes.within("43740", "4374000000")).isEqualTo(Verdict.MET);
+    assertThat(RegionCodes.within("41597", "4159000000")).isEqualTo(Verdict.MET); // 화성시 동탄구
+  }
 }
