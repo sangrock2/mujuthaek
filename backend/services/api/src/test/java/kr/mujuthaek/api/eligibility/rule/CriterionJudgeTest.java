@@ -309,7 +309,11 @@ class CriterionJudgeTest {
   void marriage() {
     var newlywed = new Judgment.Marriage(B, "MARRIED", 7, true);
     assertThat(judge(newlywed, applicant().married(2020, 1).build()).status()).isEqualTo(MET);
-    assertThat(judge(newlywed, applicant().married(2019, 10).build()).status()).isEqualTo(NOT_MET);
+    // 기준일 2026-10-16: 2019년 10월 혼인은 그 달 1일이면 7년이 넘고 말일이면 7년 안이라 확인 필요(2026-11-11, 예전엔 불충족)
+    var boundary = judge(newlywed, applicant().married(2019, 10).build());
+    assertThat(boundary.status()).isEqualTo(UNKNOWN);
+    assertThat(boundary.reason()).isEqualTo(Bands.BOUNDARY);
+    assertThat(judge(newlywed, applicant().married(2019, 9).build()).status()).isEqualTo(NOT_MET);
     assertThat(judge(newlywed, applicant().marital("ENGAGED").build()).status()).isEqualTo(MET);
     assertThat(judge(newlywed, applicant().marital("SINGLE").build()).status()).isEqualTo(NOT_MET);
     assertThat(judge(newlywed, applicant().marital("MARRIED").build()).needs())

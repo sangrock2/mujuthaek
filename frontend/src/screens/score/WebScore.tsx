@@ -157,8 +157,9 @@ export function WebScore() {
 
             <span className="text-text-sub px-[4px] text-[13px] leading-[1.6]">
               가점제는 주로 <strong className="text-text">민영주택</strong> 청약에 쓰여요. 오늘
-              기준으로 계산했고, 연월만 넣은 칸은 그 달 1일부터 세요. 최종 점수는 청약홈의 확인
-              결과를 기준으로 해요. 넣은 값은 저장하지 않아요.
+              기준으로 계산했고, 연월만 넣은 칸은 그 달 말일부터 세어 점수를 높게 잡지 않아요(날짜에
+              따라 더 높을 수 있으면 항목에 알려요). 최종 점수는 청약홈의 확인 결과를 기준으로 해요.
+              넣은 값은 저장하지 않아요.
             </span>
           </aside>
         </div>
