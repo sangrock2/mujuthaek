@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.filter.ForwardedHeaderFilter;
 
 /** 요청 기록: 필터가 남긴 기록을 모아 넣고, 가입·로그인 실패·봇·관리자 접근을 세고, 원본 IP는 보관 기간 뒤 지워요. */
 class RequestLogStoreTest {
@@ -136,6 +137,24 @@ class RequestLogStoreTest {
             jdbc.queryForObject(
                 "select count(*) from traffic.request_logs where path like '%?%'", Long.class))
         .isZero();
+  }
+
+  @Test
+  void 전달_헤더로_주소_앞을_바꿔도_기록에서_빠지지_않는다() throws Exception {
+    // 2026-11-10 코드 검토: X-Forwarded-Prefix: /actuator를 붙이면 요청 주소가 /actuator/…로 바뀌어 상태 확인처럼 기록에서 빠졌음
+    var request = new MockHttpServletRequest("GET", "/api/admin/reviews");
+    request.addHeader("X-Forwarded-Prefix", "/actuator");
+    request.addHeader("User-Agent", CHROME);
+    request.setRemoteAddr("203.0.113.5");
+    new ForwardedHeaderFilter()
+        .doFilter(
+            request,
+            new MockHttpServletResponse(),
+            (req, res) -> filter.doFilter(req, res, new MockFilterChain()));
+    store.flush();
+
+    assertThat(jdbc.queryForList("select path from traffic.request_logs", String.class))
+        .containsExactly("/api/admin/reviews");
   }
 
   @Test

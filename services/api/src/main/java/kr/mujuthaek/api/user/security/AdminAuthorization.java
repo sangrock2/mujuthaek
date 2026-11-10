@@ -54,7 +54,10 @@ class AdminAuthorization {
   AuthorizationManager<RequestAuthorizationContext> reviewQueue() {
     return check(
         (a, request) -> {
-          String kinds = request.getParameter("kinds");
+          // 값이 여럿(kinds=NOTICE&kinds=BENEFIT)이면 컨트롤러는 쉼표로 이어 받아요. 첫 값만 보면 다른 종류 권한 없이 그 종류까지
+          // 볼 수 있었어요(2026-11-10 코드 검토). 컨트롤러와 같게 모든 값을 이어서 봐요
+          String[] values = request.getParameterValues("kinds");
+          String kinds = values == null ? null : String.join(",", values);
           List<String> wanted =
               kinds == null || kinds.isBlank()
                   ? List.of("NOTICE", "BENEFIT")
