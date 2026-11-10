@@ -151,6 +151,10 @@ def dispatch(state: V2State, runtime: Context) -> dict[str, Any]:
 def fan_out(state: V2State) -> list[Send] | str:
     if state.get("extracted") is not None:
         return "conclude"  # 구조 노드가 V1 방식으로 모든 섹션을 뽑음(채팅 모델 없음)
+    if not state.get("structure"):
+        # 구조 단계가 실패하면(구조 요약이 없거나 실패 조각뿐) 결과가 어차피 FAILED라 담당을 보내지 않아요(V1과 같음: 「구조 호출이
+        # 실패해 실행하지 않았습니다」). 예전엔 담당을 모두 돌려, 다시 처리할 때마다 공고 예산을 다 썼어요(2026-11-10 코드 검토)
+        return "conclude"
     names = [name for name in state["plan"]["workers"] if name != STRUCTURE]
     return [
         Send("section", {**state, "worker": name, "order": order, "parts": state.get("parts") or [], "usage": [], "traces": []})

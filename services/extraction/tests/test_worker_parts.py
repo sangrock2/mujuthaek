@@ -84,6 +84,15 @@ def test_without_local_address_paid_model_is_used_directly(monkeypatch):
     assert isinstance(models.primary, BudgetedModel) and models.fallback is None and models.names == {"primary": "gpt-6-luna"}
 
 
+def test_legacy_method_is_refused_at_start_when_paid_agents_would_run(monkeypatch):
+    # 2026-11-10 코드 검토: 유료 키가 있으면 V2 담당이 도는데 V2 지시를 v10(legacy)으로 만들 수 없어, 모든 공고가 비용을 쓰고 실패했음
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    with pytest.raises(ValueError, match="legacy"):
+        ModelFactory(settings(extraction_method="legacy"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert ModelFactory(settings(extraction_method="legacy")).for_notice().chat is None  # 유료 키가 없으면(V1 길) 그대로
+
+
 def test_without_paid_key_only_local_is_used(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     models = ModelFactory(settings()).for_notice()

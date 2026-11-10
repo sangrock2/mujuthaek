@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from mujuthaek_extraction.config import Settings
+from mujuthaek_extraction.method import LEGACY
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelRequest, ModelResponse, StopReason
 from mujuthaek_extraction.model.call_cache import CachedModel, CallCache
 from mujuthaek_extraction.model.file_exchange import FileExchangeModel
@@ -81,6 +82,10 @@ class ModelFactory:
         self._paid: OpenAIResponsesModel | None = None
         if settings.model_mode == "auto":
             key = settings.openai_api_key()
+            if key and settings.extraction_method == LEGACY:
+                # 유료 키가 있으면 V2 담당이 돌고, V2 지시는 v10 지시(legacy)로 만들 수 없어 모든 공고가 그림 판독·구조 비용을 쓰고
+                # 실패했어요(2026-11-10 코드 검토). 공고마다 돈을 쓰고 실패하지 않게 시작할 때 막습니다
+                raise ValueError("EXTRACTION_METHOD=legacy는 유료 키가 있는 실행(V2 담당)에서 쓸 수 없습니다. structured로 두세요")
             if key:
                 self._paid = OpenAIResponsesModel(
                     key,

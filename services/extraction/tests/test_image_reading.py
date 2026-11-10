@@ -189,6 +189,22 @@ def test_rows_are_compared_by_cells_so_spacing_or_a_missing_label_is_not_a_dispu
     assert not image_reading._agrees(wrong, wrong, ocr) and image_reading._agrees(first, first, ocr)
 
 
+def test_ocr_counts_how_often_a_value_is_used_and_also_checks_lines_that_are_not_table_rows():
+    # 2026-11-10 코드 검토: OCR이 그림 어디엔가 있는지만 봐서, 두 판독이 같게 잘못 읽은 값이 다른 행 값과 같으면 지나갔고 표 행이 아닌 줄은 OCR을 건너뜀
+    from collections import Counter
+
+    rows = "| 101 | 31.69 | 250,600 |\n| 102 | 31.69 | 250,600 |"  # 102호는 실제 250,500인데 두 판독 모두 250,600으로 읽음
+    ocr = Counter(["101", "102", "31.69", "31.69", "250600", "250500"])
+    read = image_reading.reading_numbers(rows)
+    assert [image_reading._agrees(line, rows, ocr, "", read) for line in rows.split("\n")] == [False, False]  # 어느 행인지 몰라 둘 다
+    assert image_reading._agrees("| 101 | 31.69 | 250,600 |", rows, Counter(["101", "31.69", "31.69", "250600", "250600"]), "", read)
+    # 작은 숫자(층·호수)는 되풀이되고 OCR이 놓치기 쉬워 「있는지」만 봄
+    assert image_reading._agrees("| 2 | 250,600 |", "| 2 | 250,600 |", Counter(["2", "250600"]), "", Counter(["2", "2", "250600"]))
+    prose = "※ 신혼부부 월평균소득 70% 이하"
+    assert not image_reading._agrees(prose, prose, Counter(["100"]), "", image_reading.reading_numbers(prose))
+    assert image_reading._agrees(prose, prose, Counter(["70"]), "", image_reading.reading_numbers(prose))
+
+
 def test_ocr_is_skipped_when_turned_off(monkeypatch):
     monkeypatch.setenv("EXTRACTION_IMAGE_OCR", "false")
     assert image_reading._ocr_numbers(b"not a pdf", 1) is None

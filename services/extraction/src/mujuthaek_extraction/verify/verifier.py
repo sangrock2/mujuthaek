@@ -367,7 +367,13 @@ GROUP_FIELD_HOLDS = ("counts", "prices")
 # 보류할 수 없어 공고 전체가 검수로 감 — 맞는 가격 150·서류 66·일정 5가 모두 비공개). 인용이 받치는 칸이 하나로 정해지면 그 칸을 가리키게
 # 바꿔 칸만 보류합니다(대상 계층은 판정에 쓰므로 메모로 내리지 않고 보류). 정해지지 않으면 그대로 둡니다(공고 전체 검수)
 NOTICE_EVIDENCE_CODES = {"EVIDENCE_QUOTE_TOO_SHORT", "EVIDENCE_QUOTE_NOT_FOUND", "EVIDENCE_AMBIGUOUS", "EVIDENCE_SCATTERED"}
-QUOTED = re.compile(r"「([^」]*)」\s*$")
+QUOTED = re.compile(r"「([^」]*)」")
+
+
+def _issue_quotes(description: str) -> list[str]:
+    """이슈 설명의 인용(항목 이름 뒤). 못 찾은 인용은 「…」, 「…」로 여럿이 이어 적혀요."""
+    head, _, rest = description.partition(": ")
+    return QUOTED.findall(rest or head)
 
 
 def _flat(text: Any) -> str:
@@ -393,10 +399,13 @@ CORE_IN_QUOTE = re.compile(r"\d{4}\s*[.년\-/]\s*\d{1,2}|\d+\s*(?:세대|호|가
 
 
 def _description_quote(notice: dict[str, Any], quote: str) -> bool:
+    """소개 글만 받치는 인용인지: 길고, 제목·기관·날짜·수량과 대상 계층·공급 유형 이름을 담지 않음. 대상 계층·공급 유형을 담은 인용을
+    소개 글로 좁히면, 못 찾은 인용에만 기댄 대상 계층이 보류되지 않고 판정 틀에 쓰였어요(2026-11-10 코드 검토)."""
     flat = _flat(quote)
     if len(flat) < DESCRIPTION_QUOTE_MIN_CHARS or CORE_IN_QUOTE.search(quote):
         return False
-    return not any(_flat(value) and _flat(value) in flat for value in (notice.get("title"), notice.get("publisher")))
+    named = (notice.get("title"), notice.get("publisher"), notice.get("supplyType"), *(notice.get("targetGroups") or []))
+    return not any(_flat(value) and _flat(value) in flat for value in named)
 
 
 def narrow_notice_issues(candidate: dict[str, Any]) -> None:
@@ -404,9 +413,13 @@ def narrow_notice_issues(candidate: dict[str, Any]) -> None:
     for issue in candidate["quality"]["reviewIssues"]:
         if issue.get("target") != "/notice" or issue.get("code") not in NOTICE_EVIDENCE_CODES:
             continue
-        quoted = QUOTED.search(issue.get("description") or "")
-        field = notice_field_of(notice, quoted[1]) if quoted else None
-        if field is None and quoted and issue.get("code") == "EVIDENCE_QUOTE_NOT_FOUND" and _description_quote(notice, quoted[1]):
+        quotes = _issue_quotes(issue.get("description") or "")
+        if not quotes:
+            continue
+        # 인용이 여럿이면 모두 같은 칸을 받칠 때만 좁혀요(예전엔 마지막 인용만 봐서 앞 인용이 받치는 칸이 보류되지 않았음)
+        fields = {notice_field_of(notice, quote) for quote in quotes}
+        field = next(iter(fields)) if len(fields) == 1 else None
+        if fields == {None} and issue.get("code") == "EVIDENCE_QUOTE_NOT_FOUND" and all(_description_quote(notice, quote) for quote in quotes):
             field = "description"
         if field:
             issue["target"] = f"/notice/{field}"

@@ -1397,3 +1397,15 @@ def test_criteria_table_helpers_are_on_by_default_and_a_failure_in_them_leaves_t
     assert section.table_note(records).count("이 행의 남은 기준은 이 담당이 넣습니다") == 2
     monkeypatch.setattr(section, "criteria_chunks", broken)  # 기준표를 찾다 오류: 기준표 담당 없이 진행
     assert section._tables(spec, draft, {"document": document}, rt, ("text",), None, []) == []
+
+
+def test_the_resolver_copy_keeps_items_that_were_not_added():
+    # 2026-11-10 코드 검토: 해결 담당이 고쳐 볼 사본이 거절·대기 항목을 버려, 사본 검증에서 ITEM_NOT_ADDED가 사라져 「문제가 줄었다」로
+    # 보였음 → 아무것도 풀지 않은 답도 채택 관문을 지남
+    draft = SectionDraft(("eligibility",), items={"eligibility": [{"id": "e1"}]})
+    draft.rejected[("eligibility", "e2")] = ["/eligibility/1/rule: 형식 오류"]
+    draft.pending[("eligibility", "e2")] = {"id": "e2"}
+    copied = section._copy(SimpleNamespace(sections=("eligibility",)), draft)
+    assert copied.rejected == draft.rejected and copied.pending == draft.pending
+    copied.rejected.clear()
+    assert draft.rejected  # 사본을 고쳐도 원래 초안은 그대로

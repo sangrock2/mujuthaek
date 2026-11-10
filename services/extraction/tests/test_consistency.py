@@ -1145,3 +1145,9 @@ def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
     for notice_total, groups in ((total | {"value": 3}, rooms), (total, [unit_group("59A", 10, "HOUSING_TYPE"), unit_group("59B", 5, "HOUSING_TYPE")])):
         found = check_consistency(candidate(notice={"counts": [notice_total]}, supplyGroups=groups), SourceBundle(texts={"pdf-text": TABLE}))
         assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]
+    # 2026-11-10 코드 검토: 공고 모집 수가 대상마다만 있으면(「남성 1·여성 1」) 그 합(2)과 견줌. 예전엔 건너뛰어 호실 3곳이 모두 모집 1로 게시됨
+    by_target = [{"kind": "OFFERED", "value": 1, "scope": {"targetGroups": [name], "supplyCategory": "ALL"}} for name in ("남성", "여성")]
+    found = check_consistency(candidate(notice={"counts": by_target}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
+    assert len([f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]) == 6
+    found = check_consistency(candidate(notice={"counts": [*by_target, by_target[0]]}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
+    assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]  # 합 3이면 호실 3곳은 맞음

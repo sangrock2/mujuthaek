@@ -264,7 +264,16 @@ def _signature(issue: dict[str, Any]) -> tuple[str, str]:
 
 
 def _copy(spec: CallSpec, draft: SectionDraft) -> SectionDraft:
-    return SectionDraft(spec.sections, items=copy.deepcopy(draft.items), coverage=copy.deepcopy(draft.coverage), missing=copy.deepcopy(draft.missing))
+    """해결 담당이 고쳐 볼 사본. 넣지 못한 항목(rejected·pending)도 옮깁니다: 빠뜨리면 사본 검증에서 ITEM_NOT_ADDED가 사라져
+    「문제가 줄었다」로 보여, 아무것도 풀지 않은 답도 채택 관문(_settled)을 지났어요(2026-11-10 코드 검토)."""
+    return SectionDraft(
+        spec.sections,
+        items=copy.deepcopy(draft.items),
+        coverage=copy.deepcopy(draft.coverage),
+        missing=copy.deepcopy(draft.missing),
+        rejected=copy.deepcopy(draft.rejected),
+        pending=copy.deepcopy(draft.pending),
+    )
 
 
 def _resolve_group(

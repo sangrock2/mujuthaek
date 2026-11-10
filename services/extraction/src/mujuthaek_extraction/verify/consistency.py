@@ -404,8 +404,15 @@ UNIT_COUNTS = "UNIT_COUNTS_EXCEED_TOTAL"
 
 
 def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
-    totals = [c for c in candidate["notice"]["counts"] if c["kind"] == "OFFERED" and not c["scope"]["targetGroups"] and isinstance(c["value"], int)]
-    if len(totals) != 1:
+    offered = [c for c in candidate["notice"]["counts"] if c["kind"] == "OFFERED" and isinstance(c["value"], int)]
+    totals = [c["value"] for c in offered if not c["scope"]["targetGroups"]]
+    if len(totals) == 1:
+        total = totals[0]
+    elif not totals and offered:
+        # 공고 모집 수가 대상마다만 있으면(「남성 1·여성 1」「1인 가구 1세대」) 그 합이 전체예요. 예전엔 대상 없는 수가 하나일 때만 봐서
+        # 대상이 붙은 공고의 호실 표는 행마다 모집 1이 그대로 게시됐어요(2026-11-10 코드 검토)
+        total = sum(c["value"] for c in offered)
+    else:
         return
     units = [
         (g, str(group.get("unitLabel")))
@@ -413,14 +420,14 @@ def _check_unit_counts(candidate: dict[str, Any], find: Any) -> None:
         if group.get("itemKind") == "HOUSING_UNIT" and any(c["kind"] == "OFFERED" and c["value"] == 1 for c in group["counts"])
     ]
     distinct = {label for _, label in units}
-    if len(distinct) <= totals[0]["value"]:
+    if len(distinct) <= total:
         return
     for g, _ in units:
         find(
             "V7",
             UNIT_COUNTS,
             f"/supplyGroups/{g}/counts",
-            f"호실 {len(distinct)}곳을 모집 1로 셌는데 공고 전체 모집 수는 {totals[0]['value']}입니다. 어느 호실이 이번 모집인지 원문 확인이 필요합니다",
+            f"호실 {len(distinct)}곳을 모집 1로 셌는데 공고 전체 모집 수는 {total}입니다. 어느 호실이 이번 모집인지 원문 확인이 필요합니다",
         )
 
 

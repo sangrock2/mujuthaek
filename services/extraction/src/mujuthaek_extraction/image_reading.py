@@ -187,7 +187,23 @@ def _labels(cells: list[str]) -> tuple[str, ...]:
     return tuple("".join(c.split()) for c in cells if c and not NUMBER_CELL.match(c))
 
 
-def _agrees(line: str, second: str, ocr: Counter[str] | None, known: str = "") -> bool:
+# 이 자릿수 이상인 숫자는 판독에 쓰인 횟수만큼 OCR에도 있어야 맞음(금액·면적처럼 틀리면 안 되는 값). 그림 어디엔가 한 번만 있으면 맞다고 하면,
+# 두 판독이 같게 잘못 읽은 값이 다른 행의 값과 같을 때 지나갔어요(2026-11-10 코드 검토). 작은 숫자(층·호수 등)는 많이 되풀이되고
+# OCR이 작은 글자를 놓치기 쉬워 그대로 「있는지」만 봅니다
+COUNTED_DIGITS = 3
+
+
+def reading_numbers(text: str) -> Counter[str]:
+    """판독 글 전체에 나온 숫자(쉼표 뺀 글자)의 횟수. OCR 숫자와 같은 방식으로 셉니다."""
+    return Counter(m.replace(",", "") for m in NUMBER_WORD.findall(text))
+
+
+def _ocr_has(number: str, ocr: Counter[str], read: Counter[str] | None) -> bool:
+    need = (read or {}).get(number, 1) if sum(ch.isdigit() for ch in number) >= COUNTED_DIGITS else 1
+    return ocr[number] >= max(need, 1)
+
+
+def _agrees(line: str, second: str, ocr: Counter[str] | None, known: str = "", read: Counter[str] | None = None) -> bool:
     """처음 판독한 줄이 다른 판독들과 맞는지.
     표 행은 칸으로 비교합니다(2026-11-05 보강): 숫자 칸이 모두 같은 행이 다시 읽기에 있고 글 칸(단지·동 이름)이 같거나 한쪽에 없으면 맞음.
     줄 전체를 비교하면 띄어쓰기·합친 칸 적기 차이로 거짓 불일치가 납니다. OCR 숫자(ocr)가 있으면 행의 숫자 칸이 모두 OCR에도 있어야 맞음
@@ -197,12 +213,16 @@ def _agrees(line: str, second: str, ocr: Counter[str] | None, known: str = "") -
     cells = _cells(line)
     numbers = _numbers(cells) if cells else ()
     if not numbers:
+        # 표 행이 아닌 줄도 숫자는 OCR과 맞춰 봐요(예전엔 이 줄들은 OCR을 건너뛰어, 두 판독이 같게 틀린 「소득 70%」도 지나갔음)
+        words = [m.replace(",", "") for m in NUMBER_WORD.findall(line)]
+        if ocr is not None and not all(_ocr_has(w, ocr, read) for w in words):
+            return False
         return _key(line) in {_key(other) for other in second.split("\n")}
     labels = _labels(cells)
     rows = [(_numbers(c), _labels(c), c) for c in map(_cells, second.split("\n")) if c]
     if not any(n == numbers and (lab == labels or not lab or not labels or _attested(cells, other, known)) for n, lab, other in rows):
         return False
-    return ocr is None or all(ocr[n] > 0 for n in numbers)
+    return ocr is None or all(_ocr_has(n, ocr, read) for n in numbers)
 
 
 def _attested(first_cells: list[str], second_cells: list[str], known: str) -> bool:
@@ -462,8 +482,8 @@ def read_image_tables(
         index, text = page["image"], _clean(page["text"])
         if text and 1 <= index <= len(targets):
             texts[index] = text
-            numbers = _ocr_numbers(targets[index - 1][2], targets[index - 1][3])
-            disputes += [(index, line, numbers) for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers, known)]
+            numbers, read = _ocr_numbers(targets[index - 1][2], targets[index - 1][3]), reading_numbers(text)
+            disputes += [(index, line, numbers) for line in text.split("\n") if line.strip() and not _agrees(line, second.get(index, ""), numbers, known, read)]
     if disputes and os.getenv(THIRD_ENV, "").lower() == "true":
         disputes = _third_reading(model, request, targets, texts, disputes, second, run)
     blocks = [f"{BLOCK_HEAD}{targets[index - 1][1]} {targets[index - 1][3]}쪽 {BLOCK_NOTE} ===\n{text}" for index, text in texts.items()]

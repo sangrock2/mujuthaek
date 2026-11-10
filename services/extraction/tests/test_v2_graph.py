@@ -47,6 +47,24 @@ def test_section_agents_run_structure_first_then_in_parallel_and_the_notice_is_p
     assert {c["agent"] for c in outcome.usage["v2"]["calls"]} == {"structure", "schedules", "eligibility", "selection", "documents"}
 
 
+def test_when_the_structure_step_fails_the_section_agents_are_not_sent(v2):
+    # 2026-11-10 코드 검토: 구조 단계가 실패해도 담당을 모두 돌려(결과는 어차피 FAILED) 다시 처리할 때마다 공고 예산을 다 씀. V1은 건너뜀
+    seen = []
+
+    def failed_structure(spec, state, rt):
+        return [{"quotes": [], "coverage": {s: {"status": "FAILED", "reason": "잘림"} for s in spec.sections}}], [{"agent": spec.name}]
+
+    def worker(spec, state, rt):
+        seen.append(spec.name)
+        return [], []
+
+    v2["structure"] = failed_structure
+    for name in ("schedules", "eligibility", "selection", "documents"):
+        v2[name] = worker
+    outcome = run(raw_event(), models())
+    assert outcome.status == "FAILED" and seen == []
+
+
 def test_without_chat_models_the_structure_node_extracts_every_section_the_v1_way(v2):
     # 채팅 모델이 없는 실행(로컬 AI만·녹화·대역)은 담당 에이전트를 돌릴 수 없어, 구조 노드가 V1 방식 추출 전체를 돌리고 담당 없이 마무리로 감
     # (2026-11-10 V1 정해진 단계 그래프를 걷어내며 이 길로 옮김: 그 그래프와 같은 호출·결과)

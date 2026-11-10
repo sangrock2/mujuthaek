@@ -902,6 +902,11 @@ def test_unit_rows_count_only_the_units_named_in_the_supply_scale_line():
         st.offered_units("□ 공급호수 : 10호(101호 등)") == set() and st.offered_units("□ 공급호수 : 3호(101호, 102호)") == set()
     )  # 줄였거나 수가 다르면 안 셈
     assert st.offered_units("□ 공급세대 : 25세대(지하철 6호선 인근)") == set()
+    # 2026-11-10 코드 검토: 끝에만 「호」를 붙인 목록과 수 없이 호실만 적은 줄도 읽음(예전엔 못 읽어 표의 모든 호실을 모집 1로 셈)
+    assert st.offered_units("□ 공급호수 : 2호 (101, 202호)") == {"101", "202"}
+    assert st.offered_units("□ 공급호실 - 101호, 202호\n□ 위치") == {"101", "202"}
+    assert st.offered_units("□ 공급호실 : 101호, 202호 외") == set() and st.offered_units("□ 공급호실 : 101호, 202호 등") == set()
+    assert st._occupied(["", "101호", "임대완료"]) and st._occupied(["", "102호", "계약진행중"])
     rows = (("층", "호실", "전용", "월임대료"), ("1층", "101호", "11.38", "7만원"), ("", "102호", "12.60", "8만원"), ("2층", "202-1호", "8.25", "5만원"))
     table = st.Table("1-1", 1, "", rows[0], rows, ((0, 1, 2, 3), (4, 5, 6, 7), (4, 8, 9, 10), (11, 12, 13, 14)))
     columns = [column(1, "FLOOR"), column(2, "UNIT"), column(3, "AREA_EXCLUSIVE"), column(4, "PRICE", pk="MONTHLY_RENT", unit="원")]

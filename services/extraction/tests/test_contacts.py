@@ -39,3 +39,15 @@ def test_numbers_already_in_the_guidance_mobile_numbers_and_parts_without_guidan
     assert fill_contacts(parts, TEXT, "pdf-text") is parts
     picture = "=== 그림 판독 공고.pdf 1쪽 ===\n문의처 : 02-1234-5678"  # 그림 판독 글은 보지 않음
     assert missing_contacts([], picture) == []
+
+
+def test_fax_numbers_on_a_contact_line_are_not_added_as_phone_numbers():
+    # 2026-11-10 코드 검토: 문의처 줄에 함께 적힌 팩스 번호도 「문의처 전화번호예요」로 게시됐음
+    text = "\n".join(
+        [
+            "◦ 문의처 : 051-810-9905~8 (팩스 : 051-810-9909)",
+            "| 임대문의 | 주택관리팀 02-123-4567, FAX 02-123-4599 |",
+            "문의 T. 031-111-2222 F. 031-111-2299",
+        ]
+    )
+    assert [phone for _, phone, _ in missing_contacts([], text)] == ["051-810-9905~8", "02-123-4567", "031-111-2222"]
