@@ -331,12 +331,22 @@ public final class NoticeContent {
     return new Source(Source.NOTICE, null, null, null, null);
   }
 
-  /** 후속 안내의 일정 (상세 공고의 schedules 그대로). */
+  /**
+   * 후속 안내의 일정 (상세 공고의 schedules에서 보류한 일정을 뺀 것). 후속 안내는 일정만 저장하고 보류 항목(heldItems)은 두지 않아서, 그대로 두면
+   * 보류한 일정이 확정처럼 보였어요(2026-11-10 코드 검토). 본 공고 상세도 보류한 일정은 보여 주지 않아요.
+   */
   public static JsonNode schedules(ExtractionEvent event) {
+    var out = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
     JsonNode schedules = event.notice() == null ? null : event.notice().path("schedules");
-    return schedules != null && schedules.isArray()
-        ? schedules
-        : tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+    if (schedules == null || !schedules.isArray()) {
+      return out;
+    }
+    for (int i = 0; i < schedules.size(); i++) {
+      if (!held(event.heldItems(), "/schedules/" + i)) {
+        out.add(schedules.get(i));
+      }
+    }
+    return out;
   }
 
   /** 상세 공고의 공급 기관·공급 유형 (목록 표시·필터용). */

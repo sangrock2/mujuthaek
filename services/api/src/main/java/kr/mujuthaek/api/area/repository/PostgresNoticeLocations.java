@@ -33,7 +33,7 @@ public final class PostgresNoticeLocations {
       """
       select method, st_y(geom::geometry) as lat, st_x(geom::geometry) as lng, bjd_code_found, region_mismatch
       from area.notice_locations
-      where address_key = ? and status = 'OK'
+      where address_key = ? and bjd_code_given is not distinct from ? and status = 'OK'
       order by calculated_at desc
       limit 1
       """;
@@ -64,16 +64,20 @@ public final class PostgresNoticeLocations {
   }
 
   /**
-   * 같은 주소 키로 이미 찾은 정확한 좌표(OK). 대략 위치(APPROX)·실패는 나중에 더 잘 찾을 수 있어서 다시 써요(재사용 안 함). 시군구·주소 ID는 저장하지
-   * 않아서 비어요.
+   * 같은 주소 키·같은 받은 법정동코드로 이미 찾은 정확한 좌표(OK). 대략 위치(APPROX)·실패는 나중에 더 잘 찾을 수 있어서 다시 써요(재사용 안 함).
+   * 시군구·주소 ID는 저장하지 않아서 비어요.
+   *
+   * <p>법정동코드도 같아야 해요: 찾을 때 그 코드로 시군구를 좁히므로, 「중앙로 7」처럼 시군구 없는 주소는 코드가 다르면 다른 곳이에요. 주소 글자만 보면 다른 도시의
+   * 좌표를 그대로 썼어요(2026-11-10 코드 검토).
    */
-  public Optional<GeocodeResult> reusable(String addressKey) {
+  public Optional<GeocodeResult> reusable(String addressKey, String bjdCodeGiven) {
     if (addressKey == null || addressKey.isBlank()) {
       return Optional.empty();
     }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(REUSABLE)) {
       ps.setString(1, addressKey);
+      ps.setString(2, bjdCodeGiven);
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
           return Optional.empty();

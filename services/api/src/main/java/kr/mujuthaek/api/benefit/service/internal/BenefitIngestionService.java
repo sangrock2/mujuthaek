@@ -19,9 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * policy.extracted를 혜택으로 저장해요 (policy-extracted.draft.md 4장 "저장 규칙"). 처음 받은 정책은 추가, 더 큰 수집 버전은 고치고,
- * 같거나 작은 버전은 버려요. 처음 저장했거나 범위 밖이던 정책이 범위 안이 되면 BenefitPublished, 범위 안이던 정책의 사용자가 볼 내용이 바뀌면
- * BenefitUpdated로 알려요 (같은 트랜잭션, notification이 받아요). 재처리는 새 혜택으로 알리지 않고, 바뀜은 reprocess 표시를 달아 알려요.
+ * policy.extracted를 혜택으로 저장해요 (policy-extracted.draft.md 4장 "저장 규칙"). 처음 받은 정책은 추가, 더 큰 수집 버전과 같은
+ * 버전의 검수 결과(quality.reviewed)는 고치고, 그 밖의 같거나 작은 버전은 버려요. 처음 저장했거나 범위 밖이던 정책이 범위 안이 되면
+ * BenefitPublished, 범위 안이던 정책의 사용자가 볼 내용이 바뀌면 BenefitUpdated로 알려요 (같은 트랜잭션, notification이 받아요).
+ * 재처리는 새 혜택으로 알리지 않고, 바뀜은 reprocess 표시를 달아 알려요.
  *
  * <p>이번엔 주거 혜택(BENEFIT)만 받아요. 창업지원은 notice.policy_judgments에 있어요.
  */
@@ -53,7 +54,10 @@ public class BenefitIngestionService {
       return;
     }
     var saved = benefits.findByRawPolicyId(e.rawPolicyId());
-    if (saved.isPresent() && saved.get().version() >= e.version()) {
+    // 검수 결과(승인·반려)는 검수 전 결과와 같은 버전으로 와요. 같은 버전을 다 버리면 승인한 수정·반려가 반영되지 않았어요(2026-11-10 코드 검토)
+    boolean reviewOfSaved =
+        saved.isPresent() && saved.get().version() == e.version() && e.reviewed();
+    if (saved.isPresent() && saved.get().version() >= e.version() && !reviewOfSaved) {
       log.info(
           "이미 같거나 새 버전이 있어 버려요 rawPolicyId={} version={} saved={}",
           e.rawPolicyId(),

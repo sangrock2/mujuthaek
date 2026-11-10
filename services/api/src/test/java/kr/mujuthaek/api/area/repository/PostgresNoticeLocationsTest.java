@@ -71,21 +71,36 @@ class PostgresNoticeLocationsTest {
   @Test
   void onlyAnExactCoordinateIsReused() {
     String key = "재사용 " + notice;
-    assertThat(locations.reusable(key)).isEmpty();
+    String bjd = "2611010100"; // location()이 주는 법정동코드
+    assertThat(locations.reusable(key, bjd)).isEmpty();
 
     locations.save(
         location(1, "범위만"),
         key,
         GeocodeResult.approx(new Coordinate(35.0, 129.0), "2611010100", "26110"));
-    assertThat(locations.reusable(key)).isEmpty(); // 대략 위치는 다시 찾아요
+    assertThat(locations.reusable(key, bjd)).isEmpty(); // 대략 위치는 다시 찾아요
 
     locations.save(location(1, "초량상로 1-2"), key, ok(Method.COORD_API));
-    GeocodeResult reused = locations.reusable(key).orElseThrow();
+    GeocodeResult reused = locations.reusable(key, bjd).orElseThrow();
     assertThat(reused.method()).isEqualTo(Method.COORD_API);
     assertThat(reused.coordinate().lat()).isEqualTo(35.1);
     assertThat(reused.bjdCodeFound()).isEqualTo("2611010100");
     assertThat(reused.regionMismatch()).isTrue();
-    assertThat(locations.reusable(" ")).isEmpty();
+    assertThat(locations.reusable(" ", bjd)).isEmpty();
+  }
+
+  @Test
+  void theSameAddressTextWithAnotherLegalDongCodeIsNotReused() {
+    // 2026-11-10 코드 검토: 「중앙로 7」처럼 시군구 없는 주소는 법정동코드로 시군구를 좁혀 찾아서, 주소 글자만 같으면 다른 도시 좌표를 썼음
+    String key = "중앙로 7 " + notice;
+    locations.save(location(1, "중앙로 7"), key, ok(Method.SEARCH_API));
+
+    assertThat(locations.reusable(key, "2611010100")).isPresent();
+    assertThat(locations.reusable(key, "4111110100")).isEmpty();
+    assertThat(locations.reusable(key, null)).isEmpty();
+
+    locations.save(at("c", "중앙로 7"), key, ok(Method.SEARCH_API)); // 코드 없이 찾은 것은 코드 없는 위치만 다시 써요
+    assertThat(locations.reusable(key, null)).isPresent();
   }
 
   private NoticeLocation at(String id, String address) {

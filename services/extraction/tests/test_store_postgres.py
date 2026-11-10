@@ -677,6 +677,7 @@ def test_benefit_needing_review_is_saved_listed_and_approved_with_edits(store):
     published = store.conn.execute("select payload->'payload' from outbox order by created_at desc limit 1").fetchone()[0]
     assert published["summary"] == "고친 요약" and published["reprocess"] is True
     assert published["quality"]["needsReview"] is False and published["quality"]["reviewReasons"] == ["NO_DOCUMENT"]
+    assert published["quality"]["reviewed"] is True  # 같은 버전이라도 api가 검수 결과로 받아요
     assert store.benefit_review(item["reviewId"])["edits"] == [{"path": "/summary", "before": event["payload"]["summary"], "after": "고친 요약"}]
     # 관리자 개요 처리 통계에 혜택 검수도 들어가요(칸을 고쳤으니 고쳐서 승인)
     assert store.review_stats(7)["recent"]["editedApproved"] == 1
@@ -724,6 +725,7 @@ def test_reported_benefit_is_reopened_and_rejection_hides_it(store):
     published = store.conn.execute("select payload->'payload' from outbox order by created_at desc limit 1").fetchone()[0]
     # 반려 메모는 발행 값에 나가지 않아요(내부 기록에만)
     assert published["relevanceReason"] == "관리자가 확인해 서비스 대상에서 뺐어요"
+    assert published["quality"]["reviewed"] is True
     assert "주거 지원 아님" not in json.dumps(published, ensure_ascii=False)
     assert service.benefit_reopen({"rawPolicyId": str(uuid.uuid4())})[0] == 404
 

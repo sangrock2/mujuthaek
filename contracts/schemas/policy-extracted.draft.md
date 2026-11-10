@@ -112,6 +112,7 @@ collector ──raw.policy.collected──▶ extraction ──policy.extracted�
 | --- | --- |
 | `confidence` | 정책 전체 신뢰도 0~1. `hasDocument=false`이고 "공고문 참조"뿐이면 낮아요 |
 | `needsReview` | 사람이 확인해야 하는지. 검증 실패(evidence가 원문에 없음), `confidence` 0.6 미만, `relevant` 판단이 애매함 |
+| `reviewed` | 사람이 검수해 승인·반려한 결과인지 (선택, 없으면 false). 검수 결과는 검수 전 결과와 같은 `version`으로 다시 나가요 |
 | `reviewReasons` | `EVIDENCE_NOT_FOUND`, `LOW_CONFIDENCE`, `NO_DOCUMENT`, `RULE_AI_CONFLICT`, `TEXT_TRUNCATED` |
 | `hasDocument`, `documentStatus` | 수집 이벤트 값 그대로 |
 | `model`, `promptVersion` | 추출에 쓴 모델·프롬프트 버전 (다시 추출할 대상을 고를 때) |
@@ -299,7 +300,8 @@ create index benefit_conditions_type_idx on benefit.benefit_conditions (type);
 | 이미 있는 `rawPolicyId`, 더 큰 `version` | `benefits` 고치고 지원·조건 줄은 **지우고 다시 넣어요** (줄 단위 비교 안 함) |
 | └ 숨김(`relevant=false`)이던 정책이 `relevant`가 됨 | 처음 보이는 것과 같아서 `BenefitPublished` (`reprocess=false`일 때) |
 | └ 보이던 정책이 계속 `relevant` | 고치기 전 값과 비교해 사용자가 볼 내용이 바뀌었으면 `BenefitUpdated(benefitId, field, version, changedFields, reprocess)`. `changedFields`: `basic`(제목·기관) · `region` · `schedule`(신청·사업 기간) · `supports`(종류·금액·단위·개월·비율) · `conditions`(종류·값·묶음·known) · `application`(서류·문의처·신청 주소). **AI 글(요약·신청 방법·일정 원문·근거·원문 글자)과 신뢰도는 비교하지 않아요** (재추출할 때마다 정정 알림이 가지 않게). 재처리면 `reprocess=true`로 보내요 (알림은 안 보냄) |
-| 같거나 작은 `version` | 버려요 (같은 이벤트 두 번은 `common.processed_events`로 막아요) |
+| 같은 `version`의 검수 결과(`quality.reviewed=true`) | 더 큰 버전처럼 고쳐요 (승인·반려가 검수 전 결과를 바꿔요). 검수 결과는 `reprocess=true`라 바뀜 알림은 재처리 표시로 가요 |
+| 같거나 작은 `version` (검수 결과가 아님) | 버려요 (같은 이벤트 두 번은 `common.processed_events`로 막아요). 같은 버전의 검수 결과도 이걸로 덮지 않아요 |
 | `relevant=false` | `status = HIDDEN`. 목록·판정에서 빼요 |
 | 매일 상태 갱신 | `apply_start` 전 `UPCOMING`, 기간 안이거나 `apply_always` `OPEN`, `apply_end` 지나면 `CLOSED` + `BenefitClosed` |
 
