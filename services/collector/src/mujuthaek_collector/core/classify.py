@@ -95,6 +95,12 @@ def title_ref(title: str) -> TitleRef | None:
         return None
 
 
+def ref_qualifiers(title: str) -> frozenset[str]:
+    """후속 안내 제목의 공고일 앞 공고명에 붙은 구분 말(「…모집공고(A-2블록)(2026.10.01) 당첨자 발표」 → A2블록)."""
+    found = REF.search(title)
+    return qualifiers(found.group("name")) if found else frozenset()
+
+
 def same_notice(ref: TitleRef, title: str, posted_on: date | None) -> bool:
     """후속 안내가 가리키는 (공고명, 공고일)과 모집공고가 같은지."""
     own = norm_name(title)

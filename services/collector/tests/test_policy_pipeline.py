@@ -716,3 +716,33 @@ def test_no_origin_address_and_irrelevant_page(api, web, policy_store, file_stor
     states = {v.policy.policy_id: (v.document_status, v.origin_status) for v in policy_store.versions}
     assert states == {"2026NOREF": ("NO_SOURCE", "NO_SOURCE"), "2026HOME": ("NONE", "NONE")}
     assert policy_store.versions[0].fields.age_min == 19
+
+
+def test_a_flaky_attachment_does_not_flip_the_policy_version(api, web, policy_store, file_store, policy_settings):
+    """2026-11-10 재검토: 연결 오류 한 번에 버전이 v1(첨부 있음) → v2(첨부 없음) → v3(첨부 있음)으로 오락가락해 추출·알림이 다시 돌았어요.
+    게시판 수집과 같이 실패로 세어 다시 받고, 마지막 시도엔 이전 버전의 같은 첨부를 이어 써요(처음이면 그 파일 없이)."""
+    import httpx
+
+    from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+
+    source = central(api, web)
+    url = "https://www.bokjiro.go.kr/files/form/청년전세임대_안내문.pdf"
+    web.files[url] = httpx.ConnectError("연결 끊김")
+    for attempt in range(1, MAX_ATTEMPTS):
+        assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 0
+        assert (policy_store.by_key("WLF00001188").status, policy_store.by_key("WLF00001188").attempts) == ("FAILED", attempt)
+    assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 1  # 마지막 시도: 처음이라 그 파일 없이
+    assert policy_store.versions[-1].files == []
+
+    web.files[url] = PDF
+    policy_store.by_key("WLF00001188").status = "PENDING"  # 목록이 바뀌어 다시 열 때처럼
+    assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 1
+    assert [f.role for f in policy_store.versions[-1].files] == ["POLICY_DOC"]
+
+    web.files[url] = httpx.ConnectError("연결 끊김")
+    policy_store.by_key("WLF00001188").status = "PENDING"
+    for _ in range(MAX_ATTEMPTS - 1):
+        assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 0
+    assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 0  # 이전 첨부를 이어 써 내용이 같음
+    assert len(policy_store.versions) == 2 and policy_store.by_key("WLF00001188").status == "DONE"
+    assert policy_store.by_key("WLF00001188").attempts == 0

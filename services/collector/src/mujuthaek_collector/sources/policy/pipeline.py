@@ -20,6 +20,7 @@ run_policy_source
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import urllib.parse
 from dataclasses import dataclass, field
@@ -33,10 +34,10 @@ from mujuthaek_collector.core.documents.text import extract_text
 from mujuthaek_collector.core.file_store import FileStore, add_months, content_type, object_key, text_key
 from mujuthaek_collector.core.files import DOC_EXTS, FileRef
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS
-from mujuthaek_collector.core.storage import DONE, FAILED, HELD, IGNORED, PENDING, SKIPPED
+from mujuthaek_collector.core.storage import DONE, FAILED, HELD, IGNORED, MAX_ATTEMPTS, PENDING, SKIPPED
 from mujuthaek_collector.core.versioning import content_hash, sha256_hex
-from mujuthaek_collector.errors import BlockedError, FileRejected, ParseError
-from mujuthaek_collector.pipeline import RunResult
+from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, FileUnavailable, ParseError
+from mujuthaek_collector.pipeline import RunResult, transient
 from mujuthaek_collector.sources.base import Fetcher
 from mujuthaek_collector.sources.policy import store as st
 from mujuthaek_collector.sources.policy.attachments import (
@@ -211,6 +212,11 @@ def process_safely(ctx: PolicyContext, policy: PolicyRow) -> None:
             ctx.result.new_count += 1
     except BlockedError:
         raise  # API 키·한도 문제. 이 정책은 PENDING·FAILED 그대로 남아 다음 회차에 먼저 처리돼요
+    except FileUnavailable as error:
+        # 첨부 일시 오류: 그 파일 없이 새 버전을 만들지 않고 실패로 세어 다음 회차에 다시 받아요(게시판 수집과 같음). 예전엔 연결 오류 한 번에
+        # 버전이 v1(첨부 있음) → v2(첨부 없음) → v3(첨부 있음)으로 오락가락해 추출·알림이 다시 돌았어요(2026-11-10 재검토)
+        ctx.store.mark_failed(policy.id, mask(f"FileUnavailable: {error}", ctx.source.secrets()))
+        ctx.warn(f"[{policy.policy_id}] {policy.title[:40]} — {error} 다음 회차에 다시 받아요")
     except (ParseError, ApiError) as error:
         ctx.store.mark_failed(policy.id, mask(f"{type(error).__name__}: {error}", ctx.source.secrets()))
         ctx.warn(f"[{policy.policy_id}] {policy.title[:40]} — 상세를 읽지 못했어요: {error}")
@@ -231,7 +237,10 @@ def process_policy(ctx: PolicyContext, policy: PolicyRow) -> bool:
     if wants_documents and not any(explains(c.file) for c in candidates):  # API 첨부가 없거나 서식·포스터뿐이면 원문 화면에서 공고문을 찾아요
         origin = from_origin(ctx, detail, item.title)
         candidates += origin.candidates
-    saved = collect_files(ctx, candidates)
+    # 마지막 시도엔 다시 받지 않고, 받지 못한 첨부는 이전 버전의 같은 첨부(주소, 없으면 이름)를 이어 써요(없으면 그 파일 없이)
+    retry_later = policy.attempts + 1 < MAX_ATTEMPTS
+    earlier = [] if retry_later or not policy.latest_version else ctx.store.latest_files(policy.id)
+    saved = collect_files(ctx, candidates, retry_later=retry_later, earlier=earlier)
 
     body = source.body_text(detail.record)
     # 원문 화면 글자는 비교에서 빼요. 조회수·방문자 수·오늘 날짜가 섞여 있어서, 넣으면 열 때마다 새 버전이 돼요
@@ -245,6 +254,8 @@ def process_policy(ctx: PolicyContext, policy: PolicyRow) -> bool:
     version = (latest[0] if latest else 0) + 1
 
     for f, data in saved:  # 원본은 DB 트랜잭션 전에 S3에 올려요 (실패하면 그 정책은 다음 회차에 다시 시도)
+        if data is None:  # 이어 쓴 이전 첨부: 원본·보관 기한을 그대로 함께 써요
+            continue
         f.s3_key = ctx.files.put(object_key(source.code, policy.policy_id, version, f.idx, f.name), data, content_type(FileRef(f.name, "", 0).ext))
 
     fields = policy_fields(source, item, detail)
@@ -431,16 +442,28 @@ def rank(candidates: list[Candidate]) -> list[Candidate]:
     return sorted(unique, key=lambda c: (not MAIN_DOC.search(c.file.name), c.file.ext not in ("pdf", ""), c.file.index))
 
 
-def collect_files(ctx: PolicyContext, candidates: list[Candidate]) -> list[tuple[PolicyFile, bytes]]:
+def collect_files(
+    ctx: PolicyContext, candidates: list[Candidate], *, retry_later: bool = False, earlier: list[PolicyFile] | None = None
+) -> list[tuple[PolicyFile, bytes | None]]:
     """설명 문서를 순서대로(rank) 받아 글자를 뽑고, MAX_TEXT_DOCS개를 뽑으면 멈춰요. 글자를 못 뽑은 문서(스캔본 등)는
-    ATTACHMENT로 남기고 다음 문서를 봐요 (최대 max_files개). (저장 정보, 원본)"""
+    ATTACHMENT로 남기고 다음 문서를 봐요 (최대 max_files개). (저장 정보, 원본. 이어 쓴 이전 첨부는 원본 None)
+    retry_later면 첨부 일시 오류를 FileUnavailable로 올려요. earlier(마지막 시도의 이전 버전 첨부)가 있으면 받지 못한 첨부를 이어 써요."""
     keep_until = add_months(ctx.today, ctx.settings.keep_months)
-    saved: list[tuple[PolicyFile, bytes]] = []
+    saved: list[tuple[PolicyFile, bytes | None]] = []
     texts = 0
     for candidate in rank(candidates):
         if len(saved) >= ctx.settings.max_files or texts >= MAX_TEXT_DOCS:
             break
-        data = download(ctx, candidate)
+        before = _previous(earlier or [], candidate.file)
+        try:
+            data = download(ctx, candidate, retry_later=retry_later or before is not None)
+        except FileUnavailable as error:
+            if retry_later or before is None:
+                raise
+            ctx.warn(f"{error} 이전 버전의 같은 첨부를 이어 써요")
+            texts += bool(before.text)
+            saved.append((dataclasses.replace(before, idx=len(saved)), None))
+            continue
         if data is None:
             continue
         file = with_ext(candidate.file, data)
@@ -463,7 +486,12 @@ def without_nul(text: str | None) -> str | None:
     return text.replace("\x00", "") if text else text
 
 
-def download(ctx: PolicyContext, candidate: Candidate) -> bytes | None:
+def _previous(earlier: list[PolicyFile], file: FileRef) -> PolicyFile | None:
+    return next((f for f in earlier if f.download_url == file.url), None) or next((f for f in earlier if f.name == file.name), None)
+
+
+def download(ctx: PolicyContext, candidate: Candidate, *, retry_later: bool = False) -> bytes | None:
+    """첨부 원본. retry_later면 다음에 받아질 수 있는 오류(연결·5xx·점검 화면·robots.txt 잠시 못 받음)를 FileUnavailable로 올려요."""
     file = candidate.file
     host = urllib.parse.urlsplit(file.url).netloc
     if host in ctx.blocked_hosts:
@@ -471,11 +499,15 @@ def download(ctx: PolicyContext, candidate: Candidate) -> bytes | None:
     try:
         return ctx.web.download(file.url, referer=candidate.referer)
     except FileRejected as error:
+        if retry_later and isinstance(error, FileNotReady):
+            raise FileUnavailable(f"첨부를 잠시 받지 못했어요 ({file.name}): {error}.") from error
         ctx.warn(f"첨부를 받지 않았어요 ({file.name}): {error}")
     except BlockedError as error:
         ctx.blocked_hosts.add(host)
         ctx.warn_once(f"blocked:{host}", f"첨부 도메인이 막혀 받지 않았어요 ({host}): {error}")
     except httpx.HTTPError as error:
+        if retry_later and transient(error):
+            raise FileUnavailable(f"첨부를 잠시 받지 못했어요 ({file.name}): {error}.") from error
         ctx.warn(f"첨부를 받지 못했어요 ({file.name}): {error}")
     return None
 

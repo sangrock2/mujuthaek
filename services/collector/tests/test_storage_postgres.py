@@ -120,3 +120,41 @@ def test_flaky_attachment_carries_the_earlier_file_and_spent_posts_are_requeued(
     pg.conn.execute("update raw_posts set status = 'FAILED', attempts = %s where id = %s", (MAX_ATTEMPTS, post_id))
     assert pg.requeue_open_posts("dcco", TODAY, 60) == 1
     assert pg.conn.execute("select status from raw_posts where id = %s", (post_id,)).fetchone() == ("PENDING",)
+
+
+def test_policy_flaky_attachment_carries_the_earlier_file(pg, monkeypatch):
+    """2026-11-10 재검토: 정책 수집도 첨부를 끝내 못 받으면 이전 버전 것을 원본·글자 그대로 이어 쓰고(latest_files), 성공하면 횟수를 되돌려요."""
+    import httpx
+
+    from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+    from mujuthaek_collector.sources.policy import pipeline as policy_pipeline
+    from mujuthaek_collector.sources.policy.config import PolicySettings
+    from mujuthaek_collector.sources.policy.store import PostgresPolicyStore
+    from tests.fakes import FakeClient, MemoryFileStore
+    from tests.test_policy_pipeline import KEY, central
+    from tests.test_policy_pipeline import run as policy_run
+
+    monkeypatch.setattr(policy_pipeline, "extract_text", lambda data, ext: (f"{ext} 문서 글자 " * 30, f"{ext.upper()} 텍스트"))
+    store = PostgresPolicyStore(DB_URL)
+    try:
+        store.conn.execute("truncate raw_policy_texts, raw_policy_files, raw_policy_versions, raw_policies cascade")
+        store.conn.execute(
+            "insert into intake_decisions (group_code, limit_count, kept, ignored) values ('POLICY', 0, 0, 0)"
+            " on conflict (group_code) do update set cutoff_on = null"
+        )
+        api, web, files = FakeClient(), FakeClient(), MemoryFileStore()
+        settings = PolicySettings(data_go_kr_key=KEY, youth_key=KEY, detail_limit=20, api_delay_seconds=0)
+        source = central(api, web)
+        url = "https://www.bokjiro.go.kr/files/form/청년전세임대_안내문.pdf"
+        assert policy_run(source, api, web, store, files, settings).new_count == 1
+        web.files[url] = httpx.ConnectError("연결 끊김")
+        store.conn.execute("update raw_policies set status = 'PENDING'")  # 목록이 바뀌어 다시 열 때처럼
+        for _ in range(MAX_ATTEMPTS - 1):
+            assert policy_run(source, api, web, store, files, settings).new_count == 0
+        assert store.conn.execute("select status, attempts from raw_policies").fetchone() == ("FAILED", MAX_ATTEMPTS - 1)
+        [earlier] = store.latest_files(store.conn.execute("select id from raw_policies").fetchone()[0])
+        assert earlier.text and earlier.found_on == "API" and earlier.s3_key
+        assert policy_run(source, api, web, store, files, settings).new_count == 0  # 이전 첨부를 이어 써 내용이 같음
+        assert store.conn.execute("select status, attempts, latest_version from raw_policies").fetchone() == ("DONE", 0, 1)
+    finally:
+        store.close()

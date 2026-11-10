@@ -191,7 +191,17 @@ def find_followup_parent(store: Store, source_code: str, title: str) -> PostRow 
     ref = cls.title_ref(title)
     if ref is None:
         return None
-    return next((p for p in store.notices_posted_on(source_code, ref.posted_on) if cls.same_notice(ref, p.title, p.posted_on)), None)
+    # 이름 비교는 괄호를 지우므로 괄호 안 구분(블록·단지)도 맞춰 봐요(정정공고와 같은 검사). 같은 날 올라온 「(A-2블록)」·「(A-3블록)」 공고가
+    # 있으면 A-2블록 후속 안내가 A-3블록 공고에 붙었어요(2026-11-10 재검토)
+    marks = cls.ref_qualifiers(title)
+    return next(
+        (
+            p
+            for p in store.notices_posted_on(source_code, ref.posted_on)
+            if cls.same_notice(ref, p.title, p.posted_on) and cls.same_qualifiers(marks, cls.qualifiers(p.title))
+        ),
+        None,
+    )
 
 
 def find_correction_parent(store: Store, source_code: str, title: str, posted_on: date | None) -> PostRow | None:

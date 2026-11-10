@@ -107,6 +107,18 @@ def test_correction_links_only_to_the_notice_with_the_same_block(client, store, 
     assert store.by_key("32").parent_post_id == store.by_key("30").id
 
 
+def test_follow_up_links_only_to_the_notice_with_the_same_block(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 같은 날 올라온 「(A-2블록)」·「(A-3블록)」 공고가 있으면 A-2블록 후속 안내가 A-3블록 공고에 붙었어요."""
+    rows = [  # 원공고는 앞선 회차에 모여 있어요(후속 안내를 등록할 때 찾음)
+        ("41", "행복주택 입주자 모집공고(A-3블록)", date(2026, 10, 1)),
+        ("40", "행복주택 입주자 모집공고(A-2블록)", date(2026, 10, 1)),
+        ("42", "행복주택 입주자 모집공고(A-2블록)(2026.10.01) 서류심사 대상자 발표", date(2026, 10, 10)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("42").kind == "FOLLOW_UP" and store.by_key("42").parent_post_id == store.by_key("40").id
+
+
 def test_correction_with_the_original_date_links_to_that_round(client, store, file_store, settings, monkeypatch):
     """2026-11-10 재검토: 공고일 뒤에 바뀐 내용을 적은 정정 제목은 후속 안내로 분류됐고, 공고일·꾸밈말 괄호까지 견줘 원래 공고와 끊겼어요.
     제목의 공고일이 있으면 그날 올라온 회차에 붙어요."""
