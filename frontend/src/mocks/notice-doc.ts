@@ -6,6 +6,7 @@ export type NoticeSectionKey =
   | "eligibility"
   | "housing"
   | "schedule"
+  | "followUps"
   | "apply"
   | "selection"
   | "cautions"
@@ -74,6 +75,22 @@ export type NoticeSelectionKind =
 
 export type NoticeTextItem = { id: string; title: string; text: string };
 
+/** 원래 공고에 붙은 후속 안내 글 (당첨자 발표·서류 제출 안내, 일정만 바꾼 짧은 정정 등) */
+export type NoticeFollowUp = {
+  id: string;
+  title: string;
+  /** YYYY-MM-DD. 모르면 null */
+  postedOn: string | null;
+  /** 기관 게시글 주소. 모르면 null */
+  url: string | null;
+  schedule: NoticeScheduleItem[];
+};
+
+/**
+ * 원문과 다시 확인하는 내용(보류해 뺀 항목·확인 중인 조건)이 있는 곳. key는 그 내용이 들어갈 섹션(어느 섹션인지 모르면 null: 공고 정보·안내 등)
+ */
+export type NoticeHeldPart = { key: NoticeSectionKey | null; label: string };
+
 export type NoticeDoc = {
   /** 오늘 기준 접수 상태 (백엔드가 계산) */
   status: "UPCOMING" | "OPEN" | "CLOSED";
@@ -90,7 +107,14 @@ export type NoticeDoc = {
   };
   /** 섹션별 원문 쪽 번호 (1부터) */
   pages: Partial<Record<NoticeSectionKey, number>>;
-  eligibility: { id: string; category: EligibilityCategory; text: string; detail?: string }[];
+  /** detail: 예외 조건. checking: 원문과 다시 확인하는 중인 조건 */
+  eligibility: {
+    id: string;
+    category: EligibilityCategory;
+    text: string;
+    detail?: string;
+    checking?: boolean;
+  }[];
   housing: {
     id: string;
     complexName: string;
@@ -100,6 +124,10 @@ export type NoticeDoc = {
     types: NoticeHousingType[];
   }[];
   schedule: NoticeScheduleItem[];
+  /** 후속 안내 (없으면 비거나 생략) */
+  followUps?: NoticeFollowUp[];
+  /** 원문과 다시 확인하는 내용이 있는 곳 (없으면 비거나 생략) */
+  held?: NoticeHeldPart[];
   apply: {
     method: string;
     /** 원문에 신청 방법이 없으면 null */
@@ -201,6 +229,24 @@ export const parkvilleDoc: NoticeDoc = {
           balanceWon: 18_051_000,
           monthlyRentWon: 114_150,
           mine: true,
+        },
+      ],
+    },
+  ],
+  // 후속 안내 예시 (API의 followUps를 화면 값으로 바꾼 모양): 본 일정에서 날짜 미정이던 결과 안내일을 알려 줌
+  followUps: [
+    {
+      id: "follow-up-0",
+      title: "[정정공고] 양산 삼성파크빌 국민임대 자격 확인 결과 안내일 변경",
+      postedOn: "2026-10-20",
+      url: null,
+      schedule: [
+        {
+          id: "follow-up-0-result",
+          label: "자격 확인 결과 안내",
+          start: "2026-11-28",
+          end: "2026-11-28",
+          state: "todo",
         },
       ],
     },

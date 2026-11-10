@@ -5,6 +5,7 @@ import {
   categoryLabel,
   channelLabel,
   documentGroupLabel,
+  formatDay,
   formatPeriod,
   formatWon,
   formatWonRange,
@@ -17,6 +18,7 @@ import type {
   EligibilityCategory,
   NoticeDoc,
   NoticeHousingType,
+  NoticeScheduleItem,
   NoticeSectionKey,
   NoticeSelectionKind,
 } from "@/mocks/notice-doc";
@@ -30,7 +32,8 @@ type SectionsProps = {
   onOpenPage?: (page: number, label: string) => void;
 };
 
-type FoldItem = { id: string; text: string; detail?: string };
+/** detail: 예외 조건. checking: 원문과 다시 확인하는 중 */
+type FoldItem = { id: string; text: string; detail?: string; checking?: boolean };
 
 /**
  * 분류별로 접어 둔 목록 (누가 신청할 수 있나요 · 어떻게 뽑나요). 분류마다 배지 하나에 첫 항목을 한 줄로 미리 보여주고, 누르면 항목이 한 칸씩 펼쳐져요
@@ -68,6 +71,14 @@ function FoldGroups({
               <span className={cn(sub, "min-w-0 flex-1 truncate group-open:invisible")}>
                 {g.items[0].text}
               </span>
+              {g.items.some((e) => e.checking) && (
+                <CircleAlert
+                  size={16}
+                  role="img"
+                  aria-label="원문과 다시 확인하는 조건이 있어요"
+                  className="text-check-text flex-none"
+                />
+              )}
               {g.items.length > 1 && (
                 <span className="text-text-sub flex-none text-[13px] font-semibold">
                   {g.items.length}개
@@ -91,6 +102,12 @@ function FoldGroups({
                       예외 · {e.detail}
                     </span>
                   )}
+                  {e.checking && (
+                    <span className="text-check-text inline-flex items-center gap-[4px] text-[13px] font-semibold">
+                      <CircleAlert size={14} aria-hidden />
+                      원문과 다시 확인하는 중이에요
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -98,6 +115,86 @@ function FoldGroups({
         </li>
       ))}
     </ul>
+  );
+}
+
+/** 일정 목록 (공고 일정과 후속 안내 일정이 같이 써요) */
+function ScheduleList({ items, web }: { items: NoticeScheduleItem[]; web: boolean }) {
+  const sub = web ? "text-[15px]" : "text-[14px]";
+  return (
+    <ol className="m-0 flex list-none flex-col p-0">
+      {items.map((s, i) => {
+        const period = formatPeriod(s.start, s.end);
+        const last = i === items.length - 1;
+        return (
+          <li key={s.id} className="relative flex gap-[14px] pb-[16px] last:pb-0">
+            {!last && (
+              <span
+                aria-hidden
+                className="bg-line absolute top-[16px] bottom-0 left-[4px] w-[2px]"
+              />
+            )}
+            <span
+              aria-hidden
+              className={cn(
+                "rounded-pill relative mt-[6px] size-[10px] flex-none",
+                s.state === "done" && "bg-off",
+                s.state === "now" && "bg-brand shadow-[0_0_0_4px_var(--color-brand-soft)]",
+                s.state === "todo" && "bg-check-off",
+              )}
+            />
+            <span className="flex min-w-0 flex-col gap-[3px]">
+              <span
+                className={cn(
+                  sub,
+                  "font-bold",
+                  s.state === "done" && "text-text-sub font-semibold",
+                )}
+              >
+                {s.label}
+                {s.state === "now" && <span className="text-brand-strong"> · 진행 중</span>}
+              </span>
+              <span className={cn(sub, s.state === "done" && "text-text-sub")}>
+                {period ?? "날짜 미정"}
+              </span>
+              {s.time && <span className="text-text-sub text-[13px]">{s.time}</span>}
+              {s.note && <span className="text-text-sub text-[13px]">{s.note}</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** 게시일: 다른 화면과 같은 「10월 20일 (화)」, 올해가 아니면 연도도 */
+const postedText = (ymd: string) =>
+  formatDay(ymd, ymd.slice(0, 4) !== String(new Date().getFullYear()));
+
+/** 원문과 다시 확인하는 내용(보류한 항목·확인 중인 조건)이 있을 때 맨 위에 알려요 */
+export function NoticeHeldBanner({ doc, variant }: { doc: NoticeDoc; variant: Variant }) {
+  const held = doc.held ?? [];
+  if (!held.length) return null;
+  const web = variant === "web";
+  return (
+    <div
+      role="note"
+      className={cn(
+        "bg-check-bg rounded-tile flex gap-[10px]",
+        web ? "px-[20px] py-[16px]" : "mx-[16px] px-[16px] py-[14px]",
+      )}
+    >
+      <CircleAlert size={18} className="text-check-text mt-[2px] flex-none" aria-hidden />
+      <span className="flex flex-col gap-[3px]">
+        <span className="text-check-text text-[15px] font-bold">
+          원문과 다시 확인하는 내용이 있어요
+        </span>
+        <span className="text-text text-[14px] leading-[1.5]">
+          {held.map((h) => h.label).join(" · ")} 중 일부를 원문과 다시 확인하고 있어요. 확인이
+          끝나기 전까지 빠지거나 바뀔 수 있으니 신청 전에 원문 공고를 꼭 확인하세요.
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -144,16 +241,24 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
     : "rounded-card bg-surface mx-[16px] flex flex-col gap-[12px] px-[20px] py-[18px]";
   const sub = web ? "text-[15px]" : "text-[14px]";
 
+  const heldKeys = new Set((doc.held ?? []).map((h) => h.key));
   const header = (k: NoticeSectionKey) => {
     const page = doc.pages[k];
     const { heading } = sectionTitles[k];
     return (
       <div className="flex items-center justify-between gap-[10px]">
-        <h2
-          className={cn("tracking-title m-0 font-extrabold", web ? "text-[21px]" : "text-[17px]")}
-        >
-          {heading}
-        </h2>
+        <span className="flex min-w-0 flex-wrap items-center gap-[8px]">
+          <h2
+            className={cn("tracking-title m-0 font-extrabold", web ? "text-[21px]" : "text-[17px]")}
+          >
+            {heading}
+          </h2>
+          {heldKeys.has(k) && (
+            <span className="bg-check-bg text-check-text rounded-tag px-[8px] py-[3px] text-[12px] font-bold">
+              일부 확인 중
+            </span>
+          )}
+        </span>
         {page && onOpenPage && (
           <button
             type="button"
@@ -301,48 +406,50 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
     ),
 
     schedule: () => (
-      <ol className="m-0 flex list-none flex-col p-0">
-        {doc.schedule.map((s, i) => {
-          const period = formatPeriod(s.start, s.end);
-          const last = i === doc.schedule.length - 1;
-          return (
-            <li key={s.id} className="relative flex gap-[14px] pb-[16px] last:pb-0">
-              {!last && (
-                <span
-                  aria-hidden
-                  className="bg-line absolute top-[16px] bottom-0 left-[4px] w-[2px]"
-                />
-              )}
-              <span
-                aria-hidden
-                className={cn(
-                  "rounded-pill relative mt-[6px] size-[10px] flex-none",
-                  s.state === "done" && "bg-off",
-                  s.state === "now" && "bg-brand shadow-[0_0_0_4px_var(--color-brand-soft)]",
-                  s.state === "todo" && "bg-check-off",
-                )}
-              />
-              <span className="flex min-w-0 flex-col gap-[3px]">
-                <span
-                  className={cn(
-                    sub,
-                    "font-bold",
-                    s.state === "done" && "text-text-sub font-semibold",
-                  )}
+      <>
+        <ScheduleList items={doc.schedule} web={web} />
+        {/* 후속 안내(일정만 바꾼 정정 등)의 날짜는 위 일정에 반영되지 않아요: 따로 알려요 */}
+        {(doc.followUps ?? []).some((f) => f.schedule.length > 0) && (
+          <a
+            href={`#${sectionId("followUps")}`}
+            className="text-brand-strong inline-flex items-center gap-[4px] text-[13px] font-bold no-underline"
+          >
+            <CircleAlert size={14} aria-hidden />
+            바뀐 일정이 후속 안내에 있을 수 있어요. 후속 안내도 확인하세요
+          </a>
+        )}
+      </>
+    ),
+
+    followUps: () => (
+      <ul className="m-0 flex list-none flex-col gap-[12px] p-0">
+        {(doc.followUps ?? []).map((f) => (
+          <li
+            key={f.id}
+            className="bg-bg rounded-tile flex flex-col gap-[12px] px-[16px] py-[14px]"
+          >
+            <span className="flex flex-col gap-[2px]">
+              {f.url ? (
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-text hover:text-text inline-flex items-start gap-[6px] text-[15px] font-bold no-underline"
                 >
-                  {s.label}
-                  {s.state === "now" && <span className="text-brand-strong"> · 진행 중</span>}
-                </span>
-                <span className={cn(sub, s.state === "done" && "text-text-sub")}>
-                  {period ?? "날짜 미정"}
-                </span>
-                {s.time && <span className="text-text-sub text-[13px]">{s.time}</span>}
-                {s.note && <span className="text-text-sub text-[13px]">{s.note}</span>}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+                  <span className="min-w-0">{f.title}</span>
+                  <ExternalLink size={15} className="mt-[3px] flex-none" aria-hidden />
+                </a>
+              ) : (
+                <span className="text-[15px] font-bold">{f.title}</span>
+              )}
+              {f.postedOn && (
+                <span className="text-text-sub text-[13px]">{postedText(f.postedOn)} 게시</span>
+              )}
+            </span>
+            {f.schedule.length > 0 && <ScheduleList items={f.schedule} web={web} />}
+          </li>
+        ))}
+      </ul>
     ),
 
     apply: () => {

@@ -17,7 +17,7 @@ import { EligibilityCard } from "@/components/notice/EligibilityCard";
 import { LifeCard } from "@/components/notice/LifeCard";
 import { NoticeTags } from "@/components/notice/NoticeTags";
 import { WebUnitFilter } from "@/components/notice/UnitFilter";
-import { NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
+import { NoticeHeldBanner, NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
 import { PdfViewer } from "@/components/notice/PdfViewer";
 import { WebRankCard } from "@/components/notice/RankCard";
 import { VerdictBadge } from "@/components/ui/Badge";
@@ -528,6 +528,7 @@ export function WebDetail({ id }: { id: string }) {
                 />
               )}
 
+              <NoticeHeldBanner doc={doc} variant="web" />
               <NoticeToc doc={doc} variant="web" />
               <NoticeSections
                 doc={doc}
