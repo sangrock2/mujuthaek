@@ -55,6 +55,8 @@ from mujuthaek_collector.core.classify import (
         ("2026년 국민임대 예비입주자 모집공고 [정정] 서류제출 대상자 발표 일정 연기", CORRECTION),
         ("[정정] 2026년 매입임대주택(청년형) 예비입주자 선정 안내", FOLLOW_UP),  # 정정한 후속 안내
         ("[정정] 행복주택 입주자 모집공고 당첨자 발표", FOLLOW_UP),
+        ("2026년 행복주택 입주자 모집공고(2026.10.01) 정정공고", CORRECTION),  # 공고일 뒤 정정 표시는 후속 안내 글이 아님
+        ("[정정] 행복주택 입주자 모집공고(2026.10.01) 당첨자 발표", FOLLOW_UP),
     ],
 )
 def test_classify(title, kind):

@@ -48,7 +48,9 @@ def classify(title: str) -> str:
     if out_of_scope(title):
         return EXCLUDED
     ref = REF.search(title)
-    if ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", title[ref.end() :])) >= 2:
+    # 공고일 뒤의 정정 표시(「…모집공고(2026.10.01) 정정공고」)는 후속 안내 글이 아니에요(2026-11-10 코드 검토: 후속 안내로 분류됐음)
+    after = CORRECTION_MARK.sub("", title[ref.end() :]) if ref else ""
+    if ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", after)) >= 2:
         return FOLLOW_UP  # '…모집공고(2026. 6. 25.) 면접평가 대상자 발표'처럼 공고일 뒤에 글이 붙으면 후속 안내
     follow_ups = list(FOLLOWUP.finditer(title))
     if CORRECTION_MARK.search(title) and RECRUIT.search(title) and all(CHANGED.match(title, m.end()) for m in follow_ups):
