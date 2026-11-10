@@ -251,3 +251,29 @@ def test_source_can_bring_its_own_client(settings):
     default = make_client(FakeSource([]), settings)
     assert isinstance(default, PoliteClient)
     default.close()
+
+
+class ListBodySource(FakeSource):
+    """본문을 목록 JSON에 싣는 출처(청년안심주택처럼): 상세는 목록 줄의 본문으로 만들어요."""
+
+    def __init__(self, rows, bodies):
+        super().__init__(rows)
+        self.bodies = bodies  # post_key → 목록에 실린 본문
+
+    def parse_list(self, board, body, page_url):
+        items = super().parse_list(board, body, page_url)
+        return [ListItem(i.board, i.post_key, i.title, i.posted_on, i.detail_url, meta={"content": self.bodies[i.post_key]}) for i in items]
+
+    def parse_detail(self, item, body):
+        return Detail(item.title, item.meta["content"], [FileRef("모집공고문.pdf", f"https://a.kr/f/{item.post_key}.pdf", 1)])
+
+
+def test_a_body_carried_in_the_list_is_refreshed_when_the_post_is_listed_again(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 코드 검토: 상세 처리가 처음 본 목록 줄을 계속 써서, 본문을 목록에만 싣는 출처는 게시글 본문을 고쳐도 새 버전이 되지 않았어요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    source = ListBodySource(rows, {"1": "청약신청 : 26.10.19 ~ 10.20"})
+    run(source, client, store, file_store, settings, monkeypatch)
+    source.bodies["1"] = "청약신청 : 26.10.19 ~ 10.27 (연장)"
+    assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
+    assert store.versions[-1].body_text == "청약신청 : 26.10.19 ~ 10.27 (연장)"

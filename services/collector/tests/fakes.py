@@ -54,10 +54,11 @@ class MemoryStore:
         if self.find_post(post.source_code, post.post_key) is None:
             self.posts[post.id] = post
 
-    def update_list_fields(self, post_id, list_status, deadline_on):
+    def update_list_fields(self, post_id, list_status, deadline_on, list_item=None):
         post = self.posts[post_id]
         post.list_status = list_status or post.list_status
         post.deadline_on = deadline_on or post.deadline_on
+        post.list_item = list_item if list_item is not None else post.list_item
 
     def set_parent(self, post_id, parent_post_id):
         self.posts[post_id].parent_post_id = parent_post_id

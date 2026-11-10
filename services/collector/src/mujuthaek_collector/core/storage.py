@@ -103,7 +103,7 @@ class Store(Protocol):
     # 글
     def find_post(self, source_code: str, post_key: str) -> PostRow | None: ...
     def insert_post(self, post: PostRow) -> None: ...
-    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None) -> None: ...
+    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None, list_item: dict[str, Any] | None = None) -> None: ...
     def set_parent(self, post_id: UUID, parent_post_id: UUID) -> None: ...
     def queued_posts(self, source_code: str, board_key: str, limit: int) -> list[PostRow]: ...
     def notices_posted_on(self, source_code: str, posted_on: date) -> list[PostRow]: ...
@@ -211,11 +211,16 @@ class PostgresStore:
             ),
         )
 
-    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None) -> None:
+    def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None, list_item: dict[str, Any] | None = None) -> None:
+        """목록에서 다시 본 글의 목록 값을 고쳐요. list_item(목록 한 줄 전체)도 새로 둬, 상세 처리가 처음 본 목록 값을 계속 쓰지 않게 해요
+        (2026-11-10 코드 검토: 청년안심주택은 본문을 목록 JSON에서만 만들어 게시글 본문을 고쳐도 새 버전이 되지 않았음)."""
+        item = self._json(list_item) if list_item is not None else None
         self.conn.execute(
-            "update raw_posts set list_status = coalesce(%s, list_status), deadline_on = coalesce(%s, deadline_on), updated_at = now() "
-            "where id = %s and (list_status is distinct from %s or deadline_on is distinct from %s)",
-            (list_status, deadline_on, post_id, list_status, deadline_on),
+            "update raw_posts set list_status = coalesce(%s, list_status), deadline_on = coalesce(%s, deadline_on), "
+            "list_item = coalesce(%s::jsonb, list_item), updated_at = now() "
+            "where id = %s and (list_status is distinct from %s or deadline_on is distinct from %s "
+            "or list_item is distinct from coalesce(%s::jsonb, list_item))",
+            (list_status, deadline_on, item, post_id, list_status, deadline_on, item),
         )
 
     def set_parent(self, post_id: UUID, parent_post_id: UUID) -> None:

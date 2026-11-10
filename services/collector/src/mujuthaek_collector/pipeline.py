@@ -118,7 +118,8 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
         for item in items:
             post = store.find_post(source.code, item.post_key)
             if post is not None:
-                store.update_list_fields(post.id, item.list_status, item.deadline_on)
+                # 목록 한 줄도 새로 둬요: 상세 처리는 저장한 목록 값(본문을 목록 JSON에 싣는 출처, 목록 첨부·상태)을 쓰므로
+                store.update_list_fields(post.id, item.list_status, item.deadline_on, item.to_json())
                 continue
             all_known = False
             register(ctx, item, cutoff)
