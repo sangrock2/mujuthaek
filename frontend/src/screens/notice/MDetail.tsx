@@ -354,6 +354,15 @@ export function MDetail({ id }: { id: string }) {
               <span className="tracking-title text-[28px] font-extrabold">{money.prep}</span>
             </span>
             {money.note && <span className="text-brand-deep-text text-[13px]">{money.note}</span>}
+            {/* 대출 예상은 구간 값으로 본 것이라, 정확한 소득·순자산으로 다시 보는 화면으로 */}
+            {money.loan && (
+              <Link
+                href={routes.loans}
+                className="text-[14px] font-bold text-white no-underline hover:text-white"
+              >
+                대출 자격 정확히 확인하기 →
+              </Link>
+            )}
           </section>
         )}
 

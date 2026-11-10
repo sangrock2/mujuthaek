@@ -613,6 +613,15 @@ export function WebDetail({ id }: { id: string }) {
                     <span className="tracking-h1 text-[30px] font-extrabold">{money.prep}</span>
                   </div>
                   {money.note && <span className="text-text-sub text-[14px]">{money.note}</span>}
+                  {/* 대출 예상은 구간 값으로 본 것이라, 정확한 소득·순자산으로 다시 보는 화면으로 */}
+                  {money.loan && (
+                    <Link
+                      href={routes.loans}
+                      className="text-brand-strong self-start text-[14px] font-bold no-underline"
+                    >
+                      대출 자격 정확히 확인하기 →
+                    </Link>
+                  )}
                 </section>
               )}
 
