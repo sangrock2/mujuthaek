@@ -7,7 +7,7 @@ import httpx
 from mujuthaek_collector import pipeline
 from mujuthaek_collector.core.files import FileRef
 from mujuthaek_collector.core.storage import MAX_ATTEMPTS
-from mujuthaek_collector.errors import BlockedError, ParseError
+from mujuthaek_collector.errors import BlockedError, FileNotReady, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, ListItem, Request, Source
 
 TODAY = date(2026, 10, 14)
@@ -251,6 +251,18 @@ def test_flaky_attachment_does_not_make_a_version_without_it(client, store, file
     assert store.events[-1]["payload"]["files"] == []
 
 
+def test_a_page_instead_of_the_attachment_is_tried_again_like_a_flaky_one(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 점검 화면(파일 대신 웹페이지)·첨부 도메인 robots.txt를 잠시 못 받은 것을 영구 거절로 보아, 그 파일 없이 새 버전이 생겼어요."""
+    rows = [("8", "2026년 국민임대 입주자 모집공고", date(2026, 10, 8))]
+    pages(client, rows)
+    client.files["https://a.kr/f/8.pdf"] = FileNotReady("파일 대신 웹페이지가 왔어요")
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 0
+    assert (store.by_key("8").status, store.by_key("8").attempts) == ("FAILED", 1)
+    client.files["https://a.kr/f/8.pdf"] = b"%PDF-1.4 fake"
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 1
+    assert store.events[-1]["payload"]["files"]
+
+
 def test_old_posts_are_not_opened(client, store, file_store, settings, monkeypatch):
     rows = [("9", "2024년 국민임대 입주자 모집공고", date(2024, 1, 1))]
     pages(client, rows)
@@ -334,3 +346,24 @@ def test_a_body_carried_in_the_list_is_refreshed_when_the_post_is_listed_again(c
     source.bodies["1"] = "청약신청 : 26.10.19 ~ 10.27 (연장)"
     assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
     assert store.versions[-1].body_text == "청약신청 : 26.10.19 ~ 10.27 (연장)"
+
+
+class PagedListBodySource(ListBodySource):
+    """한 쪽에 글 하나씩 싣는 목록(2쪽부터 있는 열린 공고를 보려고)."""
+
+    def parse_list(self, board, body, page_url):
+        page = int(page_url.rsplit("=", 1)[1])
+        rows = self.rows[page - 1 : page]
+        return [ListItem(board.key, key, title, day, f"https://a.kr/view?id={key}", meta={"content": self.bodies[key]}) for key, title, day in rows]
+
+
+def test_recheck_reads_later_list_pages_even_when_the_first_is_all_known(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 1쪽이 모두 아는 글이면 다음 쪽을 읽지 않아, 2쪽부터 있는 글은 목록 줄이 그대로라 본문 정정을 놓쳤어요."""
+    rows = [("1", "2026년 행복주택 입주자 모집공고", date(2026, 10, 10)), ("2", "2026년 국민임대 입주자 모집공고", date(2026, 10, 9))]
+    pages(client, rows)
+    source = PagedListBodySource(rows, {"1": "접수 10.19 ~ 10.20", "2": "접수 10.21 ~ 10.22"})
+    run(source, client, store, file_store, settings, monkeypatch)
+    assert store.by_key("2").latest_version == 1
+    source.bodies["2"] = "접수 10.21 ~ 10.29 (연장)"
+    assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
+    assert store.by_key("2").latest_version == 2 and store.versions[-1].body_text == "접수 10.21 ~ 10.29 (연장)"

@@ -29,7 +29,7 @@ from mujuthaek_collector.core.files import FileRef, pick_notice_files, pick_unit
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS, build_collected_event
 from mujuthaek_collector.core.storage import IGNORED, MAX_ATTEMPTS, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
 from mujuthaek_collector.core.versioning import content_hash, list_hash, sha256_hex
-from mujuthaek_collector.errors import BlockedError, FileRejected, FileUnavailable, ParseError
+from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, FileUnavailable, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, Fetcher, ListItem, Source
 from mujuthaek_platform.ids import uuid7
 
@@ -128,7 +128,9 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
             all_known = False
             register(ctx, item, cutoff)
         dates = [i.posted_on for i in items if i.posted_on]
-        if all_known or (dates and min(dates) < cutoff) or not items:
+        # 정정 확인 때는 「모두 아는 글」이어도 수집 기간 끝까지(최대 쪽수까지) 읽어요: 2페이지부터 있는 열린 공고의 목록 줄(목록에만 본문을 싣는
+        # 출처의 본문)이 바뀌지 않아 정정을 놓쳤어요(2026-11-10 재검토). 평소 회차는 아는 글만 나오면 멈춰요
+        if (all_known and not recheck) or (dates and min(dates) < cutoff) or not items:
             break
 
     for post in store.queued_posts(source.code, board.key, settings.detail_limit):
@@ -369,6 +371,8 @@ def download(ctx: Context, file: FileRef, referer: str | None, *, retry_later: b
     try:
         return ctx.client.download(file.url, referer=referer)
     except FileRejected as error:
+        if retry_later and isinstance(error, FileNotReady):  # robots.txt를 잠시 못 받음·점검 화면: 일시 오류처럼 다음에 다시
+            raise FileUnavailable(f"첨부를 잠시 받지 못했어요 ({file.name}): {error}.") from error
         ctx.warn(f"첨부를 받지 않았어요 ({file.name}): {error}")
     except httpx.HTTPError as error:
         if retry_later and transient(error):

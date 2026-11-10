@@ -9,8 +9,18 @@ class BlockedError(CollectorError):
     """robots.txt 금지, 403·429, 대기실 화면. 그 출처의 이번 회차를 멈춰요 (crawl_runs = BLOCKED)."""
 
 
+class RobotsUnavailable(BlockedError):
+    """robots.txt를 받지 못함(연결 오류·5xx). 목록·상세면 회차를 멈추고, 첨부면 다음에 다시 받아요(FileNotReady)."""
+
+
 class FileRejected(CollectorError):
-    """이 파일은 받지 않아요: robots.txt가 막은 경로로 넘겨짐, 크기 초과, 파일 대신 웹페이지가 옴."""
+    """이 파일은 받지 않아요: robots.txt가 막은 경로로 넘겨짐, 크기 초과."""
+
+
+class FileNotReady(FileRejected):
+    """지금은 받지 못했지만 다음엔 받아질 수 있는 첨부: 그 도메인의 robots.txt를 잠시 못 받음, 파일 대신 웹페이지(점검 화면 등)가 옴.
+    수집 파이프라인은 다시 시도할 수 있으면 FileUnavailable처럼 다음 회차에 다시 받아요(2026-11-10 재검토: 그 파일 없이 새 버전이 생기고
+    다음 회차에 되돌아갔음)."""
 
 
 class FileUnavailable(CollectorError):

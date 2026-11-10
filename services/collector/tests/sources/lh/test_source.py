@@ -107,6 +107,21 @@ def test_recheck_ignores_response_time_but_catches_a_replaced_notice(source, lh,
     assert store.by_key(PAN).latest_version == 2
 
 
+def test_list_lines_leave_out_columns_that_change_every_run(source, lh, run, store, list_body):
+    # 2026-11-10 재검토: 줄 번호·전체 건수(LH)와 받은 시각(마이홈)이 목록 줄에 있어, 목록에 있는 LH 글이 매시 모두 UPDATE됐음
+    run(source, lh)
+    first = store.by_key(PAN).list_item
+    assert not {"RNUM", "ALL_CNT"} & set(first["meta"]["_lhRow"]) and first["meta"]["_lhRow"]["PAN_ID"] == PAN
+    lh.open_list = copy.deepcopy(list_body)
+    lh.open_list[1]["dsList"][0].update(RNUM="7", ALL_CNT="9")  # 다음 회차엔 줄 번호·전체 건수만 달라짐
+    run(source, lh)
+    assert store.by_key(PAN).list_item == first
+
+    # 마이홈에만 보이는 공고의 줄에도 받은 시각을 두지 않음
+    entries = source._myhome_item(source.boards[1], PAN, [{"list": "rent", "key": "k", "fetchedAt": "2026-10-15T00:00:00+00:00", "item": {}}])
+    assert entries.meta["_myhome"] == [{"list": "rent", "key": "k", "item": {}}]
+
+
 def test_correction_is_linked_to_its_original_although_the_api_lists_newest_first(source, lh, run, store, list_body):
     # 2026-10-16 실측: LH 정정공고 17건이 원래 공고보다 먼저 등록돼 하나도 연결되지 않았어요
     correction = {"PAN_ID": "2015122300020999", "PAN_NM": "[정정공고]태백소도 국민임대주택 예비입주자 상시모집(26.9.17 공고)", "PAN_NT_ST_DT": "2026.09.20"}
