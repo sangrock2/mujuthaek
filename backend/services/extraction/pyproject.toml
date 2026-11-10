@@ -15,7 +15,6 @@ dependencies = [
   "rapidfuzz>=3.9,<4",  # V2 문서 모델이 원문에서 비슷한 줄을 찾음(v2/document.py, MIT). 판정은 기존 원문 대조가 합니다
   "langchain>=1.0,<2",
   "langchain-openai>=1.0,<2",
-  "langgraph-checkpoint-sqlite>=2.0,<4",
 ]
 
 [project.optional-dependencies]
