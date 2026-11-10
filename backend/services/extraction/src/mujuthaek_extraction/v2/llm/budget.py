@@ -102,23 +102,18 @@ class BudgetMiddleware(AgentMiddleware):
 
 def worst_case_usd(request: Any, model: str, max_output_tokens: int) -> float:
     """입력 전부를 캐시 쓰기로, 출력 한도 전부를 쓴다고 보고 셉니다(V1 Budget.worst_case와 같은 기준: 글자 수 ≥ 토큰 수)."""
-    price = PRICES[model]
     chars = sum(_chars(message) for message in request.messages)
     if request.system_message is not None:
         chars += _chars(request.system_message)
     if request.tools:
         chars += sum(len(json.dumps(convert_to_openai_tool(tool), ensure_ascii=False)) for tool in request.tools)
-    return (chars * price.cache_write + max_output_tokens * price.output) / 1_000_000
+    return PRICES[model].worst_usd(chars, max_output_tokens)
 
 
 def cost_usd(model: str, usage: dict[str, Any]) -> float:
-    price = PRICES[model]
+    """채팅 답의 사용량(usage_metadata) → 비용. 요율 계산은 V1과 같은 Price.usd."""
     details = usage.get("input_token_details") or {}
-    total = usage.get("input_tokens", 0)
-    cached = details.get("cache_read", 0)
-    writes = details.get("cache_creation", 0)
-    plain = max(total - cached - writes, 0)
-    return (plain * price.input + cached * price.cached_input + writes * price.cache_write + usage.get("output_tokens", 0) * price.output) / 1_000_000
+    return PRICES[model].usd(usage.get("input_tokens", 0), details.get("cache_read", 0), details.get("cache_creation", 0), usage.get("output_tokens", 0))
 
 
 def _chars(message: BaseMessage) -> int:

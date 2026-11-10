@@ -30,7 +30,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from mujuthaek_extraction import extract, format_memory, pipeline, supply_tables
 from mujuthaek_extraction.assemble.quotes import MIN_QUOTE_CHARS, normalize
 from mujuthaek_extraction.model.fallback import FallbackOnErrorModel
-from mujuthaek_extraction.rules.base import CallSpec, FieldRules, document_ids, structure_summary
+from mujuthaek_extraction.rules.base import CallSpec, FieldRules, document_ids
 from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.cut import cut_off
 from mujuthaek_extraction.v2.agents.prompt import V1_STRUCTURE_PARTS
@@ -148,11 +148,8 @@ def _build(spec: CallSpec, state: Any, rt: pipeline.Runtime, usage: list[dict[st
         return None
     # 공고는 판정에 쓰여 근거 위치를 못 정한 항목 하나로 공고 전체가 사람 확인으로 가므로 여러 곳에 있는 근거에 이웃 행을 붙임(contract.anchor_text)
     part = _combine(section.parts_of(dataclasses.replace(spec, sections=SECTIONS), draft, state["document"], documents, anchors=True))
-    # 이 뒤는 V1 구조 호출(extract.run_extraction)과 같음: 코드 위치·인용을 구조 조각으로 옮기고 표의 단지 이름을 위치에 잇습니다
-    made = supply_tables.merge_into_structure(table_part, part)
-    supply_tables.link_locations(table_part, part.get("locations") or [])
-    shown = [loc for loc in part.get("locations") or [] if not (isinstance(loc, dict) and loc.get("id") in made)]
-    return [part, table_part], structure_summary({**part, "locations": shown, "supplyGroups": table_part["supplyGroups"]})
+    summary = extract.finish_structure(part, table_part)  # 이 뒤는 V1 구조 호출(extract.run_extraction)과 같음
+    return [part, table_part], summary
 
 
 def _mapping(spec: CallSpec, state: Any, rt: pipeline.Runtime, documents: tuple[str, ...], usage: list[dict[str, Any]], traces: list[dict[str, Any]]):

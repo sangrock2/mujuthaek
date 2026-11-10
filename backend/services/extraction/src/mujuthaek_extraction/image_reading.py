@@ -22,7 +22,7 @@ from typing import Any
 
 from mujuthaek_extraction.extract import CallAttempt, ExtractionRun, _parse, schema_errors
 from mujuthaek_extraction.intake.model import ExtractionMaterial, TrustedContext
-from mujuthaek_extraction.intake.pdf_reader import image_pages
+from mujuthaek_extraction.intake.pdf_reader import IMAGE_PAGE_SHARE, image_pages
 from mujuthaek_extraction.intake.xlsx_reader import redact_secret_values
 from mujuthaek_extraction.model.base import ExtractionModel, ModelError, ModelImage, ModelRequest, StopReason
 from mujuthaek_extraction.rules.base import output_limit
@@ -42,7 +42,7 @@ MAX_IMAGES = 6  # 한 공고에서 그려 보낼 쪽 수 상한 (비용)
 RESOLUTION = 200  # 그림 영역 해상도(dpi). 120dpi 쪽 전체 그림에서는 표의 작은 숫자(27.02/27.07)가 헷갈렸음
 TILE_RESOLUTION = 300  # 다시 읽기 조각의 해상도(처음 판독과 다른 입력)
 TILE_OVERLAP = 0.04  # 위·아래 조각이 겹치는 높이 비율(경계의 행이 잘리지 않게)
-IMAGE_SHARE = 0.25  # pdf_reader.IMAGE_PAGE_SHARE와 같은 기준으로 자를 그림을 고릅니다
+IMAGE_SHARE = IMAGE_PAGE_SHARE  # 그림 쪽을 찾을 때(pdf_reader.image_pages)와 같은 기준으로 자를 그림을 고릅니다
 PROMPT_VERSION = "image_text/v1"
 # 세 번째 판독(V2 5단계): 두 판독이 다른 표 행을 OCR로 위치를 찾아 그 부근만 크게 잘라 한 번 더 읽습니다. 유료 측정 전이라 기본은 꺼짐
 THIRD_CALL = "image_text_third"
@@ -115,19 +115,7 @@ def _render_tiles(data: bytes, page_number: int) -> list[bytes]:
     """다시 읽기용: 같은 그림 영역을 더 크게(TILE_RESOLUTION dpi) 그려 위·아래로 겹치게 나눈 조각.
     같은 그림을 같은 크기로 두 번 읽으면 같은 글자를 같게 잘못 읽습니다(2026-11-05 실측: 두 판독 모두 250,600을 250,500으로).
     입력을 바꿔 읽으면 두 판독의 실수가 겹칠 가능성이 줄어듭니다."""
-    import pdfplumber
-
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        page = pdf.pages[page_number - 1]
-        area = float(page.width * page.height) or 1.0
-        boxes = [
-            (max(float(i["x0"]), 0.0), max(float(i["top"]), 0.0), min(float(i["x1"]), float(page.width)), min(float(i["bottom"]), float(page.height)))
-            for i in page.images
-        ]
-        boxes = [b for b in boxes if (b[2] - b[0]) * (b[3] - b[1]) / area >= IMAGE_SHARE]
-        if boxes:
-            page = page.crop((min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)))
-        picture = page.to_image(resolution=TILE_RESOLUTION).original
+    picture = _picture(data, page_number, TILE_RESOLUTION)
     width, height = picture.size
     overlap = int(height * TILE_OVERLAP)
     tiles = []

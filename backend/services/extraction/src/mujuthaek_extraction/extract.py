@@ -508,12 +508,8 @@ def run_extraction(
         sink.parts.append(part)
         if number == 0 and known is None:
             if table_part is not None:
-                made = supply_tables.merge_into_structure(table_part, part)
-                supply_tables.link_locations(table_part, part.get("locations") or [])
                 sink.parts.append(table_part)
-                # 코드가 주소마다 만든 위치(수백 곳일 수 있음)는 뒤 호출에 넘기지 않습니다. 뒤 호출은 단지·지역 위치만 가리킵니다
-                shown = [loc for loc in part.get("locations") or [] if not (isinstance(loc, dict) and loc.get("id") in made)]
-                return structure_summary({**part, "locations": shown, "supplyGroups": table_part["supplyGroups"]})
+                return finish_structure(part, table_part)
             return structure_summary(part)
         return None
 
@@ -629,6 +625,16 @@ def code_supply_part(material: ExtractionMaterial, tables: list[supply_tables.Ta
     if schema_errors(check, call_schema(("supplyGroups",), document_ids(material))) is not None:
         return None
     return part
+
+
+def finish_structure(part: dict[str, Any], table_part: dict[str, Any]) -> dict[str, Any] | None:
+    """구조 조각에 코드가 옮긴 공급 조각을 잇고 뒤 호출에 넘길 구조 요약을 돌려줍니다(V1 구조 호출과 V2 구조 단계가 같이 씀).
+    코드 위치·인용을 구조 조각으로 옮기고 표의 단지 이름을 위치에 잇습니다. 코드가 주소마다 만든 위치(수백 곳일 수 있음)는 뒤 호출에
+    넘기지 않습니다. 뒤 호출은 단지·지역 위치만 가리킵니다."""
+    made = supply_tables.merge_into_structure(table_part, part)
+    supply_tables.link_locations(table_part, part.get("locations") or [])
+    shown = [loc for loc in part.get("locations") or [] if not (isinstance(loc, dict) and loc.get("id") in made)]
+    return structure_summary({**part, "locations": shown, "supplyGroups": table_part["supplyGroups"]})
 
 
 QUOTES_SUFFIX = "-quotes"  # 빠진 인용문만 다시 묻는 호출 이름: <호출 이름>-quotes

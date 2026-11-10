@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any
@@ -133,34 +134,22 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
             verify.seen, verify.issues = 0, []
             log.exception("기준표 담당 뒤 미리 하는 검증이 실패했습니다", extra={"agent": spec.name})
     agent = _agent(model, spec.name, state, documents, [limit, verify, CutCallMiddleware()])
-    last: dict[str, Any] = {}
-    stopped = None
-    try:
-        opening = [shared_message(document), HumanMessage(task(spec, state, tables))]
-        for snapshot in agent.stream({"messages": opening}, context=context, stream_mode="values"):
-            last = snapshot  # 예산 상한으로 멈춰도 그때까지의 대화를 기록하려고 마지막 상태를 둠
-    except BudgetExceeded as error:
+    messages, error = _converse(context, lambda: (agent, [shared_message(document), HumanMessage(task(spec, state, tables))]))
+    stopped: str | None
+    if isinstance(error, BudgetExceeded):
         stopped = str(error)
-        context.usage.append({"agent": spec.name, "stopped": stopped})
-    except (openai.APIError, TimeoutError, ConnectionError) as error:
+    elif isinstance(error, (openai.APIError, TimeoutError, ConnectionError)):
         # 재시도로도 안 된 모델 호출 오류: 그때까지 넣은 항목만 남기고 이 담당 섹션만 사람 확인으로(공고·다른 담당은 계속)
         # 2026-11-06 23건 측정: 담당 하나의 시간 초과가 그래프·공고·측정 전체를 멈춤
-        stopped = f"{type(error).__name__}: {error}"[:300]
-        context.usage.append({"agent": spec.name, "stopped": stopped})
+        stopped = _error_text(error)
         log.warning("섹션 담당이 모델 호출 오류로 멈췄습니다", extra={"agent": spec.name, "error": stopped})
-    except Exception as error:  # 그 밖의 예상 못 한 오류도 이 담당만 멈춤(결함은 로그의 추적으로 찾음)
-        stopped = f"{type(error).__name__}: {error}"[:300]
+    elif error is not None:  # 그 밖의 예상 못 한 오류도 이 담당만 멈춤(결함은 로그의 추적으로 찾음)
+        stopped = _error_text(error)
+        log.error("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name}, exc_info=error)
+    else:  # 넣기가 아닌 호출·글이 잘려 실행할 호출 없이 끝남(넣기는 CutCallMiddleware가 살림)
+        stopped = _ended_early(messages, draft.finished, calls, spec.max_output_tokens)
+    if stopped is not None:
         context.usage.append({"agent": spec.name, "stopped": stopped})
-        log.exception("섹션 담당이 예상 못 한 오류로 멈췄습니다", extra={"agent": spec.name})
-    messages = last.get("messages") or []
-    final = messages[-1] if messages and isinstance(messages[-1], AIMessage) else None
-    if stopped is None and final is not None and not draft.finished:  # 마지막 호출에서 끝내기까지 불렀으면 상한에 닿았어도 끝낸 것
-        if str(final.content).startswith(CALL_LIMIT_MESSAGE):
-            stopped = f"모델 호출 상한({calls}번)"
-        elif cut_off(final):  # 넣기가 아닌 호출·글이 잘려 실행할 호출 없이 끝남(넣기는 CutCallMiddleware가 살림)
-            stopped = f"출력 한도({spec.max_output_tokens}토큰)에서 잘림"
-        if stopped is not None:
-            context.usage.append({"agent": spec.name, "stopped": stopped})
     if stopped is not None and not draft.finished:
         _mark_unfinished(draft, spec.sections, stopped)
     resolver: dict[str, Any] = {}
@@ -172,7 +161,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
         _mark_table_rows_left(spec, draft, tables, state, rt, documents)
     trace = {
         "agent": spec.name,
-        "turns": _trace(last.get("messages") or []),
+        "turns": _trace(messages),
         "stopped": stopped,
         **({"tables": tables} if tables else {}),
         **({"resolver": resolver} if resolver else {}),
@@ -344,23 +333,18 @@ def _resolve_group(
     context = SectionContext(document=document, budget=rt.models.budget, calls=getattr(rt, "gate", None), draft=trial, documents=documents)
     context.check = lambda: _issues(spec, trial, state, rt, documents)
     limit = ModelCallLimitMiddleware(run_limit=RESOLVER_CALLS, exit_behavior="end")
-    model = chat(RESOLVER, max_output_tokens=min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS))
+    output = min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS)
+    model = chat(RESOLVER, max_output_tokens=output)
     agent = _agent(model, RESOLVER, state, documents, [limit, VerifyMiddleware(), CutCallMiddleware()])
-    last: dict[str, Any] = {}
-    stopped = None
-    try:
-        messages = [shared_message(document), HumanMessage(resolver_task(spec, trial, targets))]
-        for snapshot in agent.stream({"messages": messages}, context=context, stream_mode="values"):
-            last = snapshot
-    except Exception as error:  # 해결 담당이 멈추면 그 항목들은 담당 초안 그대로
-        stopped = f"{type(error).__name__}: {error}"[:300]
+    messages, error = _converse(context, lambda: (agent, [shared_message(document), HumanMessage(resolver_task(spec, trial, targets))]))
+    if error is not None:  # 해결 담당이 멈추면 그 항목들은 담당 초안 그대로
+        stopped = _error_text(error)
         log.warning("해결 담당이 멈췄습니다", extra={"agent": spec.name, "error": stopped})
-    final = (last.get("messages") or [None])[-1]
-    if stopped is None and cut_off(final) and not trial.finished:  # 고치다 잘려 끝남: 고친 것을 쓰지 않음
-        stopped = f"출력 한도({min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS)}토큰)에서 잘림"
+    else:  # 고치다 잘려 끝남: 고친 것을 쓰지 않음(호출 상한에 닿은 대화는 고친 만큼 채택 관문이 봄)
+        stopped = _ended_early(messages, trial.finished, None, output)
     after = before if stopped else _issues(spec, trial, state, rt, documents)
     adopted = stopped is None and _settled(draft, trial, {issue["item"] for issue in targets}, before, after)
-    record = {"targets": len(targets), "after": len(after), "adopted": adopted, "stopped": stopped, "turns": _trace(last.get("messages") or [])}
+    record = {"targets": len(targets), "after": len(after), "adopted": adopted, "stopped": stopped, "turns": _trace(messages)}
     return (trial if adopted else None), record, context.usage
 
 
@@ -442,7 +426,7 @@ def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
     try:
         agent.invoke({"messages": [shared_message(document)]}, context=context)
     except Exception as error:  # 캐시 데우기는 할 수 있는 만큼만: 실패를 기록하고 넘어감
-        context.usage.append({"agent": PRIME, "stopped": f"{type(error).__name__}: {error}"[:300]})
+        context.usage.append({"agent": PRIME, "stopped": _error_text(error)})
     return context.usage
 
 
@@ -520,23 +504,19 @@ def _run_table(
     context.check = lambda: _table_issues(spec, helper, state, rt, documents, chunk)
     limit = ModelCallLimitMiddleware(run_limit=TABLE_CALLS, exit_behavior="end")
     output = min(spec.max_output_tokens, TABLE_OUTPUT_TOKENS)
-    last: dict[str, Any] = {}
-    stopped = None
-    try:
+
+    def start() -> tuple[Any, list[Any]]:
         model = chat(spec.name, max_output_tokens=output)  # 응답 대기 한도는 자격 담당과 같게
         agent = _agent(model, TABLE, state, documents, [limit, VerifyMiddleware(TABLE_CALLS), CutCallMiddleware()])
-        for snapshot in agent.stream({"messages": [shared_message(document), HumanMessage(table_task(chunk))]}, context=context, stream_mode="values"):
-            last = snapshot
-    except Exception as error:  # 기준표 담당이 멈추면 넣은 항목만 남기고 남은 행은 자격 담당이 넣음
-        stopped = f"{type(error).__name__}: {error}"[:300]
+        return agent, [shared_message(document), HumanMessage(table_task(chunk))]
+
+    messages, error = _converse(context, start)
+    if error is not None:  # 기준표 담당이 멈추면 넣은 항목만 남기고 남은 행은 자격 담당이 넣음
+        stopped = _error_text(error)
         log.warning("기준표 담당이 멈췄습니다", extra={"agent": TABLE, "error": stopped})
-    final = (last.get("messages") or [None])[-1]
-    if stopped is None and not helper.finished and isinstance(final, AIMessage):
-        if str(final.content).startswith(CALL_LIMIT_MESSAGE):
-            stopped = f"모델 호출 상한({TABLE_CALLS}번)"
-        elif cut_off(final):
-            stopped = f"출력 한도({output}토큰)에서 잘림"
-    record = {"table": chunk.table, "rows": chunk.label, "groups": list(chunk.groups), "stopped": stopped, "turns": _trace(last.get("messages") or [])}
+    else:
+        stopped = _ended_early(messages, helper.finished, TABLE_CALLS, output)
+    record = {"table": chunk.table, "rows": chunk.label, "groups": list(chunk.groups), "stopped": stopped, "turns": _trace(messages)}
     # 담당이 끝냈어도 섹션을 PARTIAL·FAILED로 적었으면 맡은 행을 다 넣지 못한 것: 자격 담당에게 남은 행을 넘김(table_note)
     partial = [entry.get("reason") or entry.get("status") for entry in helper.coverage.values() if entry.get("status") in ("PARTIAL", "FAILED")]
     if partial:
@@ -655,6 +635,36 @@ def parts_of(spec: CallSpec, draft: SectionDraft, document: DocumentModel, docum
         )
         parts.append(to_part(section, items, document, documents, coverage, draft.missing_for(section), anchors=anchors))
     return parts
+
+
+def _converse(context: SectionContext, start: Callable[[], tuple[Any, list[Any]]]) -> tuple[list[Any], Exception | None]:
+    """담당·기준표 담당·해결 담당의 대화를 끝까지 돌려 (마지막 대화, 멈춘 오류)를 돌려줍니다. start는 (에이전트, 첫 메시지들)을 만들고,
+    그 안의 오류도 멈춘 오류로 돌려줍니다. 오류로 멈춰도 그때까지의 대화를 돌려줍니다(예산 상한으로 멈춘 대화도 기록)."""
+    last: dict[str, Any] = {}
+    try:
+        agent, opening = start()
+        for snapshot in agent.stream({"messages": opening}, context=context, stream_mode="values"):
+            last = snapshot
+    except Exception as error:
+        return last.get("messages") or [], error
+    return last.get("messages") or [], None
+
+
+def _ended_early(messages: list[Any], finished: bool, calls: int | None, output: int) -> str | None:
+    """끝내기 전에 멈춘 대화의 이유: 호출 상한(calls가 None이면 보지 않음)이나 출력 한도에서 잘림. 끝냈거나(마지막 호출에서 끝내기까지
+    불렀으면 상한에 닿았어도 끝낸 것) 마지막이 모델 답이 아니면 None."""
+    final = messages[-1] if messages else None
+    if finished or not isinstance(final, AIMessage):
+        return None
+    if calls is not None and str(final.content).startswith(CALL_LIMIT_MESSAGE):
+        return f"모델 호출 상한({calls}번)"
+    if cut_off(final):
+        return f"출력 한도({output}토큰)에서 잘림"
+    return None
+
+
+def _error_text(error: BaseException) -> str:
+    return f"{type(error).__name__}: {error}"[:300]
 
 
 def _agent(model: Any, name: str, state: Any, documents: tuple[str, ...], middleware: list[AgentMiddleware]) -> Any:
