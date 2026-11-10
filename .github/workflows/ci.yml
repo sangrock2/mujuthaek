@@ -1,10 +1,17 @@
 name: CI
 
 # 개인 저장소: 추출 서비스(Python)만 검사해요. api·notification을 다시 고치게 되면 그때 잡을 되살려요.
+# 프론트(frontend/)는 web.yml이 따로 검사해요.
 on:
   pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/ci.yml"
   push:
     branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/ci.yml"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,6 +24,9 @@ jobs:
   python:
     name: python (ruff · pytest)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -26,8 +36,8 @@ jobs:
       - run: uvx ruff@0.17.0 check services/extraction libs/python-platform
       - run: uvx ruff@0.17.0 format --check services/extraction libs/python-platform
       - name: python-platform 테스트
-        working-directory: libs/python-platform
+        working-directory: backend/libs/python-platform
         run: uv run --frozen pytest -q
       - name: extraction 테스트
-        working-directory: services/extraction
+        working-directory: backend/services/extraction
         run: uv run --frozen pytest -q
