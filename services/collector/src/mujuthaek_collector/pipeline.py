@@ -6,7 +6,8 @@ run_source
       ├─ 밀린 글(PENDING·FAILED) + 새 글을 한 번에 detail_limit건까지 처리 (process_post)
       └─ 밀린 글이 없으면 목록 1페이지 해시 저장 (다음 회차에 같으면 바로 끝)
 
-오류 반응: BlockedError → 출처 회차 중단(BLOCKED), ParseError·HTTP 오류 → 그 글만 FAILED, FileRejected → 그 파일만 건너뜀
+오류 반응: BlockedError → 그 글 FAILED + 출처 회차 중단(BLOCKED), ParseError·HTTP 오류 → 그 글만 FAILED, FileRejected → 그 파일만 건너뜀,
+  FileUnavailable(첨부 일시 오류) → 새 버전을 만들지 않음(이전 버전이 있으면 그대로, 처음이면 FAILED로 다시 시도)
 """
 
 from __future__ import annotations
@@ -25,9 +26,9 @@ from mujuthaek_collector.core.documents.text import extract_text
 from mujuthaek_collector.core.file_store import FileStore, content_type, object_key, stored_until, text_key
 from mujuthaek_collector.core.files import FileRef, pick_notice_files, pick_unit_lists, unclear_notice
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS, build_collected_event
-from mujuthaek_collector.core.storage import IGNORED, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
+from mujuthaek_collector.core.storage import IGNORED, MAX_ATTEMPTS, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
 from mujuthaek_collector.core.versioning import content_hash, list_hash, sha256_hex
-from mujuthaek_collector.errors import BlockedError, FileRejected, ParseError
+from mujuthaek_collector.errors import BlockedError, FileRejected, FileUnavailable, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, Fetcher, ListItem, Source
 from mujuthaek_platform.ids import uuid7
 
@@ -192,11 +193,14 @@ def find_correction_parent(store: Store, source_code: str, title: str, posted_on
     base = cls.correction_base(title)
     if not base:
         return None
+    marks = cls.qualifiers(title)
     for post in store.recent_notices(source_code):
         if posted_on and post.posted_on and post.posted_on > posted_on:
             continue
         own = cls.norm_name(post.title)
-        if own and (own == base or own in base or base in own):
+        # 이름 비교는 괄호를 지우므로 괄호 안 구분(블록·단지)도 맞춰 봐요.
+        # 예전엔 「(A-2블록) 정정」이 같은 이름의 「(A-3블록)」 공고에 붙었어요(2026-11-10 코드 검토)
+        if own and (own == base or own in base or base in own) and cls.same_qualifiers(marks, cls.qualifiers(post.title)):
             return post
     return None
 
@@ -206,8 +210,18 @@ def process_safely(ctx: Context, post: PostRow) -> None:
     try:
         if process_post(ctx, post):
             ctx.result.new_count += 1
-    except BlockedError:
-        raise  # 출처 회차를 멈춰요. 이 글은 PENDING·FAILED 그대로 남아 다음 회차에 먼저 처리돼요
+    except BlockedError as error:
+        # 출처 회차를 멈추되 이 글의 실패로 세요(3번까지). 세지 않으면 계속 403인 글 하나가 매 회차 먼저 열려
+        # 출처 전체가 멈춰 있었어요(2026-11-10 코드 검토). FAILED는 PENDING 뒤라 다음 회차엔 다른 글이 먼저 열려요
+        ctx.store.mark_failed(post.id, f"BlockedError: {error}")
+        raise
+    except FileUnavailable as error:
+        if post.latest_version:
+            ctx.store.mark_done(post.id)  # 이전 버전을 그대로 두고 다음 정정 확인에서 다시 봐요
+            ctx.warn(f"[{post.post_key}] {post.title[:40]} — {error} 이번 확인은 건너뛰고 이전 버전을 둬요")
+        else:
+            ctx.store.mark_failed(post.id, f"FileUnavailable: {error}")
+            ctx.warn(f"[{post.post_key}] {post.title[:40]} — {error} 다음 회차에 다시 받아요")
     except (ParseError, httpx.HTTPError) as error:
         ctx.store.mark_failed(post.id, f"{type(error).__name__}: {error}")
         ctx.warn(f"[{post.post_key}] {post.title[:40]} — 상세를 읽지 못했어요: {error}")
@@ -235,12 +249,14 @@ def process_post(ctx: Context, post: PostRow) -> bool:
     saved: list[tuple[SavedFile, bytes]] = []  # (DB에 저장할 정보, S3에 올릴 원본)
     notice_name, notice_text = None, None
     keep_until = stored_until(post.title, post.deadline_on, post.posted_on, ctx.today)
+    # 첨부 일시 오류면 다음에 다시 받아요. 이미 버전이 있으면 늘(이전 버전을 둠), 처음이면 마지막 시도 전까지(마지막엔 그 파일 없이라도 저장)
+    retry_later = post.latest_version > 0 or post.attempts + 1 < MAX_ATTEMPTS
 
     notice_files = pick_notice_files(candidates, source.prefer_doc)
     if unclear_notice(candidates):
         ctx.warn(f"[{post.post_key}] 이름으로 공고문을 알 수 없어 첨부 순서로 골랐어요 ({notice_files[0].name})")
     for file in notice_files:  # 공고문: 첫 번째가 실패하면 두 번째
-        data = download(ctx, file, referer)
+        data = download(ctx, file, referer, retry_later=retry_later)
         if data is None:
             continue
         text, status = extract_text(data, file.ext)
@@ -251,7 +267,7 @@ def process_post(ctx: Context, post: PostRow) -> bool:
         ctx.warn(f"[{post.post_key}] 공고문을 읽지 못했어요 ({file.name}): {status}")
 
     for file in pick_unit_lists(candidates):  # 주택목록: 엑셀 우선 최대 2개. 원본만 S3에 두고, 표 해석은 extraction이 해요
-        data = download(ctx, file, referer)
+        data = download(ctx, file, referer, retry_later=retry_later)
         if data is None:
             continue
         saved.append((make_saved(file, "UNIT_LIST", data, keep_until, "원본만 저장", None), data))
@@ -308,7 +324,10 @@ def process_post(ctx: Context, post: PostRow) -> bool:
     return True
 
 
-def download(ctx: Context, file: FileRef, referer: str | None) -> bytes | None:
+def download(ctx: Context, file: FileRef, referer: str | None, *, retry_later: bool = False) -> bytes | None:
+    """첨부 원본. 받지 않는 파일·없는 파일(4xx)은 None(그 파일 없이 저장). retry_later면 연결 오류·5xx 같은 일시 오류는
+    FileUnavailable로 알려요: 그 파일만 빼고 새 버전을 만들면 해시가 바뀌어 추출·알림이 다시 돌고, 다음 회차에 파일이 오면
+    또 바뀌었어요(2026-11-10 코드 검토)."""
     if file.personal:
         return None  # 명단 파일은 받지 않아요 (pick 단계에서 이미 빠지지만 한 번 더 막음)
     try:
@@ -316,8 +335,17 @@ def download(ctx: Context, file: FileRef, referer: str | None) -> bytes | None:
     except FileRejected as error:
         ctx.warn(f"첨부를 받지 않았어요 ({file.name}): {error}")
     except httpx.HTTPError as error:
+        if retry_later and transient(error):
+            raise FileUnavailable(f"첨부를 잠시 받지 못했어요 ({file.name}): {error}.") from error
         ctx.warn(f"첨부를 받지 못했어요 ({file.name}): {error}")
     return None
+
+
+def transient(error: httpx.HTTPError) -> bool:
+    """다음 회차에 받아질 수 있는 오류: 연결·시간 초과, 5xx."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response is not None and error.response.status_code >= 500
+    return isinstance(error, httpx.TransportError)
 
 
 def make_saved(file: FileRef, role: str, data: bytes, keep_until: date, status: str | None, text: str | None) -> SavedFile:

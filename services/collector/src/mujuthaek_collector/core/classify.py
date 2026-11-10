@@ -33,6 +33,9 @@ BUSINESS_SPACE = re.compile(r"상가|점포|입점|사무실|창업|업무시설
 CORRECTION_MARK = re.compile(r"[\[(]\s*정정\s*(?:공고)?\s*[\])]|정정\s*공고")
 RECRUIT = re.compile(r"모집\s*공고|입주자\s*모집|예비\s*입주자|추가\s*모집|잔여\s*세대.*모집")
 REF = re.compile(r"(?P<name>.+?)\s*\(\s*(?:공고일?\s*:?\s*)?[‘'’]?(?P<y>\d{2,4})\s*[._]\s*(?P<m>\d{1,2})\s*[._]\s*(?P<d>\d{1,2})\s*\.?\s*(?:공고)?\s*\)")
+# 후속 안내 단어 바로 뒤(같은 마디 안)의 바뀜 낱말: 「당첨자 발표일 변경」은 후속 안내가 아니라 무엇을 정정했는지예요
+CHANGED = re.compile(r"[^,·\])]{0,12}?(?:변경|연기|연장|조정)")
+QUALIFIER = re.compile(r"[\[(]([^\])]*)[\])]")
 
 
 def out_of_scope(title: str) -> bool:
@@ -47,10 +50,13 @@ def classify(title: str) -> str:
     ref = REF.search(title)
     if ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", title[ref.end() :])) >= 2:
         return FOLLOW_UP  # '…모집공고(2026. 6. 25.) 면접평가 대상자 발표'처럼 공고일 뒤에 글이 붙으면 후속 안내
-    if FOLLOWUP.search(title):
-        return FOLLOW_UP
-    if CORRECTION_MARK.search(title) and RECRUIT.search(title):
+    follow_ups = list(FOLLOWUP.finditer(title))
+    if CORRECTION_MARK.search(title) and RECRUIT.search(title) and all(CHANGED.match(title, m.end()) for m in follow_ups):
+        # 「[정정공고] … 모집공고(당첨자 발표일 변경)」: 후속 안내 단어가 바뀐 내용을 말할 뿐이면 정정공고예요.
+        # 예전엔 후속 안내 검사가 먼저라 정정이 원래 공고에 반영되지 않았어요(2026-11-10 코드 검토)
         return CORRECTION
+    if follow_ups:
+        return FOLLOW_UP
     if RECRUIT.search(title):
         return NOTICE
     return EXCLUDED
@@ -92,3 +98,15 @@ def same_notice(ref: TitleRef, title: str, posted_on: date | None) -> bool:
 def correction_base(title: str) -> str:
     """정정공고를 원래 공고와 비교할 이름 (정정 표시를 뺀 공고명)."""
     return norm_name(CORRECTION_MARK.sub("", title))
+
+
+def qualifiers(title: str) -> frozenset[str]:
+    """괄호 안 구분 말(블록·단지·유형 등, 정정 표시는 뺌). norm_name은 이걸 지워서 따로 맞춰 봐요."""
+    found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(CORRECTION_MARK.sub("", title)))
+    return frozenset(q for q in found if q)
+
+
+def same_qualifiers(a: frozenset[str], b: frozenset[str]) -> bool:
+    """한쪽 구분 말이 다른 쪽에 모두 들어 있으면 같은 공고로 봐요(정정공고가 꾸밈말을 빼거나 더할 수 있음).
+    「(A-2블록)」과 「(A-3블록)」처럼 서로 다른 구분이 있으면 다른 공고예요."""
+    return a <= b or b <= a

@@ -2,8 +2,11 @@
 
 from datetime import date
 
+import httpx
+
 from mujuthaek_collector import pipeline
 from mujuthaek_collector.core.files import FileRef
+from mujuthaek_collector.core.storage import MAX_ATTEMPTS
 from mujuthaek_collector.errors import BlockedError, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, ListItem, Request, Source
 
@@ -92,6 +95,18 @@ def test_correction_links_to_the_round_before_it_not_a_later_one(client, store, 
     assert store.by_key("23").parent_post_id == store.by_key("21").id
 
 
+def test_correction_links_only_to_the_notice_with_the_same_block(client, store, file_store, settings, monkeypatch):
+    """이름 비교는 괄호를 지워서, 괄호 안 블록이 다른 같은 이름 공고에 붙지 않게 구분도 맞춰 봐요 (2026-11-10 코드 검토)."""
+    rows = [
+        ("32", "행복주택 입주자 모집공고(A-2블록) [정정공고]", date(2026, 10, 5)),
+        ("31", "행복주택 입주자 모집공고(A-3블록)", date(2026, 10, 3)),
+        ("30", "행복주택 입주자 모집공고(A-2블록)", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("32").parent_post_id == store.by_key("30").id
+
+
 def test_event_files_point_to_uploaded_s3_objects(client, store, file_store, settings, monkeypatch):
     """이벤트의 s3Key는 실제로 올린 S3 경로와 같고, 받는 쪽은 role로 공고문을 찾아요."""
     rows = ROWS[:1]
@@ -138,11 +153,45 @@ def test_broken_detail_marks_failed_and_continues(client, store, file_store, set
     assert result.status == "SUCCESS" and any("상세를 읽지 못했어요" in w for w in result.warnings)
 
 
-def test_blocked_stops_source_and_keeps_post_pending(client, store, file_store, settings, monkeypatch):
-    pages(client, ROWS[:1])
-    client.pages["https://a.kr/view?id=1"] = BlockedError("HTTP 429")
-    result = run(FakeSource(ROWS[:1]), client, store, file_store, settings, monkeypatch)
-    assert result.status == "BLOCKED" and store.by_key("1").status == "PENDING"
+def test_blocked_stops_source_and_counts_against_the_post(client, store, file_store, settings, monkeypatch):
+    """403·429면 출처 회차를 멈추고 그 글의 실패로 세요. 다음 회차엔 밀린 다른 글이 먼저 열리고, 3번 막힌 글은 더 열지 않아요.
+    예전엔 그 글이 PENDING으로 남아 매 회차 먼저 열려 출처 전체가 멈춰 있었어요 (2026-11-10 코드 검토)."""
+    rows = [("5", "2026년 국민임대 입주자 모집공고", date(2026, 10, 5)), ROWS[0]]
+    pages(client, rows)
+    client.pages["https://a.kr/view?id=5"] = BlockedError("HTTP 403")
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "BLOCKED" and store.by_key("5").status == "FAILED" and store.by_key("5").attempts == 1
+    assert store.by_key("1").status == "PENDING"  # 막힌 글이 먼저라 이번엔 못 열었어요
+
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "BLOCKED" and store.by_key("1").status == "DONE" and store.by_key("5").attempts == 2
+
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("5").attempts == MAX_ATTEMPTS
+    client.requested.clear()
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert result.status == "SUCCESS" and "https://a.kr/view?id=5" not in client.requested
+
+
+def test_flaky_attachment_does_not_make_a_version_without_it(client, store, file_store, settings, monkeypatch):
+    """첨부를 잠시 못 받으면 그 파일 없이 새 버전을 만들지 않아요(해시가 바뀌어 추출·알림이 다시 돌고 다음 회차에 되돌아갔음, 2026-11-10 코드 검토).
+    이미 버전이 있는 글은 이전 버전을 두고, 처음 글은 다음 회차에 다시 받되 마지막 시도엔 그 파일 없이라도 저장해요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    client.files["https://a.kr/f/1.pdf"] = httpx.ConnectError("연결 끊김")
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    assert result.new_count == 0 and store.by_key("1").latest_version == 1 and store.by_key("1").status == "DONE"
+    assert any("이전 버전을 둬요" in w for w in result.warnings)
+
+    new = [("7", "2026년 국민임대 입주자 모집공고", date(2026, 10, 7))]
+    pages(client, new)
+    client.files["https://a.kr/f/7.pdf"] = httpx.ConnectError("연결 끊김")
+    for attempt in range(1, MAX_ATTEMPTS):
+        assert run(FakeSource(new), client, store, file_store, settings, monkeypatch).new_count == 0
+        assert (store.by_key("7").status, store.by_key("7").attempts) == ("FAILED", attempt)
+    assert run(FakeSource(new), client, store, file_store, settings, monkeypatch).new_count == 1  # 마지막 시도
+    assert store.events[-1]["payload"]["files"] == []
 
 
 def test_old_posts_are_not_opened(client, store, file_store, settings, monkeypatch):

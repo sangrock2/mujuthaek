@@ -2,7 +2,19 @@ from datetime import date
 
 import pytest
 
-from mujuthaek_collector.core.classify import CORRECTION, EXCLUDED, FOLLOW_UP, NOTICE, classify, correction_base, norm_name, same_notice, title_ref
+from mujuthaek_collector.core.classify import (
+    CORRECTION,
+    EXCLUDED,
+    FOLLOW_UP,
+    NOTICE,
+    classify,
+    correction_base,
+    norm_name,
+    qualifiers,
+    same_notice,
+    same_qualifiers,
+    title_ref,
+)
 
 
 @pytest.mark.parametrize(
@@ -38,10 +50,22 @@ from mujuthaek_collector.core.classify import CORRECTION, EXCLUDED, FOLLOW_UP, N
         ("율동위드유아파트 주거약자용 예비입주자 순번 결과 공고", FOLLOW_UP),
         ("대전평촌일반산업단지 입주협약기업 입주계약심사결과 공고", EXCLUDED),
         ("동인천역 파크푸르지오 영구임대주택 예비자 동호배정 결과 공고(26.1.30.)", EXCLUDED),
+        # 2026-11-10 코드 검토: 후속 안내 단어가 무엇을 정정했는지 말할 뿐이면 정정공고 (예전엔 후속 안내로 분류)
+        ("[정정공고] 2026년 행복주택 입주자 모집공고(당첨자 발표일 변경)", CORRECTION),
+        ("2026년 국민임대 예비입주자 모집공고 [정정] 서류제출 대상자 발표 일정 연기", CORRECTION),
+        ("[정정] 2026년 매입임대주택(청년형) 예비입주자 선정 안내", FOLLOW_UP),  # 정정한 후속 안내
+        ("[정정] 행복주택 입주자 모집공고 당첨자 발표", FOLLOW_UP),
     ],
 )
 def test_classify(title, kind):
     assert classify(title) == kind
+
+
+def test_qualifiers_tell_apart_blocks_with_the_same_name():
+    a2, a3 = qualifiers("행복주택 입주자 모집공고(A-2블록) [정정공고]"), qualifiers("행복주택 입주자 모집공고(A-3블록)")
+    assert a2 == frozenset({"A2블록"}) and not same_qualifiers(a2, a3)
+    assert same_qualifiers(a2, qualifiers("행복주택 입주자 모집공고(A-2블록)(수요자맞춤형)"))  # 꾸밈말을 더하거나 빼도 같은 공고
+    assert same_qualifiers(frozenset(), a3)
 
 
 def test_follow_up_points_to_original_notice():

@@ -152,7 +152,10 @@ class FakeClient:
         self.requested.append(url)
         if url in self.rejected:
             raise FileRejected("robots.txt가 막은 주소")
-        return self.files[url]
+        data = self.files[url]
+        if isinstance(data, Exception):  # 받기 오류 흉내 (연결 끊김 등)
+            raise data
+        return data
 
     def close(self):
         pass

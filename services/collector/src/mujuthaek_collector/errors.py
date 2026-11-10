@@ -1,4 +1,4 @@
-"""수집기 오류 세 가지. 오류 종류에 따라 반응이 달라요."""
+"""수집기 오류 네 가지. 오류 종류에 따라 반응이 달라요."""
 
 
 class CollectorError(Exception):
@@ -11,6 +11,10 @@ class BlockedError(CollectorError):
 
 class FileRejected(CollectorError):
     """이 파일은 받지 않아요: robots.txt가 막은 경로로 넘겨짐, 크기 초과, 파일 대신 웹페이지가 옴."""
+
+
+class FileUnavailable(CollectorError):
+    """첨부를 잠시 받지 못했어요(연결 오류·5xx). 그 파일 없이 새 버전을 만들지 않고 다음에 다시 받아요."""
 
 
 class ParseError(CollectorError):
