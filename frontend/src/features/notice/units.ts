@@ -63,6 +63,7 @@ export function toUnit(
     area: u.exclusiveM2 === null ? "면적 확인" : `${u.exclusiveM2}㎡`,
     floor: u.floor ?? "층 확인",
     deposit: u.depositWon === null ? "원문 확인" : formatWon(u.depositWon),
+    depositWon: u.depositWon,
     rent: u.rentWon === null ? "월세 원문 확인" : `월 ${formatWon(u.rentWon)}`,
     // 가격 대상이 둘 이상일 때만 (하나면 deposit·rent와 같아요)
     prices:
@@ -71,11 +72,13 @@ export function toUnit(
             target: p.targets.join("·") || "모든 신청자",
             deposit: p.depositWon === null ? "원문 확인" : formatWon(p.depositWon),
             rent: p.rentWon === null ? "월세 원문 확인" : `월 ${formatWon(p.rentWon)}`,
+            depositWon: p.depositWon,
           }))
         : undefined,
     station: "",
     ok: Boolean(judgment?.mineTypes.includes(type)),
     otherTarget: judgment ? "다른 대상" : "판정 전",
+    // 주택형 값은 같은 주택형 보증금 하나로 계산한 값이라, 고른 집은 그 집 보증금으로 다시 계산해요 (UnitPrep)
     prep: judgment?.prepByType[type] ?? "확인 필요",
     siteId: u.siteId ?? undefined,
     lifeScore: site?.lifeScore,

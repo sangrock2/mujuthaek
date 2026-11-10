@@ -38,8 +38,8 @@ export type NoticeUnit = MapPoint & {
   /** 호 표기 (예: A동 214호). 단지별로 묶어 보여줄 때 */
   label?: string;
   siteName?: string;
-  /** 가격 대상이 여럿이면 대상별 보증금·월세 */
-  prices?: { target: string; deposit: string; rent: string }[];
+  /** 가격 대상이 여럿이면 대상별 보증금·월세. depositWon은 준비할 돈 계산용 (실제 API에서만) */
+  prices?: { target: string; deposit: string; rent: string; depositWon?: number | null }[];
   /** 모바일 지도 말풍선용 짧은 이름 */
   short?: string;
   addr?: string;
@@ -48,6 +48,8 @@ export type NoticeUnit = MapPoint & {
   floor: string;
   elevator?: string;
   deposit: string;
+  /** 보증금 (원). 준비할 돈을 이 집 보증금으로 계산할 때 써요 (실제 API에서만, 모르면 null) */
+  depositWon?: number | null;
   rent: string;
   station: string;
   /** 모바일 목록용 짧은 표기 */
