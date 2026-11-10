@@ -10,7 +10,7 @@ import { MBackHeader, MBottomActions } from "@/components/layout/MBackHeader";
 import { MPage } from "@/components/layout/Responsive";
 import { EligibilityCard } from "@/components/notice/EligibilityCard";
 import { LifeCard } from "@/components/notice/LifeCard";
-import { NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
+import { NoticeHeldBanner, NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
 import { NoticeTags } from "@/components/notice/NoticeTags";
 import { PdfViewer } from "@/components/notice/PdfViewer";
 import { MRankCard } from "@/components/notice/RankCard";
@@ -370,6 +370,7 @@ export function MDetail({ id }: { id: string }) {
 
         {n.ranking && <MRankCard ranking={n.ranking} />}
 
+        <NoticeHeldBanner doc={doc} variant="mobile" />
         <NoticeToc doc={doc} variant="mobile" />
         <NoticeSections doc={doc} variant="mobile" onOpenPage={pdfUrl ? openOriginal : undefined} />
 

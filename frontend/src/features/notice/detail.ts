@@ -12,6 +12,8 @@ import type {
   NoticeDoc,
   NoticeHousingType,
   NoticeDocumentGroup,
+  NoticeFollowUp,
+  NoticeHeldPart,
   NoticeScheduleItem,
   NoticeSelectionKind,
   NoticeTextItem,
@@ -119,7 +121,16 @@ export type ApiNoticeDetail = {
     url: string | null;
   }[];
   files: { name: string; url: string }[];
+  /** 원문 확인 전까지 화면에서 뺀 항목. section은 추출 결과의 섹션 이름(schedules·supplyGroups 등), description은 내부 검사 문구라 화면에 쓰지 않아요 */
+  heldItems?: { section: string | null; target: string | null; description: string | null }[];
   areaSummaries: { siteId: string; kind: "LIVING" | "COMMERCIAL"; score: number }[];
+  /** 원래 공고에 붙은 후속 안내 (당첨자 발표·서류 제출, 일정만 바꾼 짧은 정정 등). 공고 버전과 따로 붙어요 */
+  followUps?: {
+    title: string;
+    detailUrl: string | null;
+    postedOn: string | null;
+    schedules: ApiSchedule[];
+  }[];
   hasUnits: boolean;
 };
 
@@ -324,6 +335,56 @@ function housingOf(d: ApiNoticeDetail, sites: ApiNoticeDetail["sites"]): NoticeD
   }));
 }
 
+/** 일정 목록 → 화면 값, 날짜순 (날짜 없는 일정은 뒤로). id가 비어 오면 순서로 채워요(목록 key가 겹치지 않게) */
+function schedulesOf(list: ApiSchedule[], today: string, idPrefix: string): NoticeScheduleItem[] {
+  return list
+    .map((s, i) => ({ ...scheduleItem(s, today), id: s.id || `${idPrefix}-${i}` }))
+    .sort((a, b) => (a.start ?? "9999").localeCompare(b.start ?? "9999"));
+}
+
+/**
+ * 보류 섹션(추출 결과 이름) → 화면 섹션과 알림에 쓸 이름. 안내(guidance)는 꼭 확인하세요·입주·문의처·신청 방법으로 나뉘는데
+ * 보류한 항목은 응답에서 빠져 어느 쪽인지 알 수 없어 섹션 표시 없이 이름만 알려요
+ */
+const heldPartOf = new Map<string, NoticeHeldPart>([
+  ["notice", { key: null, label: "공고 정보" }],
+  ["schedules", { key: "schedule", label: "일정" }],
+  ["supplyGroups", { key: "housing", label: "주택·임대조건" }],
+  ["locations", { key: "housing", label: "주택 위치" }],
+  ["eligibility", { key: "eligibility", label: "신청 자격" }],
+  ["selectionRules", { key: "selection", label: "선정 방식" }],
+  ["requiredDocuments", { key: "apply", label: "서류" }],
+  ["guidance", { key: null, label: "안내·문의처" }],
+  ["documents", { key: null, label: "첨부 파일" }],
+]);
+
+/**
+ * 원문과 다시 확인하는 내용이 있는 곳 (같은 이름은 한 번, 모르는 섹션은 「그 밖의 내용」). 보류(heldItems) 말고도 확인 중으로 온
+ * 자격 조건(inReview)이 있으면 신청 자격을 넣어요
+ */
+function heldParts(d: ApiNoticeDetail): NoticeHeldPart[] {
+  const parts = new Map<string, NoticeHeldPart>();
+  for (const h of d.heldItems ?? []) {
+    const part = heldPartOf.get(h.section ?? "") ?? { key: null, label: "그 밖의 내용" };
+    parts.set(part.label, part);
+  }
+  if (d.conditions.some((c) => c.inReview)) {
+    const part = heldPartOf.get("eligibility")!;
+    parts.set(part.label, part);
+  }
+  return [...parts.values()];
+}
+
+function followUpsOf(d: ApiNoticeDetail, today: string): NoticeFollowUp[] {
+  return (d.followUps ?? []).map((f, i) => ({
+    id: `follow-up-${i}`,
+    title: f.title,
+    postedOn: dayOf(f.postedOn),
+    url: f.detailUrl,
+    schedule: schedulesOf(f.schedules, today, `follow-up-${i}-schedule`),
+  }));
+}
+
 function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
   const { header: h } = d;
   const guidance = d.guidance ?? [];
@@ -376,13 +437,13 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
       id: c.id,
       category: categoryOf[c.category ?? ""] ?? "OTHER",
       text: c.description ?? c.originalText ?? "",
-      detail: c.inReview ? "원문과 다시 확인하는 중이에요" : undefined,
+      // 예외 조건(detail)과 따로: 예전엔 detail에 넣어 「예외 · 원문과 다시 확인하는 중이에요」로 보였어요
+      checking: c.inReview || undefined,
     })),
     housing: housingOf(d, sites),
-    // 날짜순 (날짜 없는 일정은 뒤로)
-    schedule: d.schedules
-      .map((s) => scheduleItem(s, today))
-      .sort((a, b) => (a.start ?? "9999").localeCompare(b.start ?? "9999")),
+    schedule: schedulesOf(d.schedules, today, "schedule"),
+    followUps: followUpsOf(d, today),
+    held: heldParts(d),
     apply: {
       // 안내의 신청 방법 문장 (일정 설명은 일정 칸에 있어서 다시 쓰지 않아요)
       method,
