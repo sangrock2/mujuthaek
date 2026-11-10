@@ -379,3 +379,16 @@ def test_recheck_reads_later_list_pages_even_when_the_first_is_all_known(client,
     source.bodies["2"] = "접수 10.21 ~ 10.29 (연장)"
     assert run(source, client, store, file_store, settings, monkeypatch, recheck=True).new_count == 1
     assert store.by_key("2").latest_version == 2 and store.versions[-1].body_text == "접수 10.21 ~ 10.29 (연장)"
+
+
+def test_a_follow_up_listed_before_its_original_is_linked_once_the_list_is_read(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 목록은 최신 글이 먼저라 처음 수집·새 출처에서 후속 안내가 원공고보다 먼저 등록돼 SKIPPED로 남고, 다음 회차엔 이미 있는
+    글이라 다시 분류하지 않아 영영 빠졌어요. 목록을 다 읽은 뒤 원공고를 다시 찾아 이어요."""
+    rows = [
+        ("52", "2026년 행복주택 입주자 모집공고(2026. 10. 1.) 서류심사 대상자 발표", date(2026, 10, 10)),
+        ("51", "2026년 행복주택 입주자 모집공고", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    follow_up = store.by_key("52")
+    assert follow_up.parent_post_id == store.by_key("51").id and follow_up.status == "DONE"

@@ -27,7 +27,7 @@ from mujuthaek_collector.core.documents.text import extract_text
 from mujuthaek_collector.core.file_store import FileStore, content_type, object_key, stored_until, text_key
 from mujuthaek_collector.core.files import FileRef, pick_notice_files, pick_unit_lists, unclear_notice
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS, build_collected_event
-from mujuthaek_collector.core.storage import IGNORED, MAX_ATTEMPTS, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
+from mujuthaek_collector.core.storage import IGNORED, MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
 from mujuthaek_collector.core.versioning import content_hash, list_hash, sha256_hex
 from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, FileUnavailable, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, Fetcher, ListItem, Source
@@ -133,6 +133,7 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
         if (all_known and not recheck) or (dates and min(dates) < cutoff) or not items:
             break
 
+    relink_follow_ups(ctx, cutoff)
     for post in store.queued_posts(source.code, board.key, settings.detail_limit):
         process_safely(ctx, post)
 
@@ -157,15 +158,11 @@ def register(ctx: Context, item: ListItem, cutoff: date) -> None:
         if parent is not None:
             status = PENDING
         else:
-            reason = "원래 모집공고를 찾지 못한 후속 안내"
+            reason = ORPHAN_FOLLOW_UP  # 목록 읽기 뒤에 다시 찾아요(relink_follow_ups)
     else:
         reason = "모집공고가 아닌 글"
     if status == PENDING:
-        # 처음 수집 개수 제한: 고르기 전이면 HELD, 기준일보다 오래된 글이면 IGNORED (core/intake.py).
-        # 쓰지 않는 원래 공고의 정정·후속 안내도 쓰지 않아요
-        status = IGNORED if parent and parent.status == IGNORED else intake.open_status(store, intake.post_group(source.code), item.posted_on)
-        if status == IGNORED:
-            reason = intake.IGNORED_REASON
+        status, reason = open_status(ctx, parent, item.posted_on)
     store.insert_post(
         PostRow(
             id=uuid7(),
@@ -184,6 +181,27 @@ def register(ctx: Context, item: ListItem, cutoff: date) -> None:
             parent_post_id=parent.id if parent else None,
         )
     )
+
+
+def open_status(ctx: Context, parent: PostRow | None, posted_on: date | None) -> tuple[str, str | None]:
+    """열 글의 상태와 사유. 처음 수집 개수 제한: 고르기 전이면 HELD, 기준일보다 오래된 글이면 IGNORED (core/intake.py).
+    쓰지 않는 원래 공고의 정정·후속 안내도 쓰지 않아요."""
+    status = IGNORED if parent and parent.status == IGNORED else intake.open_status(ctx.store, intake.post_group(ctx.source.code), posted_on)
+    return status, intake.IGNORED_REASON if status == IGNORED else None
+
+
+def relink_follow_ups(ctx: Context, cutoff: date) -> int:
+    """원공고를 찾지 못해 SKIPPED로 둔 최근 후속 안내를 다시 원공고에 이어요. 목록은 최신 글이 먼저라, 처음 수집·새 출처·원공고가 뒤쪽 목록에 있을 때
+    후속 안내가 원공고보다 먼저 등록돼 영영 빠졌어요(2026-11-10 재검토: 다음 회차엔 이미 있는 글이라 다시 분류하지 않았음). 이은 수."""
+    linked = 0
+    for post in ctx.store.orphan_follow_ups(ctx.source.code, cutoff):
+        parent = find_followup_parent(ctx.store, ctx.source.code, post.title)
+        if parent is None:
+            continue
+        status, reason = open_status(ctx, parent, post.posted_on)
+        ctx.store.link_follow_up(post.id, parent.id, status, reason)
+        linked += 1
+    return linked
 
 
 def find_followup_parent(store: Store, source_code: str, title: str) -> PostRow | None:

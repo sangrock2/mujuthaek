@@ -158,3 +158,15 @@ def test_policy_flaky_attachment_carries_the_earlier_file(pg, monkeypatch):
         assert store.conn.execute("select status, attempts, latest_version from raw_policies").fetchone() == ("DONE", 0, 1)
     finally:
         store.close()
+
+
+def test_follow_up_listed_before_its_original_is_linked(pg, client, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 목록이 최신 글 먼저라 원공고보다 먼저 등록된 후속 안내가 SKIPPED로 남았어요. 목록을 다 읽은 뒤 다시 이어요(실제 표)."""
+    rows = [
+        ("52", "2026년 행복주택 입주자 모집공고(2026. 10. 1.) 서류심사 대상자 발표", date(2026, 10, 10)),
+        ("51", "2026년 행복주택 입주자 모집공고", date(2026, 10, 1)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    linked = pg.conn.execute("select f.status, p.post_key from raw_posts f join raw_posts p on p.id = f.parent_post_id where f.post_key = '52'").fetchone()
+    assert linked == ("DONE", "51")

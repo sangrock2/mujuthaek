@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from uuid import UUID
 
-from mujuthaek_collector.core.storage import MAX_ATTEMPTS, BoardState, Intake, NewVersion, PostRow
+from mujuthaek_collector.core.storage import MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, BoardState, Intake, NewVersion, PostRow
 from mujuthaek_collector.errors import FileRejected
 from mujuthaek_platform.ids import uuid7
 
@@ -91,6 +91,23 @@ class MemoryStore:
             ):
                 p.status, count = "PENDING", count + 1
         return count
+
+    def orphan_follow_ups(self, source_code, since):
+        return [
+            p
+            for p in self.posts.values()
+            if p.source_code == source_code
+            and p.kind == "FOLLOW_UP"
+            and p.status == "SKIPPED"
+            and p.parent_post_id is None
+            and p.last_error == ORPHAN_FOLLOW_UP
+            and (p.posted_on is None or p.posted_on >= since)
+        ]
+
+    def link_follow_up(self, post_id, parent_post_id, status, reason):
+        post = self.posts[post_id]
+        if post.status == "SKIPPED" and post.parent_post_id is None:
+            post.parent_post_id, post.status, post.last_error = parent_post_id, status, reason
 
     def latest_hash(self, post_id):
         mine = [v for v in self.versions if v.post.id == post_id]
