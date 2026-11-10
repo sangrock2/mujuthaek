@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import kr.mujuthaek.api.common.pagination.CursorKey;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import kr.mujuthaek.api.notice.dto.request.NoticeListFilter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -72,12 +73,25 @@ public class NoticeQueries {
       if (!f.sigunguCodes().isEmpty()) {
         sql.append(
             " or r.sigungu_code in (:sigungu)"
-                + " or (r.whole and r.sigungu_code in (:sigunguSido, :sigunguCity))");
+                + " or (r.whole and r.sigungu_code in (:sigunguSido))");
         params.addValue("sigungu", f.sigunguCodes());
         params.addValue(
             "sigunguSido", f.sigunguCodes().stream().map(c -> c.substring(0, 2) + "000").toList());
-        params.addValue(
-            "sigunguCity", f.sigunguCodes().stream().map(c -> c.substring(0, 4) + "0").toList());
+        // 일반구가 있는 시(CityDistricts): 구를 고르면 시 전체 공고도, 시를 고르면 그 구 공고도 걸려요. 예전엔 앞 4자리 + 0을 시로 보아 증평군을
+        // 고르면 영동군 전체 공고가 나오고, 수원시를 고르면 구 공고가 빠졌어요(2026-11-10 재검토)
+        List<String> cityOfDistrict =
+            f.sigunguCodes().stream().map(CityDistricts::cityOf).filter(c -> c != null).toList();
+        if (!cityOfDistrict.isEmpty()) {
+          sql.append(" or (r.whole and r.sigungu_code in (:sigunguCity))");
+          params.addValue("sigunguCity", cityOfDistrict);
+        }
+        List<String> chosenCities =
+            f.sigunguCodes().stream().filter(CityDistricts::isCity).toList();
+        if (!chosenCities.isEmpty()) {
+          sql.append(
+              " or (left(r.sigungu_code, 4) in (:cityPrefix) and substr(r.sigungu_code, 5, 1) <> '0')");
+          params.addValue("cityPrefix", chosenCities.stream().map(c -> c.substring(0, 4)).toList());
+        }
       }
       sql.append(")))");
     }

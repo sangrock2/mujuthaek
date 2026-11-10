@@ -66,6 +66,11 @@ class SpaceSearchServiceTest {
     // 공간이 시도 전체면 그 시도의 시군구를 골라도 걸려요
     assertThat(SpaceSearchService.inRegions(List.of("1100000000"), List.of("11440"))).isTrue();
     assertThat(SpaceSearchService.inRegions(List.of("1100000000"), List.of("26110"))).isFalse();
+    // 2026-11-10 재검토: 일반구가 있는 시를 고르면 그 구 공간도, 구를 고르면 시 전체 공간도 걸려요(수원시를 고르면 구 공간이 빠졌음)
+    assertThat(SpaceSearchService.inRegions(List.of("4111112300"), List.of("41110"))).isTrue();
+    assertThat(SpaceSearchService.inRegions(List.of("4111000000"), List.of("41111"))).isTrue();
+    assertThat(SpaceSearchService.inRegions(List.of("4374510100"), List.of("43740"))).isFalse();
+    assertThat(SpaceSearchService.inRegions(List.of("4374000000"), List.of("43745"))).isFalse();
   }
 
   @Test

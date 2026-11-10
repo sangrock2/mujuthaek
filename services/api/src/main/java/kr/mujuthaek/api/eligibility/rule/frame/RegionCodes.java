@@ -2,7 +2,7 @@ package kr.mujuthaek.api.eligibility.rule.frame;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import kr.mujuthaek.api.eligibility.rule.Verdict;
 
 /**
@@ -13,15 +13,6 @@ import kr.mujuthaek.api.eligibility.rule.Verdict;
 public final class RegionCodes {
 
   private static final int[] LEVEL_ENDS = {2, 5, 8, 10};
-
-  /**
-   * 일반구가 있는 시(법정동코드 2026-09-29, 폐지 안 된 것). 시군구 코드 끝자리가 0인 군도 다음 코드가 다른 군일 수 있어(영동군 43740 다음 증평군
-   * 43745) 모양으로 정하지 않고 목록으로 둡니다: 모양으로 정했더니 증평 주민이 「영동군 거주」 조건에서 충족이 됐어요(2026-11-10 재검토).
-   */
-  static final Set<String> CITIES_WITH_DISTRICTS =
-      Set.of(
-          "41110", "41130", "41170", "41190", "41270", "41280", "41460", "41590", "43110", "44130",
-          "47110", "48120", "52110");
 
   private RegionCodes() {}
 
@@ -57,15 +48,12 @@ public final class RegionCodes {
   }
 
   /**
-   * 일반구가 있는 시(CITIES_WITH_DISTRICTS, 예: 수원시 41110)와 그 시의 구·동(앞 네 자리가 같고 시군구 끝자리가 0이 아님, 예: 장안구
-   * 41111). 구는 시의 코드 범위 안에서 붙어 앞부분이 시와 달라요: 앞부분 일치만 보면 「수원시 거주」 조건에 장안구 주민이 불충족이 됐어요(2026-11-10 코드
-   * 검토).
+   * 일반구가 있는 시(공통 목록 CityDistricts, 예: 수원시 41110)와 그 시의 구·동(예: 장안구 41111). 구는 시의 코드 범위 안에서 붙어 앞부분이
+   * 시와 달라요: 앞부분 일치만 보면 「수원시 거주」 조건에 장안구 주민이 불충족이 됐어요(2026-11-10 코드 검토). 시는 모양(끝자리 0)이 아니라 목록으로
+   * 정해요(재검토: 영동군 43740 조건에 증평군 43745 주민이 충족이 됐음).
    */
   static boolean cityHasDistrict(String city, String place) {
-    return CITIES_WITH_DISTRICTS.contains(city)
-        && place.length() >= 5
-        && place.charAt(4) != '0'
-        && place.startsWith(city.substring(0, 4));
+    return city.length() == 5 && CityDistricts.inCity(city, place);
   }
 
   /** 0으로 채운 하위 단계를 뺀 앞부분. 예: 1100000000 → 11, 4311100000 → 43111, 52730 → 52730. */

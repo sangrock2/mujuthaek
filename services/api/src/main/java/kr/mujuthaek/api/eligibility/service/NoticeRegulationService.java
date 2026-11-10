@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.UUID;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
+import kr.mujuthaek.api.common.region.CityDistricts;
 import kr.mujuthaek.api.eligibility.dto.response.NoticeRegulationResponse;
 import kr.mujuthaek.api.eligibility.repository.CriteriaAdminStore;
 import kr.mujuthaek.api.eligibility.repository.CriteriaAdminStore.RegulatedArea;
@@ -93,8 +94,9 @@ public class NoticeRegulationService {
       for (RegulatedArea area : active) {
         String target = area.regionCode();
         boolean sameSido = target.substring(0, 2).equals(sigungu.substring(0, 2));
-        boolean cityOfDistrict = isCity(target) && sameCity(target, sigungu);
-        boolean districtOfCity = isCity(sigungu) && sameCity(target, sigungu) && !isCity(target);
+        // 일반구가 있는 시는 공통 목록으로(재검토: 끝자리 0 모양으로 정해 증평군 공고가 영동군 규제지역에 걸렸음)
+        boolean cityOfDistrict = CityDistricts.inCity(target, sigungu);
+        boolean districtOfCity = CityDistricts.inCity(sigungu, target);
         boolean hit =
             target.equals(sigungu)
                 || (target.endsWith("000") && sameSido)
@@ -116,16 +118,6 @@ public class NoticeRegulationService {
       }
     }
     return out;
-  }
-
-  /** 시도 전체(xx000)가 아니고 끝자리가 0인 시군구(일반구를 거느릴 수 있는 시). */
-  private static boolean isCity(String code) {
-    return code.length() == 5 && code.endsWith("0") && !code.endsWith("000");
-  }
-
-  /** 시와 그 일반구는 앞 4자리가 같아요(41110 수원시 · 41117 영통구). */
-  private static boolean sameCity(String a, String b) {
-    return !a.equals(b) && a.substring(0, 4).equals(b.substring(0, 4));
   }
 
   static List<String> guidance(List<NoticeRegulationResponse.Area> areas) {
