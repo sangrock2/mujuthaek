@@ -36,6 +36,9 @@ REF = re.compile(r"(?P<name>.+?)\s*\(\s*(?:공고일?\s*:?\s*)?[‘'’]?(?P<y>\
 # 후속 안내 단어 바로 뒤(같은 마디 안)의 바뀜 낱말: 「당첨자 발표일 변경」은 후속 안내가 아니라 무엇을 정정했는지예요
 CHANGED = re.compile(r"[^,·\])]{0,12}?(?:변경|연기|연장|조정)")
 QUALIFIER = re.compile(r"[\[(]([^\])]*)[\])]")
+# 같은 공고를 가르지 않는 괄호: 공고일(「(2026.10.01 공고)」)과 바뀐 내용(「(당첨자 발표일 변경)」「(재공고)」). 이것까지 견주면 꾸밈말이 다른
+# 원래 공고와 정정공고가 끊겼어요(2026-11-10 재검토). 블록·단지·동네·회차처럼 공고를 가르는 말만 남겨요
+NOT_IDENTITY = re.compile(r"\d{2,4}\s*[._]\s*\d{1,2}\s*[._]\s*\d{1,2}|변경|연기|연장|조정|수정|취소|재\s*공고|공고\s*일")
 
 
 def out_of_scope(title: str) -> bool:
@@ -47,15 +50,17 @@ def out_of_scope(title: str) -> bool:
 def classify(title: str) -> str:
     if out_of_scope(title):
         return EXCLUDED
+    follow_ups = list(FOLLOWUP.finditer(title))
+    # 「[정정공고] … 모집공고(당첨자 발표일 변경)」: 후속 안내 단어가 바뀐 내용을 말할 뿐이면 정정공고예요.
+    # 예전엔 후속 안내 검사가 먼저라 정정이 원래 공고에 반영되지 않았어요(2026-11-10 코드 검토). 공고일 뒤에 바뀐 내용을 적은 제목
+    # (「[정정공고] … 모집공고(2026.10.01) 당첨자 발표일 변경」)도 같은 검사로 봐요(재검토: 공고일 검사가 먼저라 후속 안내로 남았음)
+    correction = bool(CORRECTION_MARK.search(title) and RECRUIT.search(title)) and all(CHANGED.match(title, m.end()) for m in follow_ups)
     ref = REF.search(title)
     # 공고일 뒤의 정정 표시(「…모집공고(2026.10.01) 정정공고」)는 후속 안내 글이 아니에요(2026-11-10 코드 검토: 후속 안내로 분류됐음)
     after = CORRECTION_MARK.sub("", title[ref.end() :]) if ref else ""
-    if ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", after)) >= 2:
+    if not correction and ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", after)) >= 2:
         return FOLLOW_UP  # '…모집공고(2026. 6. 25.) 면접평가 대상자 발표'처럼 공고일 뒤에 글이 붙으면 후속 안내
-    follow_ups = list(FOLLOWUP.finditer(title))
-    if CORRECTION_MARK.search(title) and RECRUIT.search(title) and all(CHANGED.match(title, m.end()) for m in follow_ups):
-        # 「[정정공고] … 모집공고(당첨자 발표일 변경)」: 후속 안내 단어가 바뀐 내용을 말할 뿐이면 정정공고예요.
-        # 예전엔 후속 안내 검사가 먼저라 정정이 원래 공고에 반영되지 않았어요(2026-11-10 코드 검토)
+    if correction:
         return CORRECTION
     if follow_ups:
         return FOLLOW_UP
@@ -103,8 +108,8 @@ def correction_base(title: str) -> str:
 
 
 def qualifiers(title: str) -> frozenset[str]:
-    """괄호 안 구분 말(블록·단지·유형 등, 정정 표시는 뺌). norm_name은 이걸 지워서 따로 맞춰 봐요."""
-    found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(CORRECTION_MARK.sub("", title)))
+    """괄호 안 구분 말(블록·단지·유형 등. 정정 표시·공고일·바뀐 내용은 뺌). norm_name은 이걸 지워서 따로 맞춰 봐요."""
+    found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(CORRECTION_MARK.sub("", title)) if not NOT_IDENTITY.search(q))
     return frozenset(q for q in found if q)
 
 

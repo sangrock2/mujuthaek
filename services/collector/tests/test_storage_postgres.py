@@ -88,3 +88,35 @@ def test_failed_post_and_expired_files(pg, client, file_store, settings, monkeyp
     assert len(expired) == 1
     pg.mark_file_deleted(expired[0][0])
     assert pg.expired_files(date(2030, 1, 1)) == []
+
+
+def test_flaky_attachment_carries_the_earlier_file_and_spent_posts_are_requeued(pg, client, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 첨부를 끝내 못 받으면 이전 버전 것을 이어 쓰고(원본·글자·보관 기한 그대로), 성공하면 실패 횟수를 되돌리고,
+    새벽 정정 확인은 횟수를 다 쓴 FAILED 글도 다시 열어요."""
+    import httpx
+
+    from mujuthaek_collector.core.storage import MAX_ATTEMPTS
+
+    rows = ROWS[:1]
+    pages(client, rows)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    client.files["https://a.kr/f/1.pdf"] = httpx.ConnectError("연결 끊김")
+    client.pages["https://a.kr/view?id=1"] = "정정된 본문"
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch, recheck=True)
+    run(FakeSource(rows), client, pg, file_store, settings, monkeypatch)
+    assert pg.conn.execute("select status, attempts from raw_posts where post_key = '1'").fetchone() == ("FAILED", 2)
+    assert run(FakeSource(rows), client, pg, file_store, settings, monkeypatch).new_count == 1
+    files = pg.conn.execute(
+        "select v.version, f.s3_key, f.stored_until, t.text is not null from raw_files f join raw_post_versions v on v.id = f.version_id "
+        "left join raw_texts t on t.file_id = f.id order by v.version"
+    ).fetchall()
+    assert len(files) == 2 and files[0][1:] == files[1][1:] and files[1][3]
+    assert pg.conn.execute("select status, attempts from raw_posts where post_key = '1'").fetchone() == ("DONE", 0)
+
+    post_id = pg.find_post("dcco", "1").id
+    pg.conn.execute("update raw_posts set attempts = 2 where id = %s", (post_id,))
+    pg.mark_done(post_id)
+    assert pg.conn.execute("select attempts from raw_posts where id = %s", (post_id,)).fetchone() == (0,)
+    pg.conn.execute("update raw_posts set status = 'FAILED', attempts = %s where id = %s", (MAX_ATTEMPTS, post_id))
+    assert pg.requeue_open_posts("dcco", TODAY, 60) == 1
+    assert pg.conn.execute("select status from raw_posts where id = %s", (post_id,)).fetchone() == ("PENDING",)

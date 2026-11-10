@@ -7,11 +7,12 @@ run_source
       └─ 밀린 글이 없으면 목록 1페이지 해시 저장 (다음 회차에 같으면 바로 끝)
 
 오류 반응: BlockedError → 그 글 FAILED + 출처 회차 중단(BLOCKED), ParseError·HTTP 오류 → 그 글만 FAILED, FileRejected → 그 파일만 건너뜀,
-  FileUnavailable(첨부 일시 오류) → 새 버전을 만들지 않음(이전 버전이 있으면 그대로, 처음이면 FAILED로 다시 시도)
+  FileUnavailable(첨부 일시 오류) → 새 버전을 만들지 않고 FAILED로 다시 시도. 마지막 시도엔 이전 버전의 같은 첨부를 이어 쓰고(처음 글은 그 파일 없이) 저장
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -118,8 +119,11 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
         for item in items:
             post = store.find_post(source.code, item.post_key)
             if post is not None:
-                # 목록 한 줄도 새로 둬요: 상세 처리는 저장한 목록 값(본문을 목록 JSON에 싣는 출처, 목록 첨부·상태)을 쓰므로
-                store.update_list_fields(post.id, item.list_status, item.deadline_on, item.to_json())
+                # 목록 한 줄도 새로 둬요: 상세 처리는 저장한 목록 값(본문을 목록 JSON에 싣는 출처, 목록 첨부·상태)을 쓰므로.
+                # 단 그 글을 등록한 게시판의 줄일 때만: LH는 두 게시판(분양임대·마이홈)이 같은 글 번호를 써, 마이홈 줄로 덮으면
+                # 상세 처리가 다른 게시판의 주소·값으로 공고를 열었어요(2026-11-10 재검토)
+                same_board = post.board_key == board.key
+                store.update_list_fields(post.id, item.list_status, item.deadline_on, item.to_json() if same_board else None)
                 continue
             all_known = False
             register(ctx, item, cutoff)
@@ -195,6 +199,7 @@ def find_correction_parent(store: Store, source_code: str, title: str, posted_on
     if not base:
         return None
     marks = cls.qualifiers(title)
+    found = []
     for post in store.recent_notices(source_code):
         if posted_on and post.posted_on and post.posted_on > posted_on:
             continue
@@ -202,8 +207,11 @@ def find_correction_parent(store: Store, source_code: str, title: str, posted_on
         # 이름 비교는 괄호를 지우므로 괄호 안 구분(블록·단지)도 맞춰 봐요.
         # 예전엔 「(A-2블록) 정정」이 같은 이름의 「(A-3블록)」 공고에 붙었어요(2026-11-10 코드 검토)
         if own and (own == base or own in base or base in own) and cls.same_qualifiers(marks, cls.qualifiers(post.title)):
-            return post
-    return None
+            found.append(post)
+    # 제목에 원래 공고일이 있으면(「…모집공고(2026.10.01) 당첨자 발표일 변경」) 그날 공고를 먼저, 없으면 가장 최근 것
+    ref = cls.title_ref(title)
+    dated = next((post for post in found if ref and post.posted_on == ref.posted_on), None)
+    return dated or (found[0] if found else None)
 
 
 # ── 글 하나 ────────────────────────────────────────────────────
@@ -217,12 +225,11 @@ def process_safely(ctx: Context, post: PostRow) -> None:
         ctx.store.mark_failed(post.id, f"BlockedError: {error}")
         raise
     except FileUnavailable as error:
-        if post.latest_version:
-            ctx.store.mark_done(post.id)  # 이전 버전을 그대로 두고 다음 정정 확인에서 다시 봐요
-            ctx.warn(f"[{post.post_key}] {post.title[:40]} — {error} 이번 확인은 건너뛰고 이전 버전을 둬요")
-        else:
-            ctx.store.mark_failed(post.id, f"FileUnavailable: {error}")
-            ctx.warn(f"[{post.post_key}] {post.title[:40]} — {error} 다음 회차에 다시 받아요")
+        # 이전 버전이 있어도 실패로 세요: 예전엔 DONE으로 두어 첨부가 계속 안 받아지면 본문 정정도 영영 새 버전이 되지 않았어요(2026-11-10 재검토).
+        # 마지막 시도에선 받지 못한 첨부를 이전 버전 것으로 이어 써서 본문이 바뀌었을 때만 새 버전이 돼요(process_post)
+        ctx.store.mark_failed(post.id, f"FileUnavailable: {error}")
+        kept = " 이전 버전은 그대로 둬요." if post.latest_version else ""
+        ctx.warn(f"[{post.post_key}] {post.title[:40]} — {error} 다음 회차에 다시 받아요.{kept}")
     except (ParseError, httpx.HTTPError) as error:
         ctx.store.mark_failed(post.id, f"{type(error).__name__}: {error}")
         ctx.warn(f"[{post.post_key}] {post.title[:40]} — 상세를 읽지 못했어요: {error}")
@@ -247,17 +254,40 @@ def process_post(ctx: Context, post: PostRow) -> bool:
     candidates = detail.files or item.files
     referer = item.detail_url or item.referer
 
-    saved: list[tuple[SavedFile, bytes]] = []  # (DB에 저장할 정보, S3에 올릴 원본)
+    saved: list[tuple[SavedFile, bytes | None]] = []  # (DB에 저장할 정보, S3에 올릴 원본. 이어 쓴 이전 첨부는 None)
     notice_name, notice_text = None, None
     keep_until = stored_until(post.title, post.deadline_on, post.posted_on, ctx.today)
-    # 첨부 일시 오류면 다음에 다시 받아요. 이미 버전이 있으면 늘(이전 버전을 둠), 처음이면 마지막 시도 전까지(마지막엔 그 파일 없이라도 저장)
-    retry_later = post.latest_version > 0 or post.attempts + 1 < MAX_ATTEMPTS
+    # 첨부 일시 오류면 마지막 시도 전까지 다음에 다시 받아요(FileUnavailable). 마지막 시도엔 이전 버전의 같은 첨부(주소, 없으면 이름이 같은 것)를
+    # 이어 쓰고, 이전 것이 없으면 그 파일 없이 저장해요. 이전 버전이 있는 글을 그 파일 없이 저장하면 몇 시간 장애에도 열린 공고가 모두 공고문 없는
+    # 버전이 되어 추출이 다시 돌아요. 본문이 그대로면 해시도 그대로라 새 버전이 되지 않아요
+    retry_later = post.attempts + 1 < MAX_ATTEMPTS
+    earlier = [] if retry_later or not post.latest_version else ctx.store.latest_files(post.id)
+
+    def previous(file: FileRef) -> SavedFile | None:
+        return next((f for f in earlier if f.download_url == file.url), None) or next((f for f in earlier if f.name == file.name), None)
+
+    def fetch(file: FileRef) -> tuple[bytes | None, SavedFile | None]:
+        """(받은 원본, 이어 쓴 이전 첨부) 중 하나. 둘 다 None이면 그 파일 없이."""
+        before = previous(file)
+        try:
+            return download(ctx, file, referer, retry_later=retry_later or before is not None), None
+        except FileUnavailable as error:
+            if retry_later or before is None:
+                raise
+            ctx.warn(f"[{post.post_key}] {error} 이전 버전의 같은 첨부를 이어 써요")
+            return None, dataclasses.replace(before, idx=file.index, name=file.name)
 
     notice_files = pick_notice_files(candidates, source.prefer_doc)
     if unclear_notice(candidates):
         ctx.warn(f"[{post.post_key}] 이름으로 공고문을 알 수 없어 첨부 순서로 골랐어요 ({notice_files[0].name})")
     for file in notice_files:  # 공고문: 첫 번째가 실패하면 두 번째
-        data = download(ctx, file, referer, retry_later=retry_later)
+        data, kept = fetch(file)
+        if kept is not None:
+            saved.append((dataclasses.replace(kept, role="NOTICE_DOC"), None))
+            if kept.text:
+                notice_name, notice_text = file.name, kept.text
+                break
+            continue
         if data is None:
             continue
         text, status = extract_text(data, file.ext)
@@ -268,7 +298,10 @@ def process_post(ctx: Context, post: PostRow) -> bool:
         ctx.warn(f"[{post.post_key}] 공고문을 읽지 못했어요 ({file.name}): {status}")
 
     for file in pick_unit_lists(candidates):  # 주택목록: 엑셀 우선 최대 2개. 원본만 S3에 두고, 표 해석은 extraction이 해요
-        data = download(ctx, file, referer, retry_later=retry_later)
+        data, kept = fetch(file)
+        if kept is not None:
+            saved.append((dataclasses.replace(kept, role="UNIT_LIST"), None))
+            continue
         if data is None:
             continue
         saved.append((make_saved(file, "UNIT_LIST", data, keep_until, "원본만 저장", None), data))
@@ -282,6 +315,8 @@ def process_post(ctx: Context, post: PostRow) -> bool:
     version = (latest[0] if latest else 0) + 1
 
     for f, data in saved:  # 원본은 DB 트랜잭션 전에 S3에 올려요 (실패하면 그 글은 다음 회차에 다시 시도)
+        if data is None:  # 이어 쓴 이전 첨부: 원본·보관 기한을 그대로 함께 써요(두 줄이 같은 날 지워져 남은 줄이 없는 원본을 가리키지 않게)
+            continue
         f.s3_key = ctx.files.put(object_key(source.code, post.post_key, version, f.idx, f.name), data, content_type(ext_of(f.name)))
 
     meta = {**item.meta, **detail.meta}

@@ -82,7 +82,13 @@ class MemoryStore:
     def requeue_open_posts(self, source_code, today, since_days):
         count = 0
         for p in self.posts.values():
-            if p.source_code == source_code and p.status == "DONE" and p.kind in ("NOTICE", "CORRECTION") and (p.deadline_on is None or p.deadline_on >= today):
+            exhausted = p.status == "FAILED" and p.attempts >= MAX_ATTEMPTS
+            if (
+                p.source_code == source_code
+                and (p.status == "DONE" or exhausted)
+                and p.kind in ("NOTICE", "CORRECTION")
+                and (p.deadline_on is None or p.deadline_on >= today)
+            ):
                 p.status, count = "PENDING", count + 1
         return count
 
@@ -90,8 +96,13 @@ class MemoryStore:
         mine = [v for v in self.versions if v.post.id == post_id]
         return (mine[-1].version, mine[-1].content_hash) if mine else None
 
+    def latest_files(self, post_id):
+        mine = [v for v in self.versions if v.post.id == post_id]
+        return [replace(f) for f in mine[-1].files if f.s3_key] if mine else []
+
     def mark_done(self, post_id):
-        self.posts[post_id].status = "DONE"
+        post = self.posts[post_id]
+        post.status, post.attempts, post.last_error = "DONE", 0, None
 
     def mark_failed(self, post_id, error):
         post = self.posts[post_id]

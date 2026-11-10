@@ -107,6 +107,43 @@ def test_correction_links_only_to_the_notice_with_the_same_block(client, store, 
     assert store.by_key("32").parent_post_id == store.by_key("30").id
 
 
+def test_correction_with_the_original_date_links_to_that_round(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 공고일 뒤에 바뀐 내용을 적은 정정 제목은 후속 안내로 분류됐고, 공고일·꾸밈말 괄호까지 견줘 원래 공고와 끊겼어요.
+    제목의 공고일이 있으면 그날 올라온 회차에 붙어요."""
+    rows = [
+        ("42", "[정정공고] 김제하동 국민임대주택 모집공고(2026.09.07) 당첨자 발표일 변경", date(2026, 10, 9)),
+        ("41", "김제하동 국민임대주택 모집공고(수요자맞춤형)", date(2026, 10, 7)),
+        ("40", "김제하동 국민임대주택 모집공고(수요자맞춤형)", date(2026, 9, 7)),
+    ]
+    pages(client, rows)
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
+    assert store.by_key("42").kind == "CORRECTION" and store.by_key("42").parent_post_id == store.by_key("40").id
+
+
+class TwoBoardSource(FakeSource):
+    """LH처럼 두 게시판이 같은 글 번호를 쓰는 출처. 게시판마다 상세 주소가 달라요."""
+
+    boards = [Board("open", "분양임대"), Board("myhome", "마이홈")]
+
+    def parse_list(self, board, body, page_url):
+        items = super().parse_list(board, body, page_url)
+        for item in items:
+            item.detail_url = f"{item.detail_url}&board={board.key}"
+        return items
+
+
+def test_a_post_listed_on_two_boards_keeps_the_list_line_of_its_own_board(client, store, file_store, settings, monkeypatch):
+    """2026-11-10 재검토: 다른 게시판의 줄로 목록 값을 덮어, 정정 확인 때 상세를 다른 게시판 주소로 열었어요."""
+    rows = ROWS[:1]
+    pages(client, rows)
+    for board in ("open", "myhome"):
+        client.pages[f"https://a.kr/view?id=1&board={board}"] = "본문"
+    run(TwoBoardSource(rows), client, store, file_store, settings, monkeypatch)
+    run(TwoBoardSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    post = store.by_key("1")
+    assert post.board_key == "open" and post.list_item["detail_url"].endswith("board=open")
+
+
 def test_event_files_point_to_uploaded_s3_objects(client, store, file_store, settings, monkeypatch):
     """이벤트의 s3Key는 실제로 올린 S3 경로와 같고, 받는 쪽은 role로 공고문을 찾아요."""
     rows = ROWS[:1]
@@ -172,17 +209,37 @@ def test_blocked_stops_source_and_counts_against_the_post(client, store, file_st
     result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
     assert result.status == "SUCCESS" and "https://a.kr/view?id=5" not in client.requested
 
+    # 새벽 정정 확인은 횟수를 다 쓴 글도 하루 한 번 다시 열어요(2026-11-10 재검토: 상세만 3번 막힌 새 글은 영영 모이지 않았음)
+    client.pages["https://a.kr/view?id=5"] = "본문"
+    run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
+    assert "https://a.kr/view?id=5" in client.requested and store.by_key("5").latest_version == 1 and store.by_key("5").attempts == 0
+
 
 def test_flaky_attachment_does_not_make_a_version_without_it(client, store, file_store, settings, monkeypatch):
     """첨부를 잠시 못 받으면 그 파일 없이 새 버전을 만들지 않아요(해시가 바뀌어 추출·알림이 다시 돌고 다음 회차에 되돌아갔음, 2026-11-10 코드 검토).
-    이미 버전이 있는 글은 이전 버전을 두고, 처음 글은 다음 회차에 다시 받되 마지막 시도엔 그 파일 없이라도 저장해요."""
+    실패로 세어 다음 회차에 다시 받고, 마지막 시도엔 이전 버전의 같은 첨부를 이어 써요: 본문이 그대로면 새 버전이 아니고, 본문이 바뀌었으면
+    그 정정은 새 버전이 돼요(재검토: 이전 버전이 있으면 늘 건너뛰어 첨부가 계속 안 받아지면 본문 정정이 영영 반영되지 않았음).
+    처음 글은 마지막 시도엔 그 파일 없이라도 저장해요."""
     rows = ROWS[:1]
     pages(client, rows)
     run(FakeSource(rows), client, store, file_store, settings, monkeypatch)
     client.files["https://a.kr/f/1.pdf"] = httpx.ConnectError("연결 끊김")
     result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True)
-    assert result.new_count == 0 and store.by_key("1").latest_version == 1 and store.by_key("1").status == "DONE"
-    assert any("이전 버전을 둬요" in w for w in result.warnings)
+    assert result.new_count == 0 and store.by_key("1").latest_version == 1
+    assert (store.by_key("1").status, store.by_key("1").attempts) == ("FAILED", 1)
+    assert any("이전 버전은 그대로 둬요" in w for w in result.warnings)
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 0
+    result = run(FakeSource(rows), client, store, file_store, settings, monkeypatch)  # 마지막 시도: 본문 그대로
+    assert result.new_count == 0 and any("이전 버전의 같은 첨부를 이어 써요" in w for w in result.warnings)
+    assert (store.by_key("1").status, store.by_key("1").attempts, store.by_key("1").latest_version) == ("DONE", 0, 1)  # 실패 횟수도 되돌림
+
+    client.pages["https://a.kr/view?id=1"] = "정정된 본문"
+    for _ in range(MAX_ATTEMPTS - 1):
+        assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch, recheck=True).new_count == 0
+    assert run(FakeSource(rows), client, store, file_store, settings, monkeypatch).new_count == 1  # 마지막 시도: 정정된 본문 + 이전 공고문
+    first, second = store.versions[0], store.versions[-1]
+    assert second.body_text == "정정된 본문" and second.files[0].s3_key == first.files[0].s3_key
+    assert second.files[0].file_hash == first.files[0].file_hash and second.files[0].text == first.files[0].text
 
     new = [("7", "2026년 국민임대 입주자 모집공고", date(2026, 10, 7))]
     pages(client, new)
