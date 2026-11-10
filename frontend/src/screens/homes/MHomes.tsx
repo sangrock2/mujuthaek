@@ -167,6 +167,12 @@ export function MHomes() {
           >
             청약 가점 계산
           </Link>
+          <Link
+            href={routes.loans}
+            className="rounded-pill bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-[40px] flex-none items-center px-[14px] text-[14px] font-bold no-underline"
+          >
+            대출 자격 확인
+          </Link>
         </div>
 
         {isMap && (

@@ -13,6 +13,8 @@ export const endpoints = {
   prepareCost: "/api/v1/eligibility/prepare-cost",
   /** 청약 가점 {applicant: 생년월일 · 혼인 · 무주택 시작 · 부양가족 · 통장 가입 연월} → 항목별 점수 */
   subscriptionScore: "/api/v1/eligibility/subscription-score",
+  /** 대출 자격 {profile: 생년월일 · 혼인 · 자녀 생년월일 · 세대 · loan(연소득 · 순자산 · 생애최초)} → 상품별 가능 · 확인 필요 · 불가 */
+  loanEvaluate: "/api/v1/eligibility/loans/evaluate",
   /** 맞춤 목록: 필터 + 판정 입력(구간 값)을 보내면 판정 결과가 붙은 공고 목록 */
   noticesSearch: "/api/v1/notices/search",
   /** 지도: 범위 안 공고 핀 (많으면 지역 묶음). 공개 정보라 판정은 없어요 */

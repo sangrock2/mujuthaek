@@ -425,6 +425,9 @@ export function MMain() {
           <Link href={routes.faq} className={footLink}>
             자주 묻는 질문
           </Link>
+          <Link href={routes.howItWorks} className={footLink}>
+            어떻게 만들었나요
+          </Link>
           <Link href={routes.terms} className={footLink}>
             이용약관
           </Link>

@@ -116,6 +116,12 @@ export function WebHomes() {
               >
                 청약 가점 계산
               </Link>
+              <Link
+                href={routes.loans}
+                className="text-brand-strong hover:text-brand-strong inline-flex min-h-[36px] items-center text-[14px] font-bold no-underline"
+              >
+                대출 자격 확인
+              </Link>
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-[10px]">
