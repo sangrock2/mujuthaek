@@ -559,6 +559,23 @@ class JobStore:
         item["history"] = self.review_history(item["jobId"])
         return item
 
+    def job_usage(self, job_id: str) -> dict[str, Any] | None:
+        """작업 하나의 측정 기록(관리자 「추출 과정 보기」). 검수 대기에 오르지 않은 작업도 볼 수 있게 작업 표에서 바로 읽습니다."""
+        row = self.conn.execute(
+            "select id, status, raw_post_id, model_used, cost_usd, usage from extraction_jobs where id = %s",
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "jobId": str(row[0]),
+            "jobStatus": row[1],
+            "rawPostId": str(row[2]) if row[2] else None,
+            "modelUsed": row[3],
+            "costUsd": float(row[4] or 0),
+            "usage": row[5],
+        }
+
     def approve(
         self,
         job_id: str,

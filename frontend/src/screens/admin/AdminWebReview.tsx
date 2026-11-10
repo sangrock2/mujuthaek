@@ -1,11 +1,13 @@
 "use client";
 
-import { ChevronRight, ExternalLink, Users } from "lucide-react";
+import { Bot, ChevronRight, ExternalLink, Users } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { AdminTitle, AdminTitleRow } from "@/components/admin/AdminShell";
 import { Badge } from "@/components/ui/Badge";
 import { decideReview, reviewMeta } from "@/features/admin/api";
 import { useReviewDecided, useReviewDetail, useReviewQueue } from "@/features/admin/queries";
+import { traceJobOf } from "@/features/admin/trace";
 import { cn } from "@/lib/cn";
 import type { ReviewReason, SourcePartKind } from "@/mocks/admin";
 import { USE_MOCKS } from "@/lib/api/config";
@@ -234,15 +236,27 @@ export function AdminWebReview() {
                   출처 {cur.source} · {cur.version} · 들어온 시각 {cur.received}
                 </span>
               </div>
-              <a
-                href={reviewMeta.get(cur.id)?.detailUrl ?? "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
-              >
-                원문 사이트
-                <ExternalLink size={16} aria-hidden />
-              </a>
+              <div className="flex flex-wrap gap-[8px]">
+                {/* 공고 검수만: 추출 담당 에이전트들의 기록(혜택 정제는 다른 흐름이라 없어요). 목업은 예시 기록 */}
+                {cur.id !== "empty" && (USE_MOCKS || traceJobOf(cur.id)) && (
+                  <Link
+                    href={`/admin/review/trace?job=${encodeURIComponent(traceJobOf(cur.id) ?? cur.id)}`}
+                    className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
+                  >
+                    <Bot size={16} aria-hidden />
+                    추출 과정 보기
+                  </Link>
+                )}
+                <a
+                  href={reviewMeta.get(cur.id)?.detailUrl ?? "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
+                >
+                  원문 사이트
+                  <ExternalLink size={16} aria-hidden />
+                </a>
+              </div>
             </section>
 
             <div className="grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-[16px]">

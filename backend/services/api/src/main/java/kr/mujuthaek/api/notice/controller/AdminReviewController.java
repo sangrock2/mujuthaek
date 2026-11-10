@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.JsonNode;
 
 /** 관리자 공고 검수 (설명은 {@link AdminReviewApiSpec}). 검수자는 사용자 모듈 타입에 기대지 않으려고 표준 Principal로 받아요. */
 @RestController
@@ -64,6 +65,12 @@ class AdminReviewController implements AdminReviewApiSpec {
   @GetMapping("/{id}")
   public AdminReviewDetailResponse detail(@PathVariable UUID id) {
     return reviews.detail(id.toString());
+  }
+
+  @Override
+  @GetMapping("/{id}/trace")
+  public JsonNode trace(@PathVariable UUID id) {
+    return reviews.trace(id.toString());
   }
 
   @Override
