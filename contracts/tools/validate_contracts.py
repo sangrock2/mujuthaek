@@ -376,12 +376,14 @@ def condition_fields(item):
 
 
 def application_items(notice, *, approved=False):
-    """접수 기간으로 내보낼 신청 일정. 보류 범위와 겹치면(같음·안·품음) 빼고, 검수 이슈·표시 메모는 그 일정 자신이나 그 안을 가리킬 때만 뺍니다.
-    섹션 전체를 가리키는 메모(빠진 다른 일정의 「/schedules」 메모 등)로 모든 일정을 빼지 않습니다
-    (실측 2026-10-20 LH 인천부평 행복주택: 근거 없는 발표 일정 하나가 빠진 메모 때문에 접수 기간이 모두 비어 접수 상태를 계산하지 못함)."""
+    """접수 기간으로 내보낼 신청 일정. 보류 범위와 겹치면(같음·안·품음) 빼고, 검수 이슈는 그 일정 자신이나 그 안을 가리킬 때만 뺍니다.
+    섹션 전체를 가리키는 이슈로 모든 일정을 빼지 않습니다
+    (실측 2026-10-20 LH 인천부평 행복주택: 근거 없는 발표 일정 하나가 빠진 메모 때문에 접수 기간이 모두 비어 접수 상태를 계산하지 못함).
+    표시 메모(notes)로는 빼지 않습니다: 메모는 값이 틀렸다는 신호가 아닌 것만 담는데, 근거 인용 하나가 짧다는 메모(EVIDENCE_QUOTE_TOO_SHORT)
+    때문에 하나뿐인 접수 일정이 빠져 마감일을 잃고 마감·D-day 알림이 나가지 않았어요(2026-11-10 재검토, 저장된 gbdc-a909)."""
     quality = notice["quality"]
     held = [h["target"] for h in quality.get("heldItems", [])]
-    marked = [] if approved else [x["target"] for x in [*quality["reviewIssues"], *quality["notes"]]]
+    marked = [] if approved else [x["target"] for x in quality["reviewIssues"]]
 
     def blocked(path):
         return overlaps_held(path, held) or any(t == path or t.startswith(path + "/") for t in marked)

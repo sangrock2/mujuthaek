@@ -13,6 +13,8 @@ processed_events를 **트랜잭션 맨 앞에서** 넣고, 이미 있으면(같�
   발행하지 않는 결과(INTAKE_REVIEW·WAITING_SOURCE·FAILED 등)는 옛 버전 승인이 아직 가능하므로 대체하지 않습니다(다시 처리해 발행되면 그때 대체).
   같은 버전을 다시 처리한 것은 대체하지 않습니다(버전이 더 높을 때만).
   정정공고: 수집 이벤트의 kind가 CORRECTION이고 supersedesPostId가 원 공고를 가리키면, 정정공고를 발행할 때 원 공고의 PENDING 검수(모든 버전)도 대체합니다.
+  단 원 공고가 공개된 적(COMPLETED·PARTIAL·APPROVED 작업)이 있을 때만입니다: api는 원 공고가 공개돼야 정정을 반영하는데(PARENT_NOT_PUBLISHED),
+  검수 대기뿐인 원 공고의 검수를 대체하면 승인할 길이 막혀 원 공고·정정 둘 다 영영 공개되지 않았어요(2026-11-10 재검토).
   후속 안내(FOLLOW_UP)는 원 공고의 자격 조건을 바꾸지 않아 대체하지 않습니다.
   대체는 새 결과 저장·발행과 같은 트랜잭션의 UPDATE(status = 'PENDING' 조건)라 여러 번 해도 같고, 공고 단위 잠금을
   원본·원 공고 ID 순서대로 잡아 같은 공고의 승인·반려와 차례로 처리됩니다(먼저 대체되면 승인·반려는 대체한 버전을 알려 주며 거절).
@@ -171,6 +173,12 @@ _SUPERSEDE_SQL = (
 )
 
 
+# 정정공고가 원 공고 검수를 대체하는 조건: 원 공고가 공개된 적이 있음(위 모듈 설명)
+_SUPERSEDE_CORRECTED_SQL = _SUPERSEDE_SQL + (
+    " and exists (select 1 from extraction_jobs p where p.raw_post_id = %(target)s and p.status in ('COMPLETED', 'PARTIAL', 'APPROVED'))"
+)
+
+
 def _supersede_pending(cur, job_id: str, raw_post_id: str | None, raw_version: Any, corrected_post: str | None) -> int:
     """job_id가 발행한 결과로 의미가 없어진 PENDING 검수를 SUPERSEDED로 바꾸고 바꾼 수를 돌려줍니다. 발행과 같은 트랜잭션에서 부릅니다.
     같은 원본의 더 낮은 버전, 정정공고면 원 공고의 모든 버전이 대상입니다."""
@@ -181,7 +189,7 @@ def _supersede_pending(cur, job_id: str, raw_post_id: str | None, raw_version: A
     count = cur.rowcount
     if corrected_post:
         note = f"정정공고({raw_post_id} v{raw_version}) 발행으로 대체됨"
-        cur.execute(_SUPERSEDE_SQL, {**common, "target": corrected_post, "below": None, "note": note})
+        cur.execute(_SUPERSEDE_CORRECTED_SQL, {**common, "target": corrected_post, "below": None, "note": note})
         count += cur.rowcount
     if count:
         log.info("이전 검수 대기 건을 대체됨으로 정리", extra={"jobId": job_id, "rawPostId": raw_post_id, "rawVersion": raw_version, "superseded": count})

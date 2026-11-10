@@ -119,6 +119,10 @@ case("api_mismatch_outside_hold", [*notice_hold("/notice/supplyType"), (D + "/qu
 # 섹션 전체를 가리키는 메모(빠진 다른 일정의 「/schedules」 메모)는 접수 일정을 빼지 않음 — 실측 LH 인천부평(2026-10-20)
 section_note = [{"code": "ITEM_DROPPED_NO_EVIDENCE", "target": "/schedules", "description": "근거를 확인하지 못한 항목 1개를 뺐습니다."}]
 case("section_note_keeps_application_windows", [(D + "/quality/notes", section_note)], valid=True)
+# 일정 하나를 가리키는 표시 메모(근거 인용이 짧음 등)도 접수 일정을 빼지 않음 — 메모는 값이 틀렸다는 신호가 아님(2026-11-10 재검토, 저장된 gbdc-a909:
+# 인용 하나가 짧다는 메모로 하나뿐인 접수 일정이 빠져 마감일을 잃었음)
+item_note = [{"code": "EVIDENCE_QUOTE_TOO_SHORT", "target": "/schedules/0/endsAt", "description": "근거 인용이 짧습니다."}]
+case("item_note_keeps_application_windows", [(D + "/quality/notes", item_note)], valid=True)
 
 # 일정 장소·시각·제외 요일·신청 방법, 서류 묶음(2026-10-23). 신청 방법은 정해진 값만, 공고 전체 신청 방법은 신청 일정에서 계산한 값과 같아야 함
 place = [{"name": "가상주거공사 1층 접수처", "address": None, "detail": None}]
