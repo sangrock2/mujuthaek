@@ -316,6 +316,27 @@ class BenefitIngestionTest {
   }
 
   @Test
+  void 숨겨져_있다가_검수_승인으로_처음_보이면_새_혜택으로_알린다() {
+    // 2026-11-10 재검토: 검수 결과는 reprocess=true로 와서, 범위 밖(숨김)이던 혜택을 승인해 처음 보이게 해도 새 혜택 알림이 빠졌음
+    UUID raw = UUID.randomUUID();
+    f.ingest.apply(BenefitFixture.event(raw, 1, p -> p.put("relevant", false)));
+    assertThat(f.published).isEmpty();
+
+    f.ingest.apply(
+        BenefitFixture.event(
+            raw,
+            1,
+            p -> {
+              p.put("reprocess", true);
+              p.withObject("quality").put("reviewed", true);
+            }));
+
+    assertThat(f.published)
+        .singleElement()
+        .isInstanceOfSatisfying(BenefitPublished.class, e -> assertThat(e.reprocess()).isFalse());
+  }
+
+  @Test
   void 범위_밖이거나_재처리면_알리지_않고_범위_밖은_숨긴다() {
     UUID hidden = f.benefit(p -> p.put("relevant", false));
     f.benefit(p -> p.put("reprocess", true));
