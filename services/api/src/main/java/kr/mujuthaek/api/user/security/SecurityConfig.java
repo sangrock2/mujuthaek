@@ -40,6 +40,7 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.util.UrlPathHelper;
 
 /**
  * 로그인·권한 규칙 (JWT).
@@ -179,8 +180,11 @@ class SecurityConfig {
    */
   static BearerTokenResolver bearerTokenResolver() {
     var bearer = new DefaultBearerTokenResolver();
+    // 경로는 앱 안 경로로 봐요(요청 기록 필터와 같음). 전달 헤더(X-Forwarded-Prefix)가 바꾼 요청 주소로 보면 토큰을 무시하게 만들 수 있었어요(재검토)
     return request ->
-        request.getRequestURI().startsWith("/api/auth/") ? null : bearer.resolve(request);
+        UrlPathHelper.rawPathInstance.getPathWithinApplication(request).startsWith("/api/auth/")
+            ? null
+            : bearer.resolve(request);
   }
 
   /**

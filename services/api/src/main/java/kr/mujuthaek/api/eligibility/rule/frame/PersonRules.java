@@ -111,7 +111,7 @@ final class PersonRules {
     Verdict verdict = RegionCodes.withinAny(a.residenceRegionCode(), codes);
     if (verdict == Verdict.UNKNOWN) {
       return Evaluation.unknown(
-          c, summary, "주소지를 더 자세히(시군구까지) 넣어야 알 수 있어요", Input.RESIDENCE_REGION);
+          c, summary, "공고 지역에 드는지 알려면 주소지를 더 자세히(구·읍면동까지) 넣어야 해요", Input.RESIDENCE_REGION);
     }
     return Evaluation.decided(c, verdict == Verdict.MET, summary);
   }
@@ -128,7 +128,7 @@ final class PersonRules {
     Verdict verdict = RegionCodes.withinAny(business.siteRegionCode(), codes);
     if (verdict == Verdict.UNKNOWN) {
       return Evaluation.unknown(
-          c, summary, "사업장 소재지를 더 자세히(시군구까지) 넣어야 알 수 있어요", Input.BUSINESS_SITE);
+          c, summary, "공고 지역에 드는지 알려면 사업장 소재지를 더 자세히(구·읍면동까지) 넣어야 해요", Input.BUSINESS_SITE);
     }
     return Evaluation.decided(c, verdict == Verdict.MET, summary);
   }

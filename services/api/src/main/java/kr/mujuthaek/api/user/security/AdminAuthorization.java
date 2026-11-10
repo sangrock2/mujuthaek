@@ -62,14 +62,16 @@ class AdminAuthorization {
               kinds == null || kinds.isBlank()
                   ? List.of("NOTICE", "BENEFIT")
                   : List.of(kinds.split(",")).stream().map(String::trim).toList();
-          return wanted.stream()
-              .allMatch(
-                  k ->
-                      switch (k) {
-                        case "NOTICE" -> a.has(AdminPermission.NOTICE_REVIEW);
-                        case "BENEFIT" -> a.has(AdminPermission.BENEFIT_REVIEW);
-                        default -> false;
-                      });
+          // 「kinds=,」처럼 값이 모두 비면 빈 목록이라 allMatch가 늘 참이었어요(서비스가 400으로 막았지만 권한 검사가 먼저 막아야 해요, 재검토)
+          return !wanted.isEmpty()
+              && wanted.stream()
+                  .allMatch(
+                      k ->
+                          switch (k) {
+                            case "NOTICE" -> a.has(AdminPermission.NOTICE_REVIEW);
+                            case "BENEFIT" -> a.has(AdminPermission.BENEFIT_REVIEW);
+                            default -> false;
+                          });
         });
   }
 

@@ -192,6 +192,12 @@ class SecurityIntegrationTest {
                 .param("kinds", "BENEFIT", "NOTICE")
                 .header("Authorization", bearer(claimsAdmin)))
         .andExpect(status().isForbidden());
+    // 재검토: 「kinds=,」는 빈 목록이라 권한 검사를 그냥 지나갔음(서비스가 400으로 막음)
+    mvc.perform(
+            get("/api/admin/reviews/queue")
+                .param("kinds", ",")
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isForbidden());
 
     jdbc.update("delete from account.admin_permissions where user_id = ?", user.userId());
     jdbc.update("update account.users set role = 'USER' where id = ?", user.userId());
