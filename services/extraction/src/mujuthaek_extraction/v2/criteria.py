@@ -85,7 +85,8 @@ def _split(table: Table, rows: list[CriteriaRow], positions: list[int]) -> list[
 def _pieces(run: list[int], rows: list[CriteriaRow]) -> list[list[int]]:
     """대상 하나의 행(rows의 순번)을 CHUNK_ROWS 안팎으로 고르게 나눕니다(16행 + 2행 같은 자투리 묶음을 만들지 않게). 위 칸이 병합된 이어진 행
     (맞벌이·가구원 수 행, 앞 빈 칸이 더 많음)은 앞 행과 떼지 않습니다: 한 공급방식의 외벌이·맞벌이 행이 다른 담당에게 가면 기본 조건과 예외가
-    따로 넣어짐(코드 검토에서 찾음)."""
+    따로 넣어짐(코드 검토에서 찾음). 단위 하나가 CHUNK_ROWS를 넘으면 그 단위만 다음 단계(그 안의 앞 빈 칸 수)로 다시 나눕니다: 1행 방식 + 18행 방식이
+    [1, 18]로 나뉘어 묶음이 상한을 넘어 출력 한도에 걸릴 수 있었어요(2026-11-10 재검토). 조각은 모두 CHUNK_ROWS 이하입니다."""
     if len(run) <= CHUNK_ROWS:
         return [run]
     lead = min(rows[i].lead for i in run[1:])
@@ -94,17 +95,21 @@ def _pieces(run: list[int], rows: list[CriteriaRow]) -> list[list[int]]:
         if rows[i].lead <= lead:
             units.append([])
         units[-1].append(i)
+    units = [piece for unit in units for piece in (_pieces(unit, rows) if len(unit) > CHUNK_ROWS else [unit])]
     # 조각 수를 먼저 정하고(올림), 단위 경계 가운데 고른 자리(행 수의 k/조각 수)에 가장 가까운 곳에서 자름. 앞에서부터 목표 크기까지 채우면
-    # 18행(2행 단위)이 8 + 8 + 2로 다시 자투리가 생김
-    count = -(-len(run) // CHUNK_ROWS)
+    # 18행(2행 단위)이 8 + 8 + 2로 다시 자투리가 생김. 단위 크기가 고르지 않아 상한을 넘는 조각이 생기면 조각 수를 늘림
     ends, total = [], 0
     for unit in units[:-1]:
         total += len(unit)
         ends.append(total)
-    cuts = {min(ends, key=lambda end: abs(end - k * len(run) / count)) for k in range(1, count)} if ends else set()
-    pieces: list[list[int]] = [[]]
-    for unit in units:
-        pieces[-1] += unit
-        if sum(map(len, pieces)) in cuts:
-            pieces.append([])
-    return [piece for piece in pieces if piece]
+    for count in range(-(-len(run) // CHUNK_ROWS), len(units) + 1):
+        cuts = {min(ends, key=lambda end: abs(end - k * len(run) / count)) for k in range(1, count)} if ends else set()
+        pieces: list[list[int]] = [[]]
+        for unit in units:
+            pieces[-1] += unit
+            if sum(map(len, pieces)) in cuts:
+                pieces.append([])
+        pieces = [piece for piece in pieces if piece]
+        if all(len(piece) <= CHUNK_ROWS for piece in pieces):
+            return pieces
+    return units

@@ -181,9 +181,9 @@ def section(state: V2State, runtime: Context) -> dict[str, Any]:
         from mujuthaek_extraction.v2.agents.section import run_section  # 섹션 담당 에이전트(LangChain)
 
         agent = run_section
-    # 동시에 도는 담당 수는 EXTRACTION_PARALLEL_CALLS까지(1이면 하나씩, V1 섹션 호출과 같음). 예전엔 이 설정을 읽지 않았어요(2026-11-10 코드 검토)
-    with runtime.context.gate:
-        parts, usage, trace = _unpack(agent(spec, state, runtime.context))
+    # 동시 호출 수(EXTRACTION_PARALLEL_CALLS)는 담당 노드가 아니라 모델 호출마다 지켜요(pipeline.Runtime.gate). 노드에서도 잡으면 담당 안의
+    # 호출이 같은 세마포어를 기다려 1일 때 멈춰요
+    parts, usage, trace = _unpack(agent(spec, state, runtime.context))
     return {"parts": parts, "usage": usage, "traces": trace}
 
 

@@ -183,5 +183,12 @@ def test_hidden_rows_and_columns_are_not_handed_over_and_are_counted():
     sheet = rows + '</sheetData><cols><col min="3" max="3" hidden="1"/></cols><sheetData>'
     listing = read_xlsx(raw_xlsx(sheet))
     assert "| 301 | 12000000 |" in listing.text and "302" not in listing.text and "이전 보증금" not in listing.text
-    assert listing.hidden == 2 and "숨긴 행·열 2개" in listing.text
+    assert listing.hidden == 2 and listing.hidden_rows == 1 and "숨긴 행·열 2개" in listing.text
     assert read_xlsx(raw_xlsx(f'<row r="1">{inline("A1", "호")}</row>')).hidden == 0
+    # 재검토: 병합 범위의 첫 행이 숨긴 행이면 보이는 행의 병합 값(단지명)까지 빠졌음
+    rows = f'<row r="1">{inline("A1", "단지")}{inline("B1", "호")}</row>'
+    rows += f'<row r="2" hidden="1">{inline("A2", "가람단지")}{inline("B2", "101")}</row>'
+    rows += f'<row r="3">{inline("B3", "102")}</row>'
+    merged = rows + '</sheetData><mergeCells count="1"><mergeCell ref="A2:A3"/></mergeCells><sheetData>'
+    listing = read_xlsx(raw_xlsx(merged))
+    assert "| 가람단지 | 102 |" in listing.text and "101" not in listing.text and listing.hidden_rows == 1

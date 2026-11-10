@@ -476,11 +476,27 @@ def test_spreadsheet_with_trailing_space_in_name_is_read(monkeypatch):
     data = b"PK synthetic xlsx"
     sha = hashlib.sha256(data).hexdigest()
     files = [{"name": "주택목록.xlsx ", "downloadUrl": "https://x.kr/f", "sha256": sha, **fields("xlsx", "UNIT_LIST"), "s3Key": "raw/x/a.xlsx"}]
-    listing = SimpleNamespace(truncated=False, rows=1, text="주택형 | 임대보증금\n26A | 12,000,000", sheets=(), hidden=0)
+    listing = SimpleNamespace(truncated=False, rows=1, text="주택형 | 임대보증금\n26A | 12,000,000", sheets=(), hidden=0, hidden_rows=0)
     monkeypatch.setattr(adapter, "read_xlsx", lambda data: listing)
     result = build_intake(make_event(files=files), InMemorySourceReader(files={"raw/x/a.xlsx": data}), require_pdf=False)
     assert result.ready and result.material.text_document_id == "pdf-text"
     assert "=== 첨부 엑셀 주택목록.xlsx  ===\n주택형 | 임대보증금" in result.material.text
+
+
+def test_only_hidden_rows_of_an_attached_spreadsheet_send_the_notice_to_review(monkeypatch):
+    # 2026-11-10 재검토: 숨긴 열 하나로 목록 공고 전체가 사람 확인으로 감. 실제 첨부(dcco)의 숨긴 열은 전용면적·전환 보증금처럼 가린 칸이라
+    # 넘기지 않아도 누락일 뿐. 이번 공고가 아닌 호실일 수 있는 숨긴 행만 확인 필요
+    data = b"PK synthetic xlsx"
+    sha = hashlib.sha256(data).hexdigest()
+    files = [{"name": "주택목록.xlsx", "downloadUrl": "https://x.kr/f", "sha256": sha, **fields("xlsx", "UNIT_LIST"), "s3Key": "raw/x/a.xlsx"}]
+
+    def intake(hidden, hidden_rows):
+        listing = SimpleNamespace(truncated=False, rows=1, text="주택형 | 임대보증금", sheets=(), hidden=hidden, hidden_rows=hidden_rows)
+        monkeypatch.setattr(adapter, "read_xlsx", lambda data: listing)
+        return build_intake(make_event(files=files), InMemorySourceReader(files={"raw/x/a.xlsx": data}), require_pdf=False)
+
+    assert "SPREADSHEET_HIDDEN_PARTS" not in codes(intake(hidden=2, hidden_rows=0))
+    assert "SPREADSHEET_HIDDEN_PARTS" in codes(intake(hidden=3, hidden_rows=1))
 
 
 def test_api_json_without_notice_id_is_not_used_as_reference(reader):

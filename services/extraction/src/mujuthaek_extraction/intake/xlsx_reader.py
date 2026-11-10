@@ -185,7 +185,8 @@ class XlsxList:
     rows: int  # 값이 있는 행 수(머리 행 포함)
     truncated: bool  # AI_MAX_ROWS·AI_MAX_CHARS를 넘어 머리 행만 넘김
     sheets: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = ()  # (시트 이름, 원문에 붙인 행들). 잘리면 비움(근거로 찾을 수 없으므로)
-    hidden: int = 0  # 넘기지 않은 숨긴 행·열 수(값이 있는 것만). 있으면 접수가 사람 확인을 남김
+    hidden: int = 0  # 넘기지 않은 숨긴 행·열 수(값이 있는 것만)
+    hidden_rows: int = 0  # 그중 숨긴 행 수. 있으면 접수가 사람 확인을 남김(숨긴 열만이면 남기지 않음)
 
 
 HEADER_SCAN = 10  # 시트 맨 위 몇 행에서 머리 행을 찾을지(제목·안내 행이 먼저 올 수 있음)
@@ -239,7 +240,7 @@ def read_xlsx(data: bytes) -> XlsxList | None:
             shared = [_text(item) for item in root.iterfind("m:si", NS)]
         styles = _styles(archive)
         sheets: list[tuple[str, list[list[str]], int]] = []
-        hidden_total = 0
+        hidden_total = hidden_row_total = 0
         for name, path in _sheets(archive):
             if path not in archive.namelist():
                 continue
@@ -250,6 +251,7 @@ def read_xlsx(data: bytes) -> XlsxList | None:
             # 보증금·임대료와 함께 공급 묶음으로 게시됐어요(2026-11-10 코드 검토). 숨긴 것이 있으면 접수가 사람 확인을 남깁니다
             hidden_columns = _hidden_columns(sheet)
             hidden_rows, hidden_values = 0, set()
+            hidden_cells: dict[int, dict[int, str]] = {}  # 숨긴 행의 값: 넘기지 않지만 병합 칸의 값이 거기 있으면 보이는 행에 채움
             for row in sheet.iterfind("m:sheetData/m:row", NS):
                 number = int(row.get("r")) if (row.get("r") or "").isdigit() else number + 1
                 cells: dict[int, str] = {}
@@ -266,6 +268,7 @@ def read_xlsx(data: bytes) -> XlsxList | None:
                     column += 1
                 if cells and row.get("hidden") in ("1", "true"):
                     hidden_rows += 1
+                    hidden_cells[number] = cells
                     continue
                 if cells:
                     counted += 1
@@ -274,7 +277,8 @@ def read_xlsx(data: bytes) -> XlsxList | None:
             # 병합 셀: 값은 왼쪽 위 칸에만 있으므로 범위 안의 다른 칸에도 채웁니다(단지명이 여러 호실 행에 병합된 목록 — 검토 2026-10-16)
             # 가로로는 좁은 병합(머리글 "1순위"가 세 열에 걸침)만 채웁니다. 한 줄 전체에 걸친 제목을 열 수만큼 되풀이하면 잡음입니다.
             for r1, c1, r2, c2 in _merged_ranges(sheet):
-                value = by_number.get(r1, {}).get(c1)
+                # 병합 범위의 첫 행이 숨긴 행이어도 그 값(단지명 등)은 보이는 행의 것이에요(재검토: 보이는 행에서 빠졌음)
+                value = (by_number.get(r1) or hidden_cells.get(r1) or {}).get(c1)
                 if value:
                     last_column = c2 if c2 - c1 < MERGE_REPEAT_COLUMNS else c1
                     for r in range(r1, r2 + 1):
@@ -282,6 +286,7 @@ def read_xlsx(data: bytes) -> XlsxList | None:
                             for c in range(c1, last_column + 1):
                                 by_number[r].setdefault(c, value)
             hidden_total += hidden_rows + len(hidden_values)
+            hidden_row_total += hidden_rows
             rows = [by_number[n] for n in sorted(by_number)]
             if not rows:
                 continue
@@ -311,6 +316,6 @@ def read_xlsx(data: bytes) -> XlsxList | None:
         if hidden_total:
             lines.append(f"(숨긴 행·열 {hidden_total}개는 이번 공급 목록이 아닐 수 있어 넘기지 않았습니다.)")
         shown_sheets = () if truncated else tuple((name, tuple(tuple(row) for row in rows)) for name, rows, _, _ in sheets)
-        return XlsxList("\n".join(lines), total, truncated, shown_sheets, hidden_total)
+        return XlsxList("\n".join(lines), total, truncated, shown_sheets, hidden_total, hidden_row_total)
     except Exception:  # 깨진 zip·암호·지원 안 하는 압축(Deflate64)·이상한 XML 등: 공고문에서 읽도록 None
         return None

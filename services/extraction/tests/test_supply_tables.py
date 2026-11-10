@@ -906,6 +906,10 @@ def test_unit_rows_count_only_the_units_named_in_the_supply_scale_line():
     assert st.offered_units("□ 공급호수 : 2호 (101, 202호)") == {"101", "202"}
     assert st.offered_units("□ 공급호실 - 101호, 202호\n□ 위치") == {"101", "202"}
     assert st.offered_units("□ 공급호실 : 101호, 202호 외") == set() and st.offered_units("□ 공급호실 : 101호, 202호 등") == set()
+    # 재검토: 이미 공급한·뜻이 갈리는 호실 목록은 이번 모집 호실이 아님. 다른 낱말이 붙은 「추가모집 호실」은 그대로
+    assert st.offered_units("□ 기공급호실 : 301호, 302호") == set() and st.offered_units("□ 미공급호실 : 101호") == set()
+    assert st.offered_units("□ 기공급세대 : 2호(301호, 302호)") == set()
+    assert st.offered_units("□ 추가모집호실 : 101호, 202호") == {"101", "202"}
     assert st._occupied(["", "101호", "임대완료"]) and st._occupied(["", "102호", "계약진행중"])
     rows = (("층", "호실", "전용", "월임대료"), ("1층", "101호", "11.38", "7만원"), ("", "102호", "12.60", "8만원"), ("2층", "202-1호", "8.25", "5만원"))
     table = st.Table("1-1", 1, "", rows[0], rows, ((0, 1, 2, 3), (4, 5, 6, 7), (4, 8, 9, 10), (11, 12, 13, 14)))

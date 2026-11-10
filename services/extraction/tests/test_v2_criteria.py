@@ -75,6 +75,20 @@ def test_big_criteria_tables_are_split_where_the_row_target_changes():
     assert criteria.BIG_TABLE_ROWS == 12 and criteria.CHUNK_ROWS == 16
 
 
+def test_a_method_longer_than_a_chunk_is_split_again_inside_and_no_chunk_is_over_the_limit():
+    # 2026-11-10 재검토: 1행 방식과 18행 방식이 [1, 18]로 나뉘어 묶음 하나가 16행을 넘었음(출력 한도에 걸릴 수 있음)
+    from types import SimpleNamespace
+
+    leads = [0, 0, *([1, 2] * 8), 1]  # 1행 방식, 18행 방식(그 안은 외벌이·맞벌이 두 행씩 + 마지막 1행)
+    rows = [SimpleNamespace(lead=lead) for lead in leads]
+    pieces = criteria._pieces(list(range(len(rows))), rows)
+    assert all(len(piece) <= criteria.CHUNK_ROWS for piece in pieces) and [i for piece in pieces for i in piece] == list(range(len(rows)))
+    assert not any(rows[piece[0]].lead == 2 for piece in pieces)  # 맞벌이 행이 앞 행과 떨어지지 않음
+    # 단위 크기가 고르지 않아도(15·2·15행) 상한을 넘지 않음
+    uneven = [SimpleNamespace(lead=0)] + [SimpleNamespace(lead=1 if i in (0, 15, 17) else 2) for i in range(32)]
+    assert all(len(piece) <= criteria.CHUNK_ROWS for piece in criteria._pieces(list(range(len(uneven))), uneven))
+
+
 def test_missing_rows_can_be_counted_only_among_the_rows_a_helper_was_given():
     # 맞벌이 행 줄(「|  |  | 맞벌이 | 월평균소득 140% 이하 |」)이 대상마다 똑같아 줄 글자가 아니라 줄 번호로 맡은 행을 가림
     document = parse(criteria_text())

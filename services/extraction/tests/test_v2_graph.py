@@ -121,31 +121,42 @@ def test_conclude_rechecks_the_structure_sections_the_v1_way_and_leaves_agent_se
     assert rent["amountKrw"] == 100000
 
 
-def test_section_agents_follow_the_parallel_calls_setting(v2, monkeypatch):
-    # 2026-11-10 코드 검토: V2는 EXTRACTION_PARALLEL_CALLS를 읽지 않아 1로 두어도 담당이 모두 동시에 돌았음(429·예산 예약 충돌)
+def test_model_calls_follow_the_parallel_calls_setting(v2, monkeypatch):
+    # 2026-11-10 코드 검토: V2는 EXTRACTION_PARALLEL_CALLS를 읽지 않아 1로 두어도 담당이 모두 동시에 돌았음(429·예산 예약 충돌).
+    # 재검토: 담당 노드에만 걸면 구조 단계·데우기·담당 안의 기준표·해결 담당 호출이 빠져, 상한은 모델 호출마다 지킴
     import time
+
+    from mujuthaek_extraction.model.base import ModelError, ModelRequest
 
     recorded = answers()
     monkeypatch.setattr(graph, "SLEEP", lambda seconds: None)
     clock = lambda: datetime(2026, 10, 15, tzinfo=UTC)  # noqa: E731
+    request = ModelRequest("v", "probe", "", "", "", {}, 10)
 
     def busiest(parallel):
         active, peak, lock = [0], [0], threading.Lock()
 
+        class Slow:
+            def complete(self, request):
+                with lock:
+                    active[0] += 1
+                    peak[0] = max(peak[0], active[0])
+                time.sleep(0.05)
+                with lock:
+                    active[0] -= 1
+                raise ModelError("시험", transient=False)
+
         def fake(spec, state, rt):
-            with lock:
-                active[0] += 1
-                peak[0] = max(peak[0], active[0])
-            time.sleep(0.05)
-            with lock:
-                active[0] -= 1
+            for _ in range(2):  # 담당 하나가 호출 두 번(담당 안 도움 호출처럼 동시에)
+                threading.Thread(target=lambda: _try(rt.models.primary.complete, request)).start()
+            _try(rt.models.primary.complete, request)
             return [json.loads(recorded[spec.name][0])], []
 
         for name in ("structure", "schedules", "eligibility", "selection", "documents"):
             v2[name] = fake
         outcome = process(
             raw_event(),
-            models=models(),
+            models=NoticeModels(Slow(), None, names={"primary": "local"}),
             reader=InMemorySourceReader(),
             regions=REGIONS,
             clock=clock,
@@ -153,8 +164,43 @@ def test_section_agents_follow_the_parallel_calls_setting(v2, monkeypatch):
             require_pdf=False,
             parallel_calls=parallel,
         )
+        time.sleep(0.3)  # 따로 띄운 호출이 끝나기를 기다림
         assert outcome.status == "COMPLETED"
         return peak[0]
 
     assert busiest(1) == 1
-    assert busiest(4) > 1
+    assert 1 < busiest(4) <= 4
+
+
+def _try(call, *args):
+    try:
+        call(*args)
+    except Exception:  # noqa: BLE001 — 시험용 느린 모델은 늘 실패로 끝남
+        pass
+
+
+def test_agent_model_calls_wait_for_the_shared_gate():
+    # V2 담당 호출(LangChain)은 BudgetMiddleware가 실행 문맥의 같은 세마포어를 잡아요
+    import time
+    from types import SimpleNamespace
+
+    from mujuthaek_extraction.v2.llm.budget import BudgetMiddleware
+
+    gate, active, peak, lock = threading.BoundedSemaphore(1), [0], [0], threading.Lock()
+
+    def handler(request):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        return SimpleNamespace(result=[])
+
+    request = SimpleNamespace(runtime=SimpleNamespace(context=SimpleNamespace(calls=gate, budget=None)))
+    threads = [threading.Thread(target=BudgetMiddleware("시험").wrap_model_call, args=(request, handler)) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert peak[0] == 1

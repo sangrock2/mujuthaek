@@ -234,8 +234,11 @@ def build_intake(
         if listing.truncated:
             message = f"첨부 엑셀이 {listing.rows}행이라 주택별로 넣지 않고 공고문의 주택형별 표로 읽습니다."
             issue("SPREADSHEET_TOO_LARGE", ready, f"/payload/files/{index}", message)
-        if listing.hidden:  # 숨긴 행·열은 넘기지 않았음(이번 공고가 아닌 호실일 수 있음, xlsx_reader)
-            issue("SPREADSHEET_HIDDEN_PARTS", ready, f"/payload/files/{index}", f"첨부 엑셀의 숨긴 행·열 {listing.hidden}개는 넘기지 않았습니다.")
+        # 숨긴 행은 넘기지 않았음(이번 공고가 아닌 호실일 수 있어 사람 확인, xlsx_reader). 숨긴 열만이면 남기지 않아요: 실제 첨부(dcco 2/8개)에서
+        # 숨긴 열은 전용면적·전환 보증금·임대대상명처럼 보기 좋게 가린 칸이라, 넘기지 않아도 누락일 뿐 틀린 값이 되지 않는데 공고 전체가
+        # 사람 확인으로 갔어요(2026-11-10 재검토)
+        if listing.hidden_rows:
+            issue("SPREADSHEET_HIDDEN_PARTS", ready, f"/payload/files/{index}", f"첨부 엑셀의 숨긴 행 {listing.hidden_rows}개는 넘기지 않았습니다.")
         sheets.append(f"=== 첨부 엑셀 {file.name} ===\n{listing.text}")
         sheet_tables.extend({"documentId": file.document_id, "name": file.name, "sheet": name, "rows": rows} for name, rows in listing.sheets)
     attachment_text = pdf_text

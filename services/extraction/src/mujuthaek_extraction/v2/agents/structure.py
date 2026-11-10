@@ -210,7 +210,7 @@ def _notice_and_locations(
 ) -> SectionDraft | None:
     """공고·위치 초안. 답의 항목은 담당 넣기와 같은 검사로 넣고, 넣지 못한 것을 알려 한 번 더 받습니다. 공고를 넣지 못하면 None(V1 방식으로)."""
     draft = SectionDraft(SECTIONS)
-    context = SectionContext(document=state["document"], budget=rt.models.budget, draft=draft, documents=documents)
+    context = SectionContext(document=state["document"], budget=rt.models.budget, calls=getattr(rt, "gate", None), draft=draft, documents=documents)
     messages: list[Any] = [section.shared_message(state["document"]), HumanMessage(structure_task(spec, state["rules"], note, documents))]
     problems = ["답이 없습니다."]
     for turn in range(REPAIRS + 1):
@@ -330,7 +330,7 @@ def _ask(
     name: str, state: Any, rt: pipeline.Runtime, documents: tuple[str, ...], messages: list[Any], max_output_tokens: int, usage: list[dict[str, Any]]
 ) -> list[Any]:
     """담당 앞부분(도구 목록·V2 지시·원문 메시지) 그대로 messages를 보내 답까지 붙은 대화를 돌려줍니다. 호출 기록은 usage에 더합니다."""
-    context = SectionContext(document=state["document"], budget=rt.models.budget, documents=documents)
+    context = SectionContext(document=state["document"], budget=rt.models.budget, calls=getattr(rt, "gate", None), documents=documents)
     model = rt.models.chat(name, max_output_tokens=max_output_tokens)
     agent = section._agent(model, name, state, documents, [section.StopAfterModel(), AnswerInText()])
     try:

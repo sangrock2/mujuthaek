@@ -117,7 +117,7 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     document: DocumentModel = state["document"]
     documents = tuple(document_ids(state["material"]))
     draft = SectionDraft(spec.sections)
-    context = SectionContext(document=document, budget=rt.models.budget, draft=draft, documents=documents)
+    context = SectionContext(document=document, budget=rt.models.budget, calls=getattr(rt, "gate", None), draft=draft, documents=documents)
     context.check = lambda: _issues(spec, draft, state, rt, documents)
     tables = _tables(spec, draft, state, rt, documents, chat, context.usage) if "eligibility" in spec.sections and tables_on() else []
     calls = MODEL_CALLS.get(spec.name, MAX_MODEL_CALLS)
@@ -127,7 +127,11 @@ def run_section(spec: CallSpec, state: Any, rt: pipeline.Runtime) -> tuple[list[
     if draft.version:
         # 기준표 담당이 넣은 항목: 담당의 첫 차례 전에는 알리지 않되 검증은 미리 해 둠. 그래야 첫 차례가 끝내기뿐이어도 그 결과로 거둠
         # (검증 없이 끝나면 본문 자격 기준이 빠진 채 기준표 항목만으로 다 넣음이 됨)
-        verify.seen, verify.issues = draft.version, context.check()
+        try:
+            verify.seen, verify.issues = draft.version, context.check()
+        except Exception:  # 미리 하는 검증이 실패해도 공고 전체를 멈추지 않아요: 담당 안에서 다시 부를 때 아래 try가 이 담당만 멈춰요(재검토)
+            verify.seen, verify.issues = 0, []
+            log.exception("기준표 담당 뒤 미리 하는 검증이 실패했습니다", extra={"agent": spec.name})
     agent = _agent(model, spec.name, state, documents, [limit, verify, CutCallMiddleware()])
     last: dict[str, Any] = {}
     stopped = None
@@ -312,7 +316,7 @@ def _resolve_group(
     """같은 경고를 받은 항목들을 새 대화 하나로 봅니다. 그 항목들만 바뀌고 검증 결과에 새 문제 없이 문제가 줄었을 때만 고친 초안을 돌려줍니다."""
     trial = _copy(spec, draft)
     document: DocumentModel = state["document"]
-    context = SectionContext(document=document, budget=rt.models.budget, draft=trial, documents=documents)
+    context = SectionContext(document=document, budget=rt.models.budget, calls=getattr(rt, "gate", None), draft=trial, documents=documents)
     context.check = lambda: _issues(spec, trial, state, rt, documents)
     limit = ModelCallLimitMiddleware(run_limit=RESOLVER_CALLS, exit_behavior="end")
     model = chat(RESOLVER, max_output_tokens=min(spec.max_output_tokens, RESOLVER_OUTPUT_TOKENS))
@@ -406,7 +410,7 @@ def prime(state: Any, rt: pipeline.Runtime) -> list[dict[str, Any]]:
         return []
     document: DocumentModel = state["document"]
     documents = tuple(document_ids(state["material"]))
-    context = SectionContext(document=document, budget=rt.models.budget, documents=documents)
+    context = SectionContext(document=document, budget=rt.models.budget, calls=getattr(rt, "gate", None), documents=documents)
     # 추론 강도도 담당과 같게(다르면 앞부분이 도구 정의 다음부터 달라짐)
     model = chat(PRIME, max_output_tokens=PRIME_OUTPUT_TOKENS, cached=False)
     agent = _agent(model, PRIME, state, documents, [StopAfterModel()])
@@ -485,7 +489,7 @@ def _run_table(
 ) -> tuple[SectionDraft, dict[str, Any], list[dict[str, Any]]]:
     helper = SectionDraft(spec.sections)
     document: DocumentModel = state["document"]
-    context = SectionContext(document=document, budget=rt.models.budget, draft=helper, documents=documents)
+    context = SectionContext(document=document, budget=rt.models.budget, calls=getattr(rt, "gate", None), draft=helper, documents=documents)
     context.check = lambda: _table_issues(spec, helper, state, rt, documents, chunk)
     limit = ModelCallLimitMiddleware(run_limit=TABLE_CALLS, exit_behavior="end")
     output = min(spec.max_output_tokens, TABLE_OUTPUT_TOKENS)

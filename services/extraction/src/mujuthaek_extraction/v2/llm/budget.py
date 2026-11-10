@@ -46,6 +46,13 @@ class BudgetMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         context = request.runtime.context
+        gate = getattr(context, "calls", None)
+        if gate is None:
+            return self._call(request, handler, context)
+        with gate:  # 공고 하나의 동시 호출 상한(재시도 사이 쉬는 동안은 잡지 않음: 재시도 미들웨어가 이 바깥)
+            return self._call(request, handler, context)
+
+    def _call(self, request, handler, context):
         budget = getattr(context, "budget", None)
         if budget is None:
             response = handler(request)

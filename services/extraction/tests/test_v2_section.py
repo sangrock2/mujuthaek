@@ -1321,7 +1321,7 @@ def run_after_helpers(monkeypatch, found):
         )
 
     monkeypatch.setattr(section, "_tables", tables)
-    monkeypatch.setattr(section, "_issues", lambda *args: list(found))
+    monkeypatch.setattr(section, "_issues", lambda *args: found(*args) if callable(found) else list(found))
     monkeypatch.setattr(section, "document_ids", lambda material: ["text"])
     monkeypatch.setattr(section, "_agent", agent)
     monkeypatch.setenv(section.RESOLVER_ENV, "false")
@@ -1344,6 +1344,16 @@ def test_a_first_turn_that_only_finishes_after_the_helpers_is_sent_back_with_the
     turns, parts, usage, trace = run_after_helpers(monkeypatch, found)
     assert len(turns) >= 2 and len(turns[0]) == 2  # 첫 차례 전에는 그대로, 끝내기를 거두고 차례를 더 받음
     assert any(isinstance(m, HumanMessage) and "원문의 무주택 기준이 없습니다" in str(m.content) for m in turns[1])
+
+
+def test_a_failing_check_after_the_helpers_stops_only_this_agent(monkeypatch):
+    # 재검토(2026-11-10): 미리 하는 검증이 try 밖이라, 검증이 예외를 내면 담당만이 아니라 공고 처리 전체가 실패했음
+    def broken(*args):
+        raise RuntimeError("검증기 결함")
+
+    turns, parts, usage, trace = run_after_helpers(monkeypatch, broken)
+    assert trace["stopped"] and "검증기 결함" in trace["stopped"]
+    assert [row["id"] for row in trace["draft"]["items"]["eligibility"]] == ["t1-1-age"]  # 넣은 항목은 두고 이 담당만 멈춤
 
 
 def test_rows_a_criteria_table_helper_could_not_add_are_handed_to_the_eligibility_agent(monkeypatch):
@@ -1409,6 +1419,16 @@ def test_the_resolver_copy_keeps_items_that_were_not_added():
     assert copied.rejected == draft.rejected and copied.pending == draft.pending
     copied.rejected.clear()
     assert draft.rejected  # 사본을 고쳐도 원래 초안은 그대로
+
+    # 재검토: 실제로 버그였던 채택 관문까지 봄. 아무것도 풀지 않은 사본은 넣지 못한 항목 문제가 그대로라 채택하지 않음
+    spec = SimpleNamespace(sections=("eligibility",))
+    untouched = section._copy(spec, draft)
+    before, after = section._not_added(draft), section._not_added(untouched)
+    assert before and not section._settled(draft, untouched, {"e1"}, before, after)
+    solved = section._copy(spec, draft)
+    solved.items["eligibility"].append(solved.pending.pop(("eligibility", "e2")))
+    solved.rejected.clear()
+    assert section._settled(draft, solved, {"e1"}, before, section._not_added(solved))  # 풀면 채택
 
 
 def test_an_update_writes_to_the_item_where_it_is_now_even_if_an_earlier_item_was_removed_meanwhile(monkeypatch):

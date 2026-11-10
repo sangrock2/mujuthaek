@@ -151,14 +151,15 @@ def process(
     parallel_stagger: 병렬로 보낼 때 섹션 호출을 내보내는 간격(초, 워커는 설정 EXTRACTION_PARALLEL_STAGGER_SECONDS)."""
     usage = UsageRecorder()
     names = models.names
+    gate = call_gate(parallel_calls)
     metered = NoticeModels(
-        MeteredModel(models.primary, usage, names.get("primary", "primary")),
-        MeteredModel(models.fallback, usage, names.get("fallback", "fallback")) if models.fallback is not None else None,
+        MeteredModel(models.primary, usage, names.get("primary", "primary"), gate=gate),
+        MeteredModel(models.fallback, usage, names.get("fallback", "fallback"), gate=gate) if models.fallback is not None else None,
         models.budget,
         names,
         models.chat,  # V2 담당별 채팅 모델(LangChain). 예산 장부는 같은 것을 씀
     )
-    rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger)
+    rt = Runtime(metered, usage, reader, regions, clock, new_event, api_provider, require_pdf, parallel_calls, parallel_stagger, gate)
     from mujuthaek_extraction.v2.graph import run_graph  # 그래프가 이 모듈의 단계 함수를 가져다 쓰므로 실행할 때 가져옵니다
 
     outcome = run_graph(raw_event, rt, method)
@@ -168,6 +169,10 @@ def process(
 
 # ── 처리 단계 ──────────────────────────────────────────────────────────────────────────────────────────────
 # 아래 함수들은 추출 그래프(v2/graph.py)의 노드가 부르는 단계입니다. 순서·분기는 그래프가 정합니다.
+
+
+def call_gate(parallel_calls: int) -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(max(1, parallel_calls))
 
 
 @dataclass(frozen=True)
@@ -185,11 +190,14 @@ class Runtime:
     require_pdf: bool = True
     parallel_calls: int = 1
     parallel_stagger: float = 0.0
-    # V2 담당을 동시에 몇 개까지 돌릴지(parallel_calls). 담당은 Send로 한꺼번에 출발하므로 여기서 줄 세워요
-    gate: threading.BoundedSemaphore = field(init=False, repr=False, compare=False)
+    # 공고 하나에서 동시에 나가는 모델 호출 수(parallel_calls). 담당 노드가 아니라 호출마다 잡아요: 담당 노드에만 걸면 구조 단계·캐시 데우기와
+    # 담당 안의 기준표·해결 담당 호출이 빠져, 1로 두어도 여러 호출이 함께 나갔어요(2026-11-10 재검토). V1 방식 호출은 MeteredModel이,
+    # V2 담당 호출은 BudgetMiddleware가 이 세마포어를 잡습니다(서로 안에서 부르지 않아 겹쳐 잡지 않음)
+    gate: threading.BoundedSemaphore | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "gate", threading.BoundedSemaphore(max(1, self.parallel_calls)))
+        if self.gate is None:
+            object.__setattr__(self, "gate", call_gate(self.parallel_calls))
 
     def cost(self) -> float:
         return self.models.budget.spent_usd if self.models.budget else 0.0
