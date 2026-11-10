@@ -52,6 +52,8 @@ class Table:
     lines: tuple[str, ...]  # 원문의 표 행 줄 그대로(「| a | b |」)
     columns: tuple[str, ...] = ()  # V1이 복원한 열 제목(없으면 빈 값)
     caption: str = ""  # 엑셀 시트 이름 등
+    # 행마다 원문 글자의 줄 번호(0부터). 검증기의 기준표 행(verify/consistency.CriteriaRow.at)과 이 표의 행을 맞출 때 씀(v2/criteria.py)
+    spots: tuple[int, ...] = field(default=(), compare=False, repr=False)
 
     @property
     def rows(self) -> tuple[tuple[str, ...], ...]:
@@ -287,14 +289,14 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
     def close() -> None:
         nonlocal table
         if table is not None and table["lines"]:
-            items.append(Table(table["id"], table["area"], tuple(table["lines"]), tuple(table["columns"]), table["caption"]))
+            items.append(Table(table["id"], table["area"], tuple(table["lines"]), tuple(table["columns"]), table["caption"], tuple(table["spots"])))
         table = None
 
     def unnamed(caption: str = "") -> dict[str, Any]:
         counters[f"{area}.t"] = counters.get(f"{area}.t", 0) + 1
-        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption}
+        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption, "spots": []}
 
-    for raw in text.split("\n"):
+    for at, raw in enumerate(text.split("\n")):
         line = raw.rstrip("\r")
         if not line.strip():
             close()
@@ -317,7 +319,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
         if marker := TABLE.match(line):
             close()
             prefix = "" if document == 1 else f"d{document}."
-            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": ""}
+            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": "", "spots": []}
             continue
         if sheet := SHEET.match(line):
             close()
@@ -333,6 +335,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
             if table is None:
                 table = unnamed()
             table["lines"].append(line)
+            table["spots"].append(at)
             continue
         close()
         counters[area] = counters.get(area, 0) + 1

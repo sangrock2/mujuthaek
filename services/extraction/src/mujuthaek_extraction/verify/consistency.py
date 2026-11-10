@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Any
+from typing import Any, NamedTuple
 
 from mujuthaek_extraction.assemble.quotes import normalize
 from mujuthaek_extraction.assemble.values import to_krw
@@ -1463,8 +1463,17 @@ def _varies(labels: list[list[str]]) -> bool:
     return False
 
 
-def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, str]], str | None]]]:
-    """원문 자격 기준표마다 행 → (보여 줄 행 글, 기준값들, 행의 대상). 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다.
+class CriteriaRow(NamedTuple):
+    shown: str  # 보여 줄 행 글(병합 칸을 채운 읽기 도움 줄 ↳이 있으면 그것)
+    values: list[tuple[str, float, str]]  # 기준값 (PERCENT·KRW, 값, 원문 표기)
+    group: str | None  # 행의 대상(계층·공급유형)
+    # 원문 글자에서 그 행 줄의 번호(0부터). 병합 칸이 많은 표는 「|  |  | 맞벌이 | 140% |」처럼 같은 줄이 대상마다 되풀이되어, V2 기준표 담당이
+    # 맡은 행은 줄 글자가 아니라 이 번호로 가리킵니다
+    at: int
+
+
+def criteria_tables(text: str) -> list[list[CriteriaRow]]:
+    """원문 자격 기준표마다 기준값이 있는 행들. 행 글은 병합 칸을 채운 읽기 도움 줄(↳)이 있으면 그것을 씁니다.
     행의 대상은 기준값이 아닌 글자 칸 가운데 가구원 수·자녀 수·맞벌이 표시가 아닌 첫 칸(병합 칸은 위 행 것을 이어받음)."""
     lines = text.split(SHEET_START, 1)[0].split("\n")
     found = []
@@ -1503,7 +1512,7 @@ def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, s
                     carry[c] = cell
                     carry[c + 1 :] = [""] * (len(carry) - c - 1)
             group = next((cell for cell in carry[: len(cells)] if cell and not CONDITION_CELL.match(cell)), None)
-            data.append((aid or " ".join(cell for cell in cells if cell), values, group))
+            data.append(CriteriaRow(aid or " ".join(cell for cell in cells if cell), values, group, start + n))
             labels.append(label)
         if len(data) >= 2 and _varies(labels):
             found.append(data)
@@ -1512,7 +1521,7 @@ def _criteria_tables(text: str) -> list[list[tuple[str, list[tuple[str, float, s
 
 def _criteria_rows(text: str) -> list[tuple[str, list[tuple[str, float, str]]]]:
     """원문 자격 기준표의 행 → (보여 줄 행 글, 기준값들)."""
-    return [(shown, values) for table in _criteria_tables(text) for shown, values, _ in table]
+    return [(row.shown, row.values) for table in criteria_tables(text) for row in table]
 
 
 def _name_parts(name: str) -> list[str]:
@@ -1586,11 +1595,13 @@ def _used_criteria(candidate: dict[str, Any]) -> tuple[set[float], set[float]]:
     return percents, amounts
 
 
-def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
-    """기준표 행의 기준값을 쓰는 조건이 없는 행. 행의 대상을 조건 대상 이름과 맞춘 표는 그 대상의 조건(과 대상을 정하지 않은 조건·선정
-    조건식)의 값으로만 셉니다(다른 공급이 같은 비율을 써도 그 공급의 조건이 없으면 빠진 행). 맞추지 못한 표는 모든 조건의 값으로 셉니다."""
-    if not candidate["eligibility"]:
-        return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
+def missed_criteria_rows(
+    candidate: dict[str, Any], text: str, rows: frozenset[int] | None = None
+) -> tuple[list[tuple[str, list[str], str | None]], dict[str, str]]:
+    """기준표 행의 기준값을 쓰는 조건이 없는 행 (보여 줄 행 글, 빠진 값 표기들, 맞춘 대상)과, 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 →
+    원문 이름). 행의 대상을 조건 대상 이름과 맞춘 표는 그 대상의 조건(과 대상을 정하지 않은 조건·선정 조건식)의 값으로만 셉니다(다른 공급이
+    같은 비율을 써도 그 공급의 조건이 없으면 빠진 행). 맞추지 못한 표는 모든 조건의 값으로 셉니다. rows(원문 줄 번호, CriteriaRow.at)를 주면
+    그 행만 셉니다(V2 기준표 담당이 맡은 행)."""
     used = _used_criteria(candidate)
     named = [(item, [part for name in (item.get("scope") or {}).get("targetGroups") or [] for part in _name_parts(name)]) for item in candidate["eligibility"]]
     everyone = {"eligibility": [item for item, names in named if not names], "selectionRules": candidate["selectionRules"]}
@@ -1603,20 +1614,35 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
         return pools[key]
 
     missed: list[tuple[str, list[str], str | None]] = []
-    lacking: dict[str, str] = {}  # 기준표 행이 하나도 다뤄지지 않은 대상(공백을 뺀 이름 → 원문 이름)
-    for table in _criteria_tables("\n".join(sources.texts.values())):
-        owners = _row_owners(list(dict.fromkeys(group for _, _, group in table if group)), named)
+    lacking: dict[str, str] = {}
+    for table in criteria_tables(text):
+        owners = _row_owners(list(dict.fromkeys(row.group for row in table if row.group)), named)
         covered: dict[str, bool] = {}
-        for shown, values, group in table:
-            percents, amounts = used if owners is None or group is None else pool(owners[group])
-            gone = [raw for kind, value, raw in values if value not in (percents if kind == "PERCENT" else amounts)]
+        for row in table:
+            if rows is not None and row.at not in rows:
+                continue
+            percents, amounts = used if owners is None or row.group is None else pool(owners[row.group])
+            gone = [raw for kind, value, raw in row.values if value not in (percents if kind == "PERCENT" else amounts)]
             if gone:
-                missed.append((shown, gone, normalize(group) if owners is not None and group is not None else None))
-            if owners is not None and group is not None:
-                covered[group] = covered.get(group, False) or not gone
+                missed.append((row.shown, gone, normalize(row.group) if owners is not None and row.group is not None else None))
+            if owners is not None and row.group is not None:
+                covered[row.group] = covered.get(row.group, False) or not gone
         for group, any_row in covered.items():
             if not any_row:
                 lacking.setdefault(normalize(group), group)
+    return missed, lacking
+
+
+def criteria_omission_description(rows: list[tuple[str, list[str], str | None]]) -> str:
+    """기준표 행 누락(CRITERIA_TABLE_OMISSION_SUSPECTED) 설명. V2 담당에게는 설명 앞 220자만 가므로 빠진 값·첫 행을 앞에 둡니다."""
+    return f"원문 자격 기준표 {len(rows)}행의 기준값 {_shown_values(rows)}을 쓰는 자격 조건·예외가 없습니다(빠진 기준 의심): {_shown_rows(rows)}"
+
+
+def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find: Any) -> None:
+    """기준표 행의 기준값을 쓰는 조건이 없는 행(missed_criteria_rows). 대상 통째 누락과 행 일부 누락을 따로 알립니다."""
+    if not candidate["eligibility"]:
+        return  # 자격이 하나도 없으면 섹션 누락 검사(SECTION_OMISSION_SUSPECTED)가 봅니다
+    missed, lacking = missed_criteria_rows(candidate, "\n".join(sources.texts.values()))
     whole = [row for row in missed if row[2] in lacking]
     partial = [row for row in missed if row[2] not in lacking] if len(whole) >= CRITERIA_OMISSION_MIN_ROWS else missed
     # V2 담당에게는 설명 앞 220자만 가므로 대상·빠진 값·첫 행을 앞에 둡니다
@@ -1628,10 +1654,7 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
         )
         find("V8", CRITERIA_GROUP_OMISSION, "/quality/coverage/eligibility", description)
     if len(partial) >= CRITERIA_OMISSION_MIN_ROWS:
-        description = (
-            f"원문 자격 기준표 {len(partial)}행의 기준값 {_shown_values(partial)}을 쓰는 자격 조건·예외가 없습니다(빠진 기준 의심): {_shown_rows(partial)}"
-        )
-        find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", description)
+        find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", criteria_omission_description(partial))
 
 
 def _shown_values(rows: list[tuple[str, list[str], str | None]]) -> str:
