@@ -48,6 +48,28 @@ public class FavoriteRepository {
         == 1;
   }
 
+  /** 대상 하나에 둔 관심을 다른 대상으로 옮겨요. 같은 회원이 둘 다 뒀으면 옮길 줄을 지워요(기본 키가 겹치지 않게). 옮긴·지운 줄 수. */
+  public int retarget(Collection<String> targetTypes, UUID from, UUID to) {
+    int removed =
+        jdbc.sql(
+                "delete from account.favorites f where f.target_id = :from and f.target_type in (:types)"
+                    + " and exists (select 1 from account.favorites g where g.user_id = f.user_id"
+                    + " and g.target_type = f.target_type and g.target_id = :to)")
+            .param("from", from)
+            .param("to", to)
+            .param("types", targetTypes)
+            .update();
+    int moved =
+        jdbc.sql(
+                "update account.favorites set target_id = :to where target_id = :from"
+                    + " and target_type in (:types)")
+            .param("from", from)
+            .param("to", to)
+            .param("types", targetTypes)
+            .update();
+    return removed + moved;
+  }
+
   /** 대상 ID들 중 저장한 줄을 모두 지워요 (합쳐진 공고는 합치기 전 ID로 저장된 줄도 있어요). */
   public int remove(UUID userId, String targetType, Collection<UUID> targetIds) {
     return jdbc.sql(

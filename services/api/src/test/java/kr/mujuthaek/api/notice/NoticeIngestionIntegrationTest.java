@@ -703,6 +703,9 @@ class NoticeIngestionIntegrationTest {
         .doesNotContain(againId)
         .contains(firstId);
     assertThat(duplicates.list("HIDDEN").items()).hasSize(1);
+    // 2026-11-10 재검토: 숨긴 사업에 둔 관심은 user가 남은 사업으로 옮겨요
+    assertThat(events.stream(kr.mujuthaek.api.common.event.PolicyHidden.class))
+        .containsExactly(new kr.mujuthaek.api.common.event.PolicyHidden(againId, firstId));
     assertThatThrownBy(() -> duplicates.decide(againId, firstId, "KEEP_BOTH", "admin-1"))
         .isInstanceOf(kr.mujuthaek.api.common.exception.CustomException.class);
   }

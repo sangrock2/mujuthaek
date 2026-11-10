@@ -216,6 +216,13 @@ public class FavoriteService {
     };
   }
 
+  /** 숨긴 중복 정책 사업에 둔 관심을 남은 사업으로 옮겨요(PolicyHidden). 같은 회원이 둘 다 뒀으면 숨긴 쪽 줄만 지워요. 옮긴·지운 줄 수. */
+  @Transactional
+  public int moveToKeptPolicy(UUID hiddenPolicyId, UUID keptPolicyId) {
+    return favorites.retarget(
+        List.of("STARTUP_SUPPORT", "SPACE_RECRUITMENT"), hiddenPolicyId, keptPolicyId);
+  }
+
   /** NOTICE · BENEFIT · STARTUP_SUPPORT · SPACE_RECRUITMENT (대소문자 상관없이) */
   static String targetType(String value) {
     String type = value == null ? "" : value.strip().toUpperCase(Locale.ROOT).replace('-', '_');

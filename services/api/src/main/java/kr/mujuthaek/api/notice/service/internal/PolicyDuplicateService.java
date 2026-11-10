@@ -5,10 +5,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import kr.mujuthaek.api.common.event.PolicyHidden;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.notice.dto.response.AdminPolicyDuplicateResponse;
 import kr.mujuthaek.api.notice.repository.PolicyDuplicateRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,10 +29,13 @@ public class PolicyDuplicateService {
 
   private final PolicyDuplicateRepository duplicates;
   private final Clock clock;
+  private final ApplicationEventPublisher events;
 
-  public PolicyDuplicateService(PolicyDuplicateRepository duplicates, Clock clock) {
+  public PolicyDuplicateService(
+      PolicyDuplicateRepository duplicates, Clock clock, ApplicationEventPublisher events) {
     this.duplicates = duplicates;
     this.clock = clock;
+    this.events = events;
   }
 
   /** 새로 받은 사업을 먼저 있던 사업과 견줘 같아 보이면 후보로 올려요. 정책을 처음 저장한 같은 트랜잭션에서 불려요. */
@@ -72,6 +77,10 @@ public class PolicyDuplicateService {
     }
     if (!duplicates.decide(later, earlier, status, admin, clock.instant())) {
       throw new CustomException(ErrorCode.CONFLICT, "이미 처리했거나 없는 중복 후보예요");
+    }
+    if ("HIDDEN".equals(status)) {
+      // 숨긴 사업에 둔 관심은 user가 남은 사업으로 옮겨요(같은 트랜잭션)
+      events.publishEvent(new PolicyHidden(later, earlier));
     }
   }
 }
