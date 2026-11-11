@@ -14,6 +14,7 @@ V8 누락 탐지: AI가 "다 뽑았다(EXTRACTED)"고 한 섹션이 비었는데
 
 from __future__ import annotations
 
+import difflib
 import re
 from datetime import date
 from typing import Any, NamedTuple
@@ -985,7 +986,7 @@ HEADING_LOOKBACK = 3  # 표 위로 볼 글 줄 수(쪽 표시·빈 줄 제외)
 DOCUMENT_OMISSION_MIN_ROWS = 2  # 이만큼 빠져야 알립니다(한 행은 다른 표·글로 넣은 서류일 때가 많음)
 ROW_EXCERPT_CHARS = 60  # 빠진 행마다 보여 줄 글자 수
 ROW_EXCERPT_LEAD = 25  # 서류 낱말이 뒤에 있으면 그 앞 몇 글자부터 보여 줄지(서류 이름의 앞부분)
-OMITTED_ROWS = re.compile(r"(?:서류 표 행|첨부 증빙) (\d+)개")
+OMITTED_ROWS = re.compile(r"(?:서류 표 행|첨부 증빙|번호로 든 서류) (\d+)개")
 # 서류 칸 안에 「- 상황 : 서류」로 나열된 첨부 증빙(2026-11-07 23건 대조: 「자산 보유 사실 확인서」 행의 비고 칸 「- 비상장주식 : 증권사 조회내역,
 # 주식보관증 …」「- 장기카드대출 : 신용카드사가 발급한 증빙서류」를 V1은 모두 상황마다 서류로 나눴는데, V2 서류 담당은 bmc-71·gh-808에서 상위 서류
 # 하나만 넣고 끝냄. 그 행은 상위 서류가 인용해 행 누락으로는 잡히지 않았음). 그 증빙 서류를 이름으로 넣었거나 그 상황을 적용 대상으로 둔 서류가
@@ -1187,6 +1188,52 @@ def _unlisted_row_names(documents: list[dict[str, Any]], rows: list[str]) -> lis
     return missed
 
 
+# 서류 표 칸 안에 번호(①②…)로 하나씩 든 서류(2026-11-11 유료 확인 jbdc-16011: 「① 주민등록표초본 ② 가족관계증명서(상세) ③ 한부모가족증명서 …」
+# 칸의 한부모가족증명서·기본증명서·국민건강보험 요양급여내역·기존주택 처분 관련 서약서를 서류 담당이 넣지 않음. 그 행은 같은 칸의 다른 서류가
+# 인용해 행 누락으로는 잡히지 않았고, 이름이 여섯 개 미만이라 여러 이름 행 검사에도 걸리지 않음). 원문이 번호로 나눠 이름을 적은 서류라 하나만 빠져도
+# 알립니다. 「또는」으로 든 서류는 하나만 있어도 다룬 것으로 보고, 이름 표기가 조금 다른 것(「주민등록표등본」↔「주민등록등본」)은 글자가
+# ENUMERATED_SIMILAR 이상 같으면 다룬 것으로 봅니다(빠뜨렸다고 잘못 알리지 않게)
+ENUMERATED_ITEM = re.compile(r"[①-⑳]\s*([^①-⑳]+)")
+ENUMERATED_START = re.compile(r"[①-⑳]")
+ENUMERATED_NAME_CHARS = 40  # 번호 뒤 글이 이보다 길면 서류 이름이 아니라 설명
+ENUMERATED_CUT = re.compile(r"\s(?:※|•|-\s)")
+ENUMERATED_ALTERNATIVE = re.compile(r"\s또는\s|/")
+# 이름은 서류 낱말로 끝나야 합니다(괄호 안 예시는 빼고 봄). 표가 한 칸에 뭉쳐 읽혀 번호 뒤에 다른 칸 글이 이어진 것(「해당직장 입증서류 자영업자가 아닌
+# 분으로 과거 1년 이내」)은 이름이 아닙니다
+ENUMERATED_DOCUMENT = re.compile(rf"(?:{DOCUMENT_WORD.pattern}|내역|증서|증빙|서류|영수증)$")
+ENUMERATED_SIMILAR = 0.8
+# 다른 표·별첨을 가리키는 묶음 항목(「소득세납부 입증서류 (아래 <표9> 참고)」)은 그 표의 서류를 넣었으면 다룬 것이라 보지 않습니다
+ENUMERATED_POINTER = re.compile(r"참고|참조|<\s*표|별첨")
+
+
+def _similar(a: str, b: str) -> bool:
+    return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= ENUMERATED_SIMILAR
+
+
+def _unlisted_enumerated(documents: list[dict[str, Any]], rows: list[str]) -> list[str]:
+    """서류 표 칸에 번호로 든 서류 가운데 서류 목록(이름, 괄호 안 예시를 뺀 이름)에 없는 것."""
+    names = {normalize(str(d.get("name") or "")) for d in documents} | {normalize(NAME_NOTE.sub("", str(d.get("name") or ""))) for d in documents}
+    names = {n for n in names if len(n) >= 3}
+    missed: list[str] = []
+    for row in rows:
+        for cell in _cells(row):
+            if not ENUMERATED_START.match(cell):
+                continue  # 번호로 시작하는 칸만: 표 하나가 한 칸에 뭉친 행(「※ 직인 … <표9> … ① 재직증명서 근로자 …」)은 여러 이름 행 검사가 봅니다
+            for match in ENUMERATED_ITEM.finditer(cell):
+                item = ENUMERATED_CUT.split(match[1], maxsplit=1)[0].strip()
+                if not item or len(item) > ENUMERATED_NAME_CHARS or ENUMERATED_POINTER.search(item):
+                    continue
+                if not ENUMERATED_DOCUMENT.search(NAME_NOTE.sub("", item).strip()):
+                    continue
+                choices = [normalize(x) for x in ENUMERATED_ALTERNATIVE.split(NAME_NOTE.sub("", item))]
+                choices = [x for x in choices if len(x) >= 3]
+                if not choices or any(_similar(x, n) for x in choices for n in names):
+                    continue
+                if item not in missed:
+                    missed.append(item)
+    return missed
+
+
 def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
     documents = candidate.get("requiredDocuments") or []
     if not documents:
@@ -1204,6 +1251,10 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
             continue
         missed.append(_row_excerpt(row))
     parts = []
+    enumerated = _unlisted_enumerated(documents, rows)
+    if enumerated:  # 원문이 번호로 하나씩 든 서류 이름이라 하나만 빠져도 알리고, 이름이 보이게 맨 앞에 적습니다(V2 담당에게는 앞부분만 감)
+        shown = ", ".join(f"「{name}」" for name in enumerated[:4])
+        parts.append(f"서류 표 칸에 번호로 든 서류 {len(enumerated)}개가 서류 목록에 없습니다: {shown}{' …' if len(enumerated) > 4 else ''}")
     forms = _unlisted_forms(documents, "\n".join(sources.texts.values()))
     if forms:  # 별지 서식은 원문이 이름으로 정해 둔 서류라 하나만 빠져도 알립니다
         parts.append(f"원문이 별지 서식으로 든 서류 {len(forms)}개가 서류 목록에 없습니다: {', '.join(f'「{form}」' for form in forms[:3])}")
@@ -1211,7 +1262,7 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
     if submitted:  # 글로 내라고 한 서류도 원문이 이름을 적은 서류라 하나만 빠져도 알립니다
         shown = ", ".join(f"「{name}」" for name in submitted[:3])
         parts.append(f"원문 글에서 내라고 한 서류 {len(submitted)}개가 서류 목록에 없습니다: {shown}{' …' if len(submitted) > 3 else ''}")
-    listed = _unlisted_row_names(documents, rows)
+    listed = [name for name in _unlisted_row_names(documents, rows) if not any(normalize(name) in normalize(item) for item in enumerated)]
     if listed:
         shown = ", ".join(f"「{name}」" for name in listed[:4])
         parts.append(
@@ -1229,6 +1280,89 @@ def _check_document_rows(candidate: dict[str, Any], sources: SourceBundle, find)
         parts.append(f"원문 서류 표 행 {len(missed)}개를 근거로 쓴 서류가 없습니다(빠진 서류 의심): {shown}{' …' if len(missed) > 3 else ''}")
     if parts:
         find("V8", DOCUMENT_OMISSION, "/quality/coverage/requiredDocuments", " ".join(parts))
+
+
+# ---- V8 배점표 행 누락 (2026-11-11) ----
+# 배점(가점) 표의 점수 행마다 그 행을 근거로 인용한 가점 항목(SCORING)이 있어야 합니다. 2026-11-11 유료 확인 jbdc-16011: 선정 담당이 회차마다
+# 가점 행 43개 중 27개만 넣음 — 「신혼부부 특별공급 가점항목」 표(행마다 「3명 이상 : 3점 2명 : 2점 1명 : 1점」처럼 단계를 한 칸에 적음) 6행 16단계가
+# 통째로 빠졌는데, 가점 항목이 하나라도 있으면 배점표 누락 검사(SCORING_OMISSION_SUSPECTED)가 걸리지 않았음.
+# 표는 머리 세 행이나 표 바로 위 짧은 제목 줄(「■ 배점기준표」「• 신혼부부 특별공급 가점항목」)에 배점·가점이 있는 것만 봅니다. 점수 행은 「○점」이나
+# 점수만 든 칸(1~2자리 수)이 있는 행이고, 0점뿐인 행(「해당없음 | 0」)·합계 행은 뺍니다. 한 칸에 「: ○점」 단계가 여럿이면 단계 수만큼, 아니면
+# 하나의 항목이 그 행을 인용해야 합니다. 인용은 근거 인용문(4자 이상)과 행 글이 서로 품는지로 봅니다(서류 표 행 검사와 같음).
+# 빠진 단계가 SCORING_OMISSION_MIN_LEVELS 이상일 때만 알립니다. 빠진 값이지 틀린 값이 아니라 메모이고(verifier.NOTE_CODES), V2 선정 담당은 끝내기 전에
+# 빠진 행을 받습니다(v2/agents/verify.OMISSION_CODES)
+SCORING_WORD = re.compile(r"배\s*점|가\s*점")
+SCORING_HEADING_CHARS = 40
+SCORE_LEVEL = re.compile(r"[:：]\s*(\d{1,2}(?:\.\d+)?)\s*점")
+SCORE_ANY = re.compile(r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*점")
+SCORE_CELL = re.compile(r"\d{1,2}(?:\.\d+)?")
+TOTAL_CELL = re.compile(r"^(?:합\s*계|소\s*계|총\s*계|계)$")
+SCORING_OMISSION_MIN_LEVELS = 2
+SCORING_ROWS_SHOWN = 6
+SCORING_ROW_CHARS = 30  # 빠진 행마다 보여 줄 앞 칸 글자 수(V2 담당에게는 설명 앞 400자만 감)
+TABLE_MARK = re.compile(r"^\s*\[(표 [^\]]+)\]\s*$")
+
+
+class ScoringRow(NamedTuple):
+    line: str  # 원문 행
+    levels: int  # 점수 단계 수
+    shown: str  # 보여 줄 글: 표 번호(바로 위 「[표 15-2]」)와 앞 칸들
+
+
+def _scoring_table_rows(text: str) -> list[ScoringRow]:
+    """원문 배점표의 점수 행과 그 행의 점수 단계 수."""
+    lines = text.split(SHEET_START, 1)[0].split("\n")
+    out: list[ScoringRow] = []
+    i = 0
+    while i < len(lines):
+        if not (_in_table(lines[i]) and (i == 0 or not _in_table(lines[i - 1]))):
+            i += 1
+            continue
+        start = i
+        while i < len(lines) and _in_table(lines[i]):
+            i += 1
+        rows = [line for line in lines[start:i] if _row_line(line)]
+        above = [line.strip() for line in reversed(lines[:start]) if line.strip() and not PAGE_MARK.match(line)][:HEADING_LOOKBACK]
+        titled = any(len(line) <= SCORING_HEADING_CHARS and SCORING_WORD.search(line) for line in above)
+        if not titled and not any(SCORING_WORD.search(row) for row in rows[:3]):
+            continue
+        mark = next((found for found in map(TABLE_MARK.match, lines[max(0, start - 2) : start]) if found), None)
+        for row in rows:
+            cells = [cell for cell in _cells(row) if cell]
+            if not cells or TOTAL_CELL.match(cells[0]):
+                continue
+            levels = [float(m[1]) for m in SCORE_LEVEL.finditer(row) if float(m[1]) > 0]
+            points = [float(m[1]) for m in SCORE_ANY.finditer(row)] + [float(c) for c in cells if SCORE_CELL.fullmatch(c)]
+            shown = " ".join([*([mark[1]] if mark else []), " ".join(cells)[:SCORING_ROW_CHARS]])
+            if len(levels) >= 2:
+                out.append(ScoringRow(row, len(levels), shown))
+            elif any(v > 0 for v in points):
+                out.append(ScoringRow(row, 1, shown))
+    return out
+
+
+def _check_scoring_rows(candidate: dict[str, Any], sources: SourceBundle, find) -> None:
+    scoring = [rule for rule in candidate["selectionRules"] if rule.get("kind") == "SCORING"]
+    if not scoring:
+        return  # 가점 항목이 하나도 없으면 배점표 누락 검사(_check_omissions)가 봅니다
+    quotes = {ev["id"]: normalize(ev["quote"]) for ev in candidate.get("evidence") or []}
+    cited = [[quotes[i] for i in rule.get("evidenceIds") or [] if len(quotes.get(i, "")) >= 4] for rule in scoring]
+    missed: list[tuple[str, int]] = []
+    for row in _scoring_table_rows("\n".join(sources.texts.values())):
+        plain = normalize(row.line)
+        users = sum(1 for refs in cited if any(q in plain or plain in q for q in refs))
+        if users < row.levels:
+            missed.append((row.shown, row.levels - users))
+    total = sum(gone for _, gone in missed)
+    if total >= SCORING_OMISSION_MIN_LEVELS:
+        shown = ", ".join(f"「{row}」({gone}단계)" for row, gone in missed[:SCORING_ROWS_SHOWN])
+        more = " …" if len(missed) > SCORING_ROWS_SHOWN else ""
+        find(
+            "V8",
+            "SCORING_OMISSION_SUSPECTED",
+            "/quality/coverage/selectionRules",
+            f"원문 배점표 {len(missed)}행의 점수 {total}단계를 근거로 쓴 가점 항목이 없습니다(빠진 가점 의심): {shown}{more}",
+        )
 
 
 # ---- V8 일정 누락 (2026-11-09) ----
@@ -1696,6 +1830,7 @@ def check_consistency(candidate: dict[str, Any], sources: SourceBundle) -> list[
     _check_payment_parts(candidate, find)
     _check_omissions(candidate, sources, find)
     _check_document_rows(candidate, sources, find)
+    _check_scoring_rows(candidate, sources, find)
     _check_schedule_rows(candidate, sources, find)
     _check_criteria_rows(candidate, sources, find)
     _check_image_content(candidate, sources, find)
