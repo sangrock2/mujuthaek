@@ -1,6 +1,12 @@
 // 화면용 예시 데이터 (디자인 WebDetail · WebDetailUnits · MDetail · MDetailUnits). 실제 값은 API에서 받아요.
 import type { Verdict } from "@/components/ui/Badge";
-import { happyHousingDoc, parkvilleDoc, youthPurchaseDoc, type NoticeDoc } from "./notice-doc";
+import {
+  happyHousingDoc,
+  happyHousingInReviewDoc,
+  parkvilleDoc,
+  youthPurchaseDoc,
+  type NoticeDoc,
+} from "./notice-doc";
 
 export type NoticeFact = { label: string; value: string };
 
@@ -182,7 +188,7 @@ const happyHousing: Omit<StandardNotice, "id"> = {
       { rank: 3, desc: "그 밖의 지역", state: "none" },
     ],
     tieBreak: "추첨",
-    sourcePage: 7,
+    sourcePage: 5,
   },
   money: {
     type: "26A",
@@ -193,17 +199,13 @@ const happyHousing: Omit<StandardNotice, "id"> = {
     prep: "960만 원",
     note: "월 임대료 18만 원 · 주변 시세의 72% 수준",
   },
+  // 블록마다 위치가 달라 점수도 따로 (항목 점수·가까운 시설은 features/notice/area.ts 목업)
   life: {
     score: 82,
-    min: 82,
+    min: 74,
     sites: [
-      {
-        id: "main",
-        areaId: "mock-area-1",
-        name: "마포 행복주택",
-        score: 82,
-        tags: ["역세권", "숲세권"],
-      },
+      { id: "a", areaId: "mock-area-1", name: "A블록", score: 82, tags: ["역세권", "숲세권"] },
+      { id: "b", areaId: "mock-area-3", name: "B블록", score: 74, tags: ["숲세권"] },
     ],
   },
   benefitArea: "서울 마포구",
@@ -283,7 +285,7 @@ const youthPurchase: Omit<UnitListNotice, "id"> = {
       { rank: 3, desc: "본인 소득 중위 100% 이하", state: "mine" },
     ],
     tieBreak: "배점",
-    sourcePage: 5,
+    sourcePage: 2,
   },
   units: [
     {
@@ -477,12 +479,9 @@ const parkville: Omit<StandardNotice, "id"> = {
     note: "계약금 50만 원은 계약 당일에 넣어요 · 월 임대료 11만 4,150원",
   },
   life: {
-    score: 64,
-    min: 52,
-    sites: [
-      { id: "a", areaId: "mock-area-2", name: "사송 A-2블록", score: 64, tags: ["숲세권"] },
-      { id: "b", areaId: "mock-area-3", name: "사송 B-1블록", score: 52, tags: [] },
-    ],
+    score: 58,
+    min: 58,
+    sites: [{ id: "a", areaId: "mock-area-2", name: "삼성파크빌", score: 58, tags: ["숲세권"] }],
   },
   benefitArea: "경남 양산시",
   benefits: [
@@ -492,9 +491,9 @@ const parkville: Omit<StandardNotice, "id"> = {
 };
 
 export const notices: Notice[] = [
-  // 블록별 공급 주택이 있는 일반 공고
-  { ...happyHousing, id: "n1", units: blockUnits },
-  // 원문 PDF · 목차가 모두 있는 공고 (실제 추출 데이터)
+  // 블록별 공급 주택이 있는 일반 공고 · 규제지역 안내 · 원문과 다시 확인하는 자격 조건(관리자 검수 r2와 같은 공고)
+  { ...happyHousing, id: "n1", units: blockUnits, doc: happyHousingInReviewDoc },
+  // 목차가 모두 있는 공고 (실제 추출 데이터를 가공) · 후속 안내 · 정정 이력
   { ...parkville, id: "n7" },
   // 공급 주택 목록이 없는 일반 공고
   {

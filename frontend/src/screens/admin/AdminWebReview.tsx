@@ -7,7 +7,7 @@ import { AdminTitle, AdminTitleRow } from "@/components/admin/AdminShell";
 import { Badge } from "@/components/ui/Badge";
 import { decideReview, reviewMeta } from "@/features/admin/api";
 import { useReviewDecided, useReviewDetail, useReviewQueue } from "@/features/admin/queries";
-import { traceJobOf } from "@/features/admin/trace";
+import { MOCK_TRACE_REVIEW_ID, traceJobOf } from "@/features/admin/trace";
 import { cn } from "@/lib/cn";
 import type { ReviewReason, SourcePartKind } from "@/mocks/admin";
 import { USE_MOCKS } from "@/lib/api/config";
@@ -237,16 +237,17 @@ export function AdminWebReview() {
                 </span>
               </div>
               <div className="flex flex-wrap gap-[8px]">
-                {/* 공고 검수만: 추출 담당 에이전트들의 기록(혜택 정제는 다른 흐름이라 없어요). 목업은 예시 기록 */}
-                {cur.id !== "empty" && (USE_MOCKS || traceJobOf(cur.id)) && (
-                  <Link
-                    href={`/admin/review/trace?job=${encodeURIComponent(traceJobOf(cur.id) ?? cur.id)}`}
-                    className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
-                  >
-                    <Bot size={16} aria-hidden />
-                    추출 과정 보기
-                  </Link>
-                )}
+                {/* 공고 검수만: 추출 담당 에이전트들의 기록(혜택 정제는 다른 흐름이라 없어요). 목업은 예시 기록이 있는 공고 하나만 */}
+                {cur.id !== "empty" &&
+                  (USE_MOCKS ? cur.id === MOCK_TRACE_REVIEW_ID : traceJobOf(cur.id)) && (
+                    <Link
+                      href={`/admin/review/trace?job=${encodeURIComponent(traceJobOf(cur.id) ?? cur.id)}`}
+                      className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
+                    >
+                      <Bot size={16} aria-hidden />
+                      추출 과정 보기
+                    </Link>
+                  )}
                 <a
                   href={reviewMeta.get(cur.id)?.detailUrl ?? "#"}
                   target="_blank"

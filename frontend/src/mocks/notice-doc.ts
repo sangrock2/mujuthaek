@@ -112,7 +112,7 @@ export type NoticeDoc = {
     detailUrl: string;
     /**
      * 앱 안에서 열 수 있는 원문 PDF들 (백엔드 files[].viewUrl이 있는 것). 이 칸이 있으면 근거마다 그 PDF(fileId)를 열고,
-     * 없으면(목업) pdfUrl 하나로 열어요
+     * 없으면(예전 응답) pdfUrl 하나로 열어요. 목업은 시연용 예시 PDF(public/mock) 하나예요
      */
     files?: NoticePdfFile[];
     /** 글자를 읽은 PDF가 하나뿐이면 그 파일 ID (어느 PDF인지 모르는 쪽 번호를 열 때만 써요) */
@@ -120,7 +120,7 @@ export type NoticeDoc = {
   };
   /** 섹션별 원문 쪽 번호 (1부터) */
   pages: Partial<Record<NoticeSectionKey, number>>;
-  /** 섹션 쪽 번호의 근거가 어느 PDF의 어느 문장인지 (실제 응답만, 목업은 없음) */
+  /** 섹션 쪽 번호의 근거가 어느 PDF의 어느 문장인지. 목업은 시연용 예시 PDF에 그대로 들어 있는 문장이에요 */
   anchors?: Partial<Record<NoticeSectionKey, PdfAnchor>>;
   /** detail: 예외 조건. checking: 원문과 다시 확인하는 중인 조건 */
   eligibility: {
@@ -160,19 +160,39 @@ export type NoticeDoc = {
   contacts: { id: string; name: string; phone: string; desc: string }[];
 };
 
-/** 양산 삼성파크빌 국민임대 (추출 예시 데이터 그대로 가공) */
+/**
+ * 목업 원문: 시연용 예시 PDF (실제 기관 공고문이 아니에요). scripts/make-demo-pdfs.mjs로 만들고, 아래 anchors의 문장이 그 쪽에
+ * 꼭 한 번씩 들어 있어 PDF 보기가 그 문장을 강조해요. 문장을 바꾸면 스크립트도 함께 바꿔 다시 만들어요
+ */
+function demoSource(id: string, name: string, pageCount: number): NoticeDoc["source"] {
+  const pdfUrl = `/mock/${id}.pdf`;
+  return {
+    fileName: name,
+    pdfUrl,
+    pageCount,
+    detailUrl: "https://apply.lh.or.kr",
+    files: [{ id, name, pdfUrl, pageCount }],
+    soleFileId: id,
+  };
+}
+
+/** 섹션별 근거 문장 (모두 같은 시연 PDF) */
+function demoAnchors(
+  fileId: string,
+  quotes: Partial<Record<NoticeSectionKey, string>>,
+): NoticeDoc["anchors"] {
+  return Object.fromEntries(
+    Object.entries(quotes).map(([k, quote]) => [k, { fileId, quote }]),
+  ) as NoticeDoc["anchors"];
+}
+
+/** 양산 삼성파크빌 국민임대 (추출 예시 데이터를 가공, 원문은 시연용 예시 PDF) */
 export const parkvilleDoc: NoticeDoc = {
   status: "OPEN",
   applyPeriod: { start: "2026-10-12", end: "2026-11-12", note: "현장 방문 · 10:00~16:00" },
   summary:
     "남은 세대를 방문 순서대로 동호를 고른 뒤 먼저 계약하고, 계약 후에 자격을 확인하는 국민임대 모집이에요.",
-  source: {
-    fileName: "양산삼성파크빌자격완화입주자모집(2026.09.30).pdf",
-    pdfUrl: "/mock/notice-n7.pdf",
-    pageCount: 8,
-    detailUrl:
-      "https://apply.lh.or.kr/lhapply/apply/wt/wrtanc/selectWrtancInfo.do?panId=2015122300020825&ccrCnntSysDsCd=03&uppAisTpCd=06&aisTpCd=07&mi=1026",
-  },
+  source: demoSource("notice-n7", "양산 삼성파크빌 국민임대 선착순 모집 공고(시연용 예시).pdf", 8),
   pages: {
     eligibility: 3,
     housing: 2,
@@ -183,6 +203,19 @@ export const parkvilleDoc: NoticeDoc = {
     living: 6,
     contacts: 2,
   },
+  anchors: demoAnchors("notice-n7", {
+    eligibility:
+      "신청일 현재 세대구성원 전원이 무주택이어야 하며, 공고일부터 계약 체결 시까지 이를 유지하여야 합니다.",
+    housing: "임대보증금은 계약금 500,000원과 잔금 18,051,000원으로 나누어 납부합니다.",
+    schedule: "방문 신청 및 동호 지정·계약은 2026. 10. 12.(월)부터 11. 12.(목)까지 진행합니다.",
+    apply: "인터넷 신청은 받지 않으며 현장 방문 접수만 가능합니다.",
+    selection:
+      "거주지, 순위, 배점과 관계없이 방문한 순서대로 동호를 지정하여 계약하고, 계약자의 무주택 및 자동차 기준은 계약 후 확인합니다.",
+    cautions:
+      "동호를 지정한 날 16시까지 안내받은 계좌로 계약금 50만 원을 입금하여야 하며, 기한 내 입금하지 않으면 지정한 동호는 취소됩니다.",
+    living: "잔금을 납부하고 이삿짐 반입 후 본인 확인을 거쳐 열쇠를 받습니다.",
+    contacts: "삼성파크빌 관리사무소 055-367-0335 (세대 열람 전 문의)",
+  }),
   eligibility: [
     {
       id: "eligibility-homeless",
@@ -528,13 +561,7 @@ export const happyHousingDoc: NoticeDoc = {
   status: "OPEN",
   applyPeriod: { start: "2026-10-14", end: "2026-10-31", note: "LH 청약플러스 온라인 신청" },
   summary: "청년·신혼부부에게 시세보다 싸게 빌려주는 행복주택 120호 입주자 모집이에요.",
-  source: {
-    fileName: "○○지구 행복주택 입주자모집공고.pdf",
-    // 임시: 로컬 예시 PDF로 보여줘요 (쪽 번호는 실제와 달라요)
-    pdfUrl: "/mock/notice-n7.pdf",
-    pageCount: 8,
-    detailUrl: "https://apply.lh.or.kr",
-  },
+  source: demoSource("notice-n1", "○○지구 행복주택 입주자 모집 공고(시연용 예시).pdf", 8),
   pages: {
     eligibility: 3,
     housing: 2,
@@ -545,6 +572,16 @@ export const happyHousingDoc: NoticeDoc = {
     living: 7,
     contacts: 8,
   },
+  anchors: demoAnchors("notice-n1", {
+    eligibility: "공고일 현재 세대구성원 전원이 무주택이어야 합니다.",
+    housing: "위 임대조건은 청년 계층 기준이며, 계층별 임대조건은 4쪽을 참고하시기 바랍니다.",
+    schedule: "인터넷 청약 접수는 2026. 10. 14.(수)부터 10. 31.(토)까지입니다.",
+    apply: "LH 청약플러스 누리집 또는 모바일 앱으로 인터넷 신청합니다.",
+    selection: "동일 순위 내 경쟁이 있으면 추첨으로 입주자를 선정합니다.",
+    cautions: "1세대 1주택 신청 원칙이며, 중복 신청 시 모두 무효 처리합니다.",
+    living: "청년 계층은 최대 6년, 자녀가 있는 가구는 최대 10년까지 거주할 수 있습니다.",
+    contacts: "LH 콜센터 1600-1004 (청약 신청 관련 문의)",
+  }),
   eligibility: [
     {
       id: "age",
@@ -628,7 +665,8 @@ export const happyHousingDoc: NoticeDoc = {
   selection: [
     { id: "p1", kind: "PRIORITY", text: "1순위: 해당 지역에 살거나 직장이 있어요." },
     { id: "p2", kind: "PRIORITY", text: "2순위: 서울에 살거나 직장이 있어요." },
-    { id: "p3", kind: "LOTTERY", text: "같은 순위 안에서는 추첨으로 뽑아요." },
+    { id: "p3", kind: "PRIORITY", text: "3순위: 그 밖의 지역에 살아요." },
+    { id: "p4", kind: "LOTTERY", text: "같은 순위 안에서는 추첨으로 뽑아요." },
   ],
   cautions: [
     {
@@ -647,19 +685,37 @@ export const happyHousingDoc: NoticeDoc = {
   contacts: [{ id: "lh", name: "LH 콜센터", phone: "1600-1004", desc: "신청 관련 문의" }],
 };
 
+/**
+ * 행복주택 예시 중 공고 n1: 검수 대기열(관리자 검수 r2)에서 자산·자동차 기준을 원문과 다시 확인하는 중이라, 그 조건을 「확인 중」으로 보여 주고
+ * 맨 위에 알림 줄을 띄워요 (관리자 「추출 과정 보기」 목업과 같은 이야기)
+ */
+export const happyHousingInReviewDoc: NoticeDoc = {
+  ...happyHousingDoc,
+  eligibility: happyHousingDoc.eligibility.map((e) =>
+    e.category === "ASSETS" || e.category === "CAR_ASSETS" ? { ...e, checking: true } : e,
+  ),
+  held: [{ key: "eligibility", label: "신청 자격" }],
+};
+
 /** 청년 매입임대 예시 (주택은 주택목록에서 보여줘요) */
 export const youthPurchaseDoc: NoticeDoc = {
   status: "OPEN",
   applyPeriod: { start: "2026-10-20", end: "2026-10-24", note: "LH 청약플러스 온라인 신청" },
   summary: "마포구 청년에게 빌라·원룸을 시세의 40~50%로 빌려주는 매입임대 8호 모집이에요.",
-  source: {
-    fileName: "2026년 2차 청년 매입임대주택 입주자모집공고.pdf",
-    // 임시: 로컬 예시 PDF로 보여줘요 (쪽 번호는 실제와 달라요)
-    pdfUrl: "/mock/notice-n7.pdf",
-    pageCount: 8,
-    detailUrl: "https://apply.lh.or.kr",
-  },
-  pages: { eligibility: 3, schedule: 5, apply: 6, selection: 5, living: 7, contacts: 8 },
+  source: demoSource(
+    "notice-n4",
+    "2026년 2차 청년 매입임대주택 입주자 모집 공고(시연용 예시).pdf",
+    4,
+  ),
+  pages: { eligibility: 2, selection: 2, schedule: 3, apply: 3, living: 4, contacts: 4 },
+  anchors: demoAnchors("notice-n4", {
+    eligibility: "공고일 현재 만 19세 이상 39세 이하인 미혼 청년이어야 합니다.",
+    selection: "같은 순위 안에서는 배점이 높은 순서로 입주자를 선정합니다.",
+    schedule: "신청 접수는 2026. 10. 20.(화)부터 10. 24.(토)까지 받습니다.",
+    apply: "LH 청약플러스 누리집에서 인터넷으로 신청합니다.",
+    living: "임대차계약 기간은 2년이며, 재계약을 거쳐 최대 6년까지 거주할 수 있습니다.",
+    contacts: "LH 콜센터 1600-1004 (매입임대 신청 문의)",
+  }),
   eligibility: [
     { id: "age", category: "AGE", text: "만 19~39세 미혼 청년이에요." },
     { id: "homeless", category: "HOME_OWNERSHIP", text: "본인이 집이 없어야 해요." },

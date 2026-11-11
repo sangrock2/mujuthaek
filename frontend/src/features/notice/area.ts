@@ -96,25 +96,58 @@ function useApiSiteLife(areaId: string | null) {
   return { data: q.data, loading: Boolean(areaId) && q.isPending, error: q.isError };
 }
 
-const mockSiteLife: SiteLife = {
+/** 목업 단지의 항목 점수 (총점 = 다섯 항목 평균, mocks/notice의 life.sites와 맞춰요) */
+const mockLife = (scores: number[], facts: SiteLife["facts"]): SiteLife => ({
   approximate: false,
-  categories: [
-    { key: "TRANSIT", label: "교통", score: 90 },
-    { key: "SCHOOL", label: "학교", score: 72 },
-    { key: "PARK", label: "공원", score: 81 },
-    { key: "CONVENIENCE", label: "편의시설", score: 88 },
-    { key: "HOSPITAL", label: "병원", score: 79 },
-  ],
-  facts: [
-    { label: "망원역까지", value: "도보 6분" },
-    { label: "초등학교까지", value: "320m" },
-    { label: "공원까지", value: "450m" },
-    { label: "300m 안 편의점", value: "5곳" },
-  ],
+  categories: (Object.keys(categoryLabel) as LifeCategory[]).map((key, i) => ({
+    key,
+    label: categoryLabel[key],
+    score: scores[i]!,
+  })),
+  facts,
+});
+
+const mockSiteLives: Record<string, SiteLife> = {
+  // ○○지구 행복주택 A블록 (82점)
+  "mock-area-1": mockLife(
+    [90, 72, 81, 88, 79],
+    [
+      { label: "○○역까지", value: "도보 6분" },
+      { label: "초등학교까지", value: "320m" },
+      { label: "공원까지", value: "450m" },
+      { label: "300m 안 편의점", value: "5곳" },
+    ],
+  ),
+  // 양산 삼성파크빌 (58점): 가까운 역이 없어 버스 정류장 거리를 보여 줘요
+  "mock-area-2": mockLife(
+    [41, 66, 74, 52, 57],
+    [
+      { label: "버스 정류장까지", value: "90m" },
+      { label: "초등학교까지", value: "540m" },
+      { label: "공원까지", value: "380m" },
+      { label: "300m 안 편의점", value: "2곳" },
+      { label: "병원까지", value: "1.4km" },
+    ],
+  ),
+  // ○○지구 행복주택 B블록 (74점)
+  "mock-area-3": mockLife(
+    [70, 80, 76, 72, 72],
+    [
+      { label: "○○역까지", value: "도보 9분" },
+      { label: "초등학교까지", value: "260m" },
+      { label: "공원까지", value: "520m" },
+      { label: "300m 안 편의점", value: "3곳" },
+    ],
+  ),
 };
 
 function useMockSiteLife(areaId: string | null) {
-  const q = useQuery(mockQuery(siteLifeKey(areaId ?? ""), mockSiteLife));
+  const q = useQuery(
+    mockQuery(
+      siteLifeKey(areaId ?? ""),
+      mockSiteLives[areaId ?? ""] ?? mockSiteLives["mock-area-1"]!,
+    ),
+  );
   return { data: areaId ? q.data : undefined, loading: false, error: false };
 }
 
