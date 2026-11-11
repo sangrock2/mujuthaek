@@ -48,7 +48,7 @@ export const homesSummary: HomesSummary = {
   listings: [
     {
       id: "n1",
-      region: "11650",
+      region: "11440",
       verdict: "ok",
       rank: 1,
       org: "LH · 행복주택",
@@ -57,6 +57,19 @@ export const homesSummary: HomesSummary = {
       tags: ["역세권", "편세권"],
       prepAmount: "960만 원",
       due: "D-12",
+      liked: false,
+    },
+    {
+      // 원문 PDF 근거 강조 · 후속 안내 · 정정 이력을 보여 주는 공고
+      id: "n7",
+      region: "48330",
+      verdict: "ok",
+      org: "LH · 국민임대",
+      title: "양산 삼성파크빌 국민임대 선착순 모집",
+      price: "보증금 1,855만 원 · 월 11만 4,150원",
+      tags: ["선착순", "숲세권"],
+      prepAmount: "755만 원",
+      due: "D-20",
       liked: false,
     },
     {
@@ -97,15 +110,15 @@ export const homesSummary: HomesSummary = {
     },
     {
       id: "n4",
-      region: "28177",
+      region: "11440",
       verdict: "ok",
       rank: 3,
-      org: "iH · 매입임대",
+      org: "LH · 매입임대",
       title: "○○구 청년 매입임대",
       price: "보증금 100만 원 · 월 12만 원",
       tags: ["역세권"],
       prepAmount: "100만 원",
-      due: "D-15",
+      due: "D-5",
       liked: false,
     },
     {
@@ -126,6 +139,6 @@ export const homesSummary: HomesSummary = {
     { id: "n1", label: "행복주택 D-12", left: "22%", top: "30%", tone: "brand" },
     { id: "n2", label: "국민임대 D-20", left: "58%", top: "62%", tone: "plain" },
     { id: "n3", label: "장기전세 D-9", left: "48%", top: "16%", tone: "check" },
-    { id: "n4", label: "매입임대 D-15", left: "12%", top: "74%", tone: "brand" },
+    { id: "n4", label: "매입임대 D-5", left: "12%", top: "74%", tone: "brand" },
   ],
 };

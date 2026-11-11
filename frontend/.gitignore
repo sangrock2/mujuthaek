@@ -47,6 +47,10 @@ next-env.d.ts
 
 # 로컬 확인용 공고 원문 PDF (기관 파일이라 저장소에 올리지 않아요)
 public/mock/*.pdf
+# 단, 시연용 예시 문서(직접 만든 글, 실제 기관 공고문이 아님 · scripts/make-demo-pdfs.mjs)는 올려요
+!public/mock/notice-n1.pdf
+!public/mock/notice-n4.pdf
+!public/mock/notice-n7.pdf
 
 # local docs (not committed)
 .docs/

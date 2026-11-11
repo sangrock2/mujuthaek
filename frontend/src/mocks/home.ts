@@ -61,8 +61,8 @@ export const homeSummary: HomeSummary = {
     },
   ],
   deadlines: [
-    { id: "n1", title: "○○ 행복주택", meta: "LH · 접수 10월 21일까지", dday: 2 },
     { id: "n3", title: "○○ 장기전세", meta: "SH · 접수 10월 28일까지", dday: 9 },
+    { id: "n1", title: "○○ 행복주택", meta: "LH · 접수 10월 31일까지", dday: 12 },
   ],
   suggestedBenefit: { id: "b2", title: "청년 전세자금 대출" },
 };

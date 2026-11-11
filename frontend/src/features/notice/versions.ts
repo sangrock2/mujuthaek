@@ -72,7 +72,7 @@ function useApiVersions(id: string | undefined) {
 
 /** 목업: 정정 공고가 있는 공고(n7 양산)만 예시로 보여 줘요 */
 const mockVersions: NoticeVersion[] = [
-  { version: 1, label: "처음 올라온 공고", day: "10월 2일 (금)", changed: [] },
+  { version: 1, label: "처음 올라온 공고", day: "9월 30일 (수)", changed: [] },
   { version: 2, label: "정정 공고", day: "10월 14일 (수)", changed: ["접수 마감일"] },
 ];
 

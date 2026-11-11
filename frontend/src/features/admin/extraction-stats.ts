@@ -168,7 +168,8 @@ export function mockExtractionStats(days: number): ExtractionStats {
     },
     daily,
     topJobs: [
-      ["경기도 행복주택 입주자 모집 공고(2차)", "PARTIAL", "PARTIAL", 0.0912],
+      // 첫 작업은 검수 대기열 r2 · 「추출 과정」 목업(mockTrace)과 같은 공고예요
+      ["○○지구 행복주택 입주자 모집", "PARTIAL", "PARTIAL", 0.0912],
       ["서울 청년 매입임대주택 예비입주자 모집", "COMPLETED", "AUTO", 0.0745],
       ["부산 창업지원주택 입주자 모집", "IN_REVIEW", "REVIEW", 0.0633],
       ["인천 국민임대 추가 모집 공고", "COMPLETED", "AUTO", 0.0581],
@@ -180,7 +181,7 @@ export function mockExtractionStats(days: number): ExtractionStats {
       costUsd: cost as number,
       createdAt: `2026-11-${String(10 - i).padStart(2, "0")}T0${i + 1}:20:00+09:00`,
       title: title as string,
-      sourceCode: ["GG", "SH", "BMC", "IH", "LH"][i]!,
+      sourceCode: ["LH", "SH", "BMC", "IH", "LH"][i]!,
       rawPostId: null,
       rawVersion: 1,
     })),

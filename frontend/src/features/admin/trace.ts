@@ -119,10 +119,10 @@ export function splitRefs(text: string, refs: Record<string, TraceRef> | undefin
   return parts;
 }
 
-/** 관리자 원문 PDF 주소 (GET /api/admin/reviews/{jobId}/files/{fileId}). 목업이면 예시 PDF */
+/** 관리자 원문 PDF 주소 (GET /api/admin/reviews/{jobId}/files/{fileId}). 목업이면 그 파일 ID의 시연용 예시 PDF (public/mock) */
 export function tracePdfUrl(jobId: string | null, fileId: string) {
   return USE_MOCKS || !jobId
-    ? "/mock/notice-n7.pdf"
+    ? `/mock/${encodeURIComponent(fileId)}.pdf`
     : `${API_BASE_URL}/api/admin/reviews/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}`;
 }
 
@@ -159,56 +159,62 @@ export function useExtractionTrace(jobId: string | null) {
   });
 }
 
-/** 목업: 실제 V2 기록과 같은 모양의 작은 예 */
+/** 목업에서 「추출 과정 보기」를 여는 검수 대기열 항목 (○○지구 행복주택 · 공고 n1과 같은 공고) */
+export const MOCK_TRACE_REVIEW_ID = "r2";
+
+const DEMO_FILE = "notice-n1";
+
+/**
+ * 목업: 실제 V2 기록과 같은 모양의 예. 검수 대기열 r2(○○지구 행복주택)의 추출 기록이고, 근거 id(refs)의 글은 시연용 예시 PDF
+ * (public/mock/notice-n1.pdf) 3쪽에 그대로 있어서 누르면 그 문장을 강조해요. 자산·자동차 표 칸은 두 번 읽은 값이 달라 확인 필요로 남겨,
+ * 공고 화면(n1)에 「원문과 다시 확인하는 중」으로 보여요
+ */
 export const mockTrace: ExtractionTrace = {
-  jobId: "mock-job",
+  jobId: "demo-job-n1",
   jobStatus: "PARTIAL",
   rawPostId: null,
-  modelUsed: "gpt-6-luna",
-  costUsd: 0.0214,
+  modelUsed: null,
+  costUsd: 0.0912,
   engine: "V2",
-  totalSeconds: 182.4,
+  totalSeconds: 214.6,
   workers: [
     { agent: "structure", label: "구조 (공고·위치·공급)" },
     { agent: "eligibility", label: "자격 담당" },
+    { agent: "schedules", label: "일정 담당" },
+    { agent: "selection", label: "선정 담당" },
+    { agent: "documents", label: "서류 담당" },
   ],
   totals: {
-    costUsd: 0.0214,
-    calls: 6,
-    inputTokens: 512000,
-    cachedTokens: 400000,
-    outputTokens: 5400,
+    costUsd: 0.0912,
+    calls: 19,
+    inputTokens: 1952000,
+    cachedTokens: 1676000,
+    outputTokens: 23080,
   },
-  v1Calls: { calls: 1, costUsd: 0.0012 },
+  v1Calls: { calls: 2, costUsd: 0.0074 },
   byAgent: [
-    {
-      agent: "prime",
-      label: "캐시 데우기",
-      calls: 1,
-      seconds: 4.9,
-      inputTokens: 106000,
-      cachedTokens: 0,
-      outputTokens: 80,
-      costUsd: 0.0133,
-      cacheHits: 0,
-    },
-    {
-      agent: "eligibility",
-      label: "자격 담당",
-      calls: 4,
-      seconds: 61.2,
-      inputTokens: 405000,
-      cachedTokens: 400000,
-      outputTokens: 5320,
-      costUsd: 0.0069,
-      cacheHits: 0,
-    },
+    agentCost("prime", "캐시 데우기", 1, 4.9, 106000, 0, 80, 0.0133, 0),
+    agentCost("structure", "구조 (공고·위치·공급)", 1, 21.3, 118000, 104000, 1900, 0.0081, 1),
+    agentCost("eligibility", "자격 담당", 6, 96.4, 690000, 640000, 9800, 0.0285, 6),
+    agentCost("schedules", "일정 담당", 2, 28.7, 228000, 210000, 2300, 0.0064, 2),
+    agentCost("selection", "선정 담당", 2, 22.1, 224000, 208000, 1500, 0.0046, 2),
+    agentCost("documents", "서류 담당", 3, 47.5, 345000, 318000, 4100, 0.0101, 3),
+    agentCost("resolver", "해결 담당", 2, 39.2, 241000, 196000, 3400, 0.0128, 2),
   ],
   stopped: [],
-  documents: [{ id: "file-1", name: "공고문.pdf", pageCount: 8 }],
+  documents: [
+    { id: DEMO_FILE, name: "○○지구 행복주택 입주자 모집 공고(시연용 예시).pdf", pageCount: 8 },
+  ],
   refs: {
-    "p3.2": { documentId: "file-1", page: 3, text: null },
-    "t3-1.r1.c2": { documentId: "file-1", page: 3, text: null },
+    "p3.2": demoRef(3, "청년: 공고일 현재 만 19세 이상 39세 이하인 미혼 무주택자"),
+    "p3.3": demoRef(3, "신혼부부: 혼인 기간이 7년 이내인 무주택세대구성원"),
+    "p3.4": demoRef(
+      3,
+      "소득: 세대의 월평균 소득이 전년도 도시근로자 가구원수별 월평균 소득의 100% 이하 (1인 가구는 120% 이하)",
+    ),
+    "p3.5": demoRef(3, "공고일 현재 세대구성원 전원이 무주택이어야 합니다."),
+    "t3-1.r1.c2": demoRef(3, "2억 5,100만 원 이하"),
+    "t3-1.r2.c2": demoRef(3, "4,542만 원 이하"),
   },
   agents: [
     {
@@ -217,43 +223,94 @@ export const mockTrace: ExtractionTrace = {
       stopped: null,
       finished: true,
       summary:
-        "나이·무주택·소득·자산 기준과 우선순위 예외를 넣었어요. 자동차 기준은 원문에 없어 넣지 않았어요.",
-      items: { eligibility: 12 },
-      coverage: { eligibility: { status: "EXTRACTED", reason: null } },
+        "나이·혼인·무주택·소득 기준을 넣었어요. 자산·자동차 기준은 표 1을 두 번 읽은 값이 서로 달라 확인 필요로 남겼어요.",
+      items: { eligibility: 6 },
+      coverage: { eligibility: { status: "PARTIAL", reason: "자산·자동차 표 칸 확인 필요" } },
       missing: 0,
       rejected: [],
-      tools: { add_eligibility: 2, update_item: 3, finish: 1 },
+      tools: { add_eligibility: 2, update_item: 1, finish: 1 },
       failedResults: 1,
       verifyRounds: 2,
+      resolver: {
+        targets: 2,
+        before: 2,
+        after: 2,
+        adopted: 0,
+        runs: 1,
+        conversations: [{ targets: 2, after: 2, adopted: false, stopped: null, turns: [] }],
+      },
       turns: [
         {
           calls: [
             {
               name: "add_eligibility",
-              args: '{"items": [{"id": "age", "category": "AGE", "evidence": ["p3.2", "t3-1.r1.c2"]}]}',
+              args: '{"items": [{"id": "youth-age", "category": "AGE", "evidence": ["p3.2"]}, {"id": "newlywed", "category": "HOUSEHOLD", "evidence": ["p3.3"]}, {"id": "income", "category": "INCOME", "evidence": ["p3.4"]}, {"id": "homeless", "category": "HOME_OWNERSHIP", "evidence": ["p3.5"]}]}',
             },
           ],
           results: [
             {
               name: "add_eligibility",
-              result: '{"failed": [{"id": "age", "errors": ["/rule: 칸이 필요합니다"]}]}',
+              result:
+                '{"added": ["newlywed", "income", "homeless"], "failed": [{"id": "youth-age", "errors": ["/rule: 칸이 필요합니다"]}]}',
               failed: true,
             },
           ],
-          verify: "# 검증 결과\n## 고칠 것 1개\n- /eligibility/0: 조건식(rule)이 없어요.",
+          verify:
+            "# 검증 결과\n## 고칠 것 1개\n- youth-age: 조건식(rule)이 없어요. 근거 p3.2의 나이 범위를 rule에 넣어 주세요.",
         },
         {
           calls: [
-            { name: "update_item", args: '{"item": "age", "patch": {"rule": {"min": 19}}}' },
-            { name: "finish", args: '{"summary": "…"}' },
+            {
+              name: "update_item",
+              args: '{"item": "youth-age", "patch": {"rule": {"min": 19, "max": 39}}}',
+            },
+            {
+              name: "add_eligibility",
+              args: '{"items": [{"id": "assets", "category": "ASSETS", "evidence": ["t3-1.r1.c2"]}, {"id": "car", "category": "CAR_ASSETS", "evidence": ["t3-1.r2.c2"]}]}',
+            },
           ],
           results: [
             { name: "update_item", result: '{"ok": true}', failed: false },
-            { name: "finish", result: '{"ok": true}', failed: false },
+            { name: "add_eligibility", result: '{"added": ["assets", "car"]}', failed: false },
           ],
-          text: "나이 조건식을 고쳤어요.",
+          text: "나이 조건식을 고치고, 표 1의 자산·자동차 기준을 넣었어요.",
+          verify:
+            "# 검증 결과\n## 확인할 것 2개\n- assets: 표 칸 t3-1.r1.c2를 두 번 읽은 금액이 서로 달라요 → 확인 필요로 보류\n- car: 표 칸 t3-1.r2.c2를 두 번 읽은 금액이 서로 달라요 → 확인 필요로 보류",
+        },
+        {
+          calls: [{ name: "finish", args: '{"summary": "자산·자동차 기준은 확인 필요로 남겨요"}' }],
+          results: [{ name: "finish", result: '{"ok": true}', failed: false }],
+          text: "확인할 것은 해결 담당이 다시 봐도 남아서, 사람 검수로 넘기고 끝낼게요.",
         },
       ],
     },
   ],
 };
+
+function agentCost(
+  agent: string,
+  label: string,
+  calls: number,
+  seconds: number,
+  inputTokens: number,
+  cachedTokens: number,
+  outputTokens: number,
+  costUsd: number,
+  cacheHits: number,
+): TraceAgentCost {
+  return {
+    agent,
+    label,
+    calls,
+    seconds,
+    inputTokens,
+    cachedTokens,
+    outputTokens,
+    costUsd,
+    cacheHits,
+  };
+}
+
+function demoRef(page: number, text: string): TraceRef {
+  return { documentId: DEMO_FILE, page, text };
+}

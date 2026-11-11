@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState } from "react";
 import { Analytics } from "@/components/analytics/Analytics";
+import { DemoNotice } from "@/components/layout/DemoNotice";
 import { OfflineBanner } from "@/components/pwa/OfflineBanner";
 import { ServiceHoursBanner } from "@/components/pwa/ServiceHoursBanner";
 import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
@@ -24,6 +25,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <OfflineBanner />
       <ServiceHoursBanner />
       <Analytics />
+      <DemoNotice />
       {children}
       <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>
