@@ -23,7 +23,7 @@ from mujuthaek_extraction.model.pricing import Budget
 from mujuthaek_extraction.v2 import graph
 from mujuthaek_extraction.v2.agents import section
 from mujuthaek_extraction.v2.agents.cut import CutCallMiddleware, complete_items
-from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware
+from mujuthaek_extraction.v2.agents.verify import VerifyMiddleware, omission_report
 from mujuthaek_extraction.v2.agents.verify import report as verify_report
 from mujuthaek_extraction.v2.contract import NOTICE_SCOPE
 from mujuthaek_extraction.v2.criteria import criteria_chunks
@@ -496,6 +496,15 @@ def test_finishing_with_an_omission_warning_left_is_sent_back_once_with_only_tho
     for calls in (3, None):
         draft, humans, said = agent_run(add, finish("확인했어요."), issues=[omission, suspect], calls=calls)
         assert len(said) == 2 and len(humans) == 1 and draft.finished == "확인했어요."
+
+
+def test_scoring_rows_left_out_tell_the_selection_agent_the_scoring_table_is_its_own():
+    # 2026-11-11 유료 확인 jbdc-16011: 빠진 것 의심 안내는 배점표를 「맡은 섹션이 아닌 것」의 예로 들어, 가점 행 누락 메모에는 선정 담당의 것임을 덧붙임
+    draft = SectionDraft(("selectionRules",))
+    issue = {"code": "SCORING_OMISSION_SUSPECTED", "target": "/quality/coverage/selectionRules", "description": "원문 배점표 6행의 점수 16단계 …"}
+    text = omission_report(draft, [issue])
+    assert text.startswith("# 끝내기 전 확인") and "SCORING_OMISSION_SUSPECTED: 선정 담당에게 배점(가점)표의 점수 행은 맡은 섹션입니다" in text
+    assert "단계마다 항목을 하나씩" in text
 
 
 def test_an_agent_cut_off_by_the_call_limit_before_finishing_sends_its_section_to_review(monkeypatch):

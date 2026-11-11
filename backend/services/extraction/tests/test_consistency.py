@@ -1151,3 +1151,117 @@ def test_rooms_counted_one_each_beyond_the_notice_total_are_held():
     assert len([f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]) == 6
     found = check_consistency(candidate(notice={"counts": [*by_target, by_target[0]]}, supplyGroups=rooms), SourceBundle(texts={"pdf-text": TABLE}))
     assert not [f for f in found if f.code == "UNIT_COUNTS_EXCEED_TOTAL"]  # 합 3이면 호실 3곳은 맞음
+
+
+# 2026-11-11 유료 확인 jbdc-16011 모양: 단계를 한 칸에 적은 가점표와, 단계마다 행을 둔 배점표
+COMBINED_SCORING = "\n".join(
+    [
+        "• 신혼부부 특별공급 가점항목",
+        "[표 15-2]",
+        "| 항 목 |  | 기 준 | 비 고 |",
+        "| 가. | 가구 소득 | 월평균소득이 80% 이하인 경우 : 1점 | 소득 참고 |",
+        "| 나. | 자녀의 수 | 3명 이상 : 3점 2명 : 2점 1명 : 1점 | 미성년자인 자녀 |",
+        "| 다. | 연속 거주기간 | 3년 이상 : 3점 1년 이상 3년 미만 : 2점 1년 미만 : 1점 | 거주하지 않는 경우는 0점. |",
+    ]
+)
+ROW_SCORING = "\n".join(
+    [
+        "■ 배점기준표",
+        "[표 13-2]",
+        "| 평점요소 | 총 배점 | 기 준 | 점수 |",
+        "| 계 | 100 |  |  |",
+        "| (1)미성년 자녀수 | 40 | 4명 이상 | 40 |",
+        "|  |  | 3명 | 35 |",
+        "|  |  | 해당없음 | 0 |",
+    ]
+)
+
+
+def scoring_candidate(text, quotes):
+    evidence = [{"id": "ev-row", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": 0, "end": 1}, "quote": ROW}]
+    rules = []
+    for n, quote in enumerate(quotes):
+        evidence.append({"id": f"ev-s{n}", "sourceId": "pdf-text", "locator": {"kind": "TEXT_RANGE", "start": 0, "end": 1}, "quote": quote})
+        rules.append({"kind": "SCORING", "points": 1, "evidenceIds": [f"ev-s{n}"]})
+    return candidate(text=text, evidence=evidence, selectionRules=rules)
+
+
+def scoring_omission(text, quotes):
+    found = [f for f in check_consistency(scoring_candidate(text, quotes), SourceBundle(texts={"pdf-text": text})) if f.code == "SCORING_OMISSION_SUSPECTED"]
+    return found[0] if found else None
+
+
+def test_scoring_rows_and_levels_no_rule_cites_are_noted_before_finishing():
+    text = TABLE + "\n" + ROW_SCORING + "\n" + COMBINED_SCORING
+    rows = ["| (1)미성년 자녀수 | 40 | 4명 이상 | 40 |", "|  |  | 3명 | 35 |"]
+    # 단계를 한 칸에 적은 표가 통째로 빠짐: 행 3개, 단계 1 + 3 + 3(0점은 단계가 아님)
+    finding = scoring_omission(text, rows)
+    assert finding.target == "/quality/coverage/selectionRules" and is_note(finding.issue())
+    assert "원문 배점표 3행의 점수 7단계" in finding.description and "가구 소득" in finding.description
+    # 단계마다 그 행을 인용한 항목이 있으면 없음. 0점 행(해당없음)과 합계 행은 세지 않습니다
+    combined = COMBINED_SCORING.split("\n")[3:]
+    full = [*rows, combined[0], *[combined[1]] * 3, *[combined[2]] * 3]
+    assert scoring_omission(text, full) is None
+    # 한 단계만 빠지면 알리지 않습니다(다른 행 인용으로 넣었을 수 있음)
+    assert scoring_omission(text, full[:-1]) is None
+    # 다단계 행을 한 번만 인용하면 남은 단계를 셉니다
+    assert "점수 2단계" in scoring_omission(text, [*rows, combined[0], combined[1], *[combined[2]] * 3]).description
+
+
+def test_tables_without_a_scoring_title_are_not_scoring_tables():
+    plain = "\n".join(["[표 7-1]", "| 구분 | 기준 |", "| 자녀 | 3명 이상 : 3점 2명 : 2점 |", "| 거주 | 3년 이상 : 3점 1년 : 1점 |"])
+    text = TABLE + "\n" + ROW_SCORING + "\n" + plain
+    assert scoring_omission(text, ["| (1)미성년 자녀수 | 40 | 4명 이상 | 40 |", "|  |  | 3명 | 35 |"]) is None
+
+
+ENUMERATED_DOCUMENTS = "\n".join(
+    [
+        "5. 제출서류",
+        "[표 27-1]",
+        "| 구 분 | 제 출 서 류 | 발급대상 |",
+        "| 다자녀가구 특별공급 | ① 주민등록표초본 ② 가족관계증명서(상세) ③ 한부모가족증명서 ④ 임신증명서류 또는 출생증명서 | 본인 |",
+        "| 노부모부양 특별공급 | ① 주민등록표등본 ② 국민건강보험 요양급여내역 ③ 소득세납부 입증서류 (아래 <표9> 참고) | 본인 |",
+    ]
+)
+
+
+def test_documents_numbered_in_a_cited_cell_are_checked_one_by_one():
+    # 2026-11-11 유료 확인 jbdc-16011: 같은 칸의 다른 서류가 행을 인용해 행 누락으로 안 잡히고, 이름이 여섯 개 미만이라 여러 이름 행 검사에도 안 걸림
+    text = TABLE + "\n" + ENUMERATED_DOCUMENTS
+    listed = ["주민등록표초본", "가족관계증명서(상세)", "출생증명서", "주민등록등본(세대주 기준)"]
+    finding = document_omission(text, listed)
+    assert finding.description.startswith("서류 표 칸에 번호로 든 서류 2개가 서류 목록에 없습니다: 「한부모가족증명서」, 「국민건강보험 요양급여내역」")
+    assert omitted_document_rows(finding.description) == 2
+    # 「또는」은 하나만 있어도, 표기가 조금 다른 이름(주민등록표등본 ↔ 주민등록등본)도 다룬 것이고, 다른 표를 가리키는 묶음 항목은 세지 않습니다
+    assert document_omission(text, [*listed, "한부모가족증명서", "국민건강보험 요양급여내역"]) is None
+    # 한부모가족증명서 하나만 빠져도 알립니다(원문이 번호로 이름을 정한 서류)
+    assert "「한부모가족증명서」" in document_omission(text, [*listed, "국민건강보험 요양급여내역"]).description
+
+
+# 2026-11-11 jbdc-16011 「출산가구 자산보유기준 완화」 모양: 행 이름이 자산 종류, 열이 출생자녀 수 조건(열 제목에 자산 낱말이 없음)
+BIRTH_ASSET_TABLE = "\n".join(
+    [
+        "<표3> 출산가구 자산보유기준 완화",
+        "[표 9-1]",
+        "| 구분 | 보유기준 |  |  | 자산보유기준 세부내역 |",
+        "|  | ① ‘23.03.28. 이후 출생한 자녀가 1명만 있는 경우 | ② ‘23.03.28. 이후 출생한 자녀가 2명 이상인 경우 | ① 또는 ②에 해당하지 않는 경우 |  |",
+        "| 부동산(건물+토지) | 237,050천원 이하 | 258,600천원 이하 | 215,500천원 이하 | <표2> 참고 |",
+        "| 자동차 | 49,960천원 이하 | 54,510천원 이하 | 45,420천원 이하 |  |",
+    ]
+)
+
+
+def test_asset_rows_named_by_the_row_with_conditions_as_columns_are_criteria_rows():
+    # 열 제목에 자산 낱말이 없어 기준표로 잡히지 않았음: 자동차 가산 기준 두 개가 빠져도 누락 검사가 몰랐음
+    text = TABLE + "\n" + BIRTH_ASSET_TABLE
+    assets = criterion("ASSETS", "TOTAL_ASSETS_KRW", 215_500_000, "KRW", 237_050_000, 258_600_000, groups=())
+    car = criterion("ASSETS", "CAR_ASSETS_KRW", 45_420_000, "KRW", groups=())
+    finding = criteria_omission(text, [assets, car])
+    # 한 행에 빠진 기준값이 둘이면 알립니다(열이 조건인 표는 행 하나에 기준값이 여럿). 행 이름(자동차)은 대상이 아닙니다
+    assert finding.code == "CRITERIA_TABLE_OMISSION_SUSPECTED"
+    assert "1행의 기준값 49,960천원, 54,510천원" in finding.description
+    full = criterion("ASSETS", "CAR_ASSETS_KRW", 45_420_000, "KRW", 49_960_000, 54_510_000, groups=())
+    assert criteria_omission(text, [assets, full]) is None
+    # 머리 행(조건 설명)과 단위 없는 금액은 기준값으로 읽지 않습니다
+    plain = BIRTH_ASSET_TABLE.replace("49,960천원 이하", "49,960").replace("54,510천원 이하", "54,510")
+    assert criteria_omission(TABLE + "\n" + plain, [assets, car]) is None

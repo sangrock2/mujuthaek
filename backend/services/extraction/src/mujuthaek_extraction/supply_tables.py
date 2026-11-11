@@ -906,6 +906,7 @@ def build_part(
                     "_plans": {},
                     "_anonymous": not set(named) - {"TARGET_GROUP"},  # 행에 대상 칸 말고는 이름(주택형·호·단지·동·주소·층)이 없음
                     "_row_words": _row_words(row),  # 열 의미를 답하지 않은 칸까지 행의 이름 칸 낱말(_attach_price_tables)
+                    "_row_cells": [cell for cell in row if cell],  # 원문 행의 칸 글(병합 칸 이어받음, _pair_by_row_codes)
                 }
                 if len(title_types) > 1:
                     current["_type_ambiguous"] = title_types
@@ -1060,6 +1061,7 @@ def build_part(
         if group["itemKind"] == "HOUSING_UNIT" and not group.get("floor") and unit and int(unit[1]) > 0:
             group["floor"] = f"{int(unit[1])}층"
     groups = _attach_price_tables(groups)
+    groups = _pair_by_row_codes(groups)
     # 수량도 읽은 가격도 없이 금액 여럿이 붙은 칸만 남은 행은 빈 공급 묶음으로 두지 않고 읽지 못한 가격표로 알립니다(2026-11-07 지시 v8 유료 확인
     # bmc-75: 「상호전환 시 임대조건」 표의 (-)·(+)·(+) 세 줄이 칸마다 「11,360,000 21,110,000 27,600,000」로 읽혀, 주택형 없는 빈 묶음 12개마다
     # 가격 빈칸 이슈가 붙음. 지금은 한도 칸의 증감 표시로 줄을 나누고, 나누지 못한 칸만 여기로)
@@ -1130,6 +1132,7 @@ def build_part(
         group.pop("_unit", None)
         group.pop("_anonymous", None)
         group.pop("_row_words", None)
+        group.pop("_row_cells", None)
         name = group.get("unitLabel") or group.get("housingTypeCode") or group["id"]
         uncertain = group.pop("_scope_uncertain", None)
         if uncertain:
@@ -1611,6 +1614,38 @@ def _within_area_range(group: dict[str, Any], number: float) -> bool:
     return bool(span) and own is not None and int(own) == int(number) and span["min"] <= number <= span["max"]
 
 
+def _move_prices(group: dict[str, Any], target: dict[str, Any], number: float | None) -> None:
+    """가격만 있는 묶음(group)의 가격을 모집 묶음(target)에 옮겨 붙입니다. 가격의 id·scope·요금안 id는 target 것으로, 근거(quoteRefs)는 그대로."""
+    # 면적 범위 안의 행: 면적마다 다른 임대 조건이므로 요금안을 면적으로 나눕니다. 단지 이름으로만 붙인 행(번호 없음)은 나누지 않습니다
+    by_range = number is not None and _housing_number(target) != number
+    # 그 묶음의 원래 가격과 같은 값만 거릅니다. 다른 행(층)에서 붙인 가격과 비교하면 층마다 같은 융자금이 둘째 층부터 빠졌음
+    # (2026-10-24 다섯 번째 채점: 층별 5행 가격표의 융자금 16개 누락)
+    seen = {(p["kind"], p["sourceAmount"], p["priceStage"], tuple(p["scope"]["targetGroups"])) for p in target["prices"] if not p.get("_attached")}
+    floor = group.get("floor") or group.get("unitLabel")
+    plans: dict[str, str] = {}
+    for price in group["prices"]:
+        groups_for_price = price["scope"]["targetGroups"] or target["scope"]["targetGroups"]
+        if (price["kind"], price["sourceAmount"], price["priceStage"], tuple(groups_for_price)) in seen:
+            continue  # 기본 임대 조건이 두 표에 되풀이된 경우
+        suffix = f"-{_slug(str(number))}" if by_range else ""
+        plan_id = plans.setdefault(price["pricePlanId"], f"{target['id']}.plan-{_slug(price['pricePlanId'])}{suffix}")
+        description = f"전용 {number:g}㎡ {price['scope']['description']}" if by_range else price["scope"]["description"]
+        if floor and floor not in description:
+            description = f"{floor} {description}"  # 층·호 구간이 다른 요금안을 구분합니다
+        target["prices"].append(
+            {
+                **price,
+                "_attached": True,
+                "id": f"{target['id']}.price{len(target['prices']) + 1}",
+                "scope": _scope(target["id"], list(groups_for_price), description),
+                "pricePlanId": plan_id,
+            }
+        )
+    target["quoteRefs"] = list(dict.fromkeys([*target["quoteRefs"], *group["quoteRefs"]]))
+    if group.get("_unsplit"):
+        target.setdefault("_unsplit", []).extend(group["_unsplit"])
+
+
 def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """모집 수량 없는 가격표 행(실측: SH 「신정도시마을 39㎡」 임대료 표 한 행)을 다른 표의 같은 단지·같은 면적 번호 모집 묶음 모두에 붙입니다.
     그 행의 총 세대수(단지 전체 수)는 묶음마다 붙이면 겹치므로 붙이지 않습니다. 맞는 모집 묶음이 없으면 그 행은 그대로 둡니다."""
@@ -1685,35 +1720,77 @@ def _attach_price_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             kept.append(group)
             continue
         for target in targets:
-            # 면적 범위 안의 행: 면적마다 다른 임대 조건이므로 요금안을 면적으로 나눕니다. 단지 이름으로만 붙인 행(번호 없음)은 나누지 않습니다
-            by_range = number is not None and _housing_number(target) != number
-            # 그 묶음의 원래 가격과 같은 값만 거릅니다. 다른 행(층)에서 붙인 가격과 비교하면 층마다 같은 융자금이 둘째 층부터 빠졌음
-            # (2026-10-24 다섯 번째 채점: 층별 5행 가격표의 융자금 16개 누락)
-            seen = {(p["kind"], p["sourceAmount"], p["priceStage"], tuple(p["scope"]["targetGroups"])) for p in target["prices"] if not p.get("_attached")}
-            floor = group.get("floor") or group.get("unitLabel")
-            plans: dict[str, str] = {}
-            for price in group["prices"]:
-                groups_for_price = price["scope"]["targetGroups"] or target["scope"]["targetGroups"]
-                if (price["kind"], price["sourceAmount"], price["priceStage"], tuple(groups_for_price)) in seen:
-                    continue  # 기본 임대 조건이 두 표에 되풀이된 경우
-                suffix = f"-{_slug(str(number))}" if by_range else ""
-                plan_id = plans.setdefault(price["pricePlanId"], f"{target['id']}.plan-{_slug(price['pricePlanId'])}{suffix}")
-                description = f"전용 {number:g}㎡ {price['scope']['description']}" if by_range else price["scope"]["description"]
-                if floor and floor not in description:
-                    description = f"{floor} {description}"  # 층·호 구간이 다른 요금안을 구분합니다
-                target["prices"].append(
-                    {
-                        **price,
-                        "_attached": True,
-                        "id": f"{target['id']}.price{len(target['prices']) + 1}",
-                        "scope": _scope(target["id"], list(groups_for_price), description),
-                        "pricePlanId": plan_id,
-                    }
-                )
-            target["quoteRefs"] = list(dict.fromkeys([*target["quoteRefs"], *group["quoteRefs"]]))
-            if group.get("_unsplit"):
-                target.setdefault("_unsplit", []).extend(group["_unsplit"])
+            _move_prices(group, target, number)
     return kept
+
+
+CODE_SPACING = re.compile(r"\s+")
+
+
+def _code_key(text: str | None) -> str:
+    """주택형 코드 대조용 표기 정규화: 띄어쓰기만 빼고 대문자로(「059. 9288 A」 = 「059.9288A」). 점·괄호 등 다른 글자는 그대로 둡니다."""
+    return CODE_SPACING.sub("", text or "").upper()
+
+
+def _pair_by_row_codes(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """_attach_price_tables 뒤에도 가격만 있고 모집 수가 없는 묶음을, 원문 행의 칸으로 같은 위치의 모집 묶음에 잇는 안전장치입니다.
+    2026-11-11 유료 확인 jbdc-16011: 모집 표 행과 가격표 행이 둘 다 「059. 9288 A」·「59A」 두 칸을 함께 적었는데, 열 의미 답이 회차마다
+    한쪽 표에서 다른 칸을 주택형으로 골라(모집 「59A」, 가격 「059.9288A」) 번호(59 ≠ 59.9288)도 코드도 맞지 않아 가격 288개가 모집 수 없는
+    묶음으로 따로 남음(11/10에는 같은 표를 다른 칸으로 읽어 이어짐).
+    잇는 조건(모두): 가격 묶음 P는 모집 수가 없고 가격이 있으며 대상·주택형 미정 표시가 없음, 모집 묶음 C는 다른 표의 행이고 모집 수가 있으며
+    이 단계 전에 가격이 하나도 없음(이미 가격이 있는 묶음과 섞지 않음), 같은 단지(단지가 둘 이상이면 이름이 같아야 함), 대상 계층이 맞음,
+    주택형 번호의 정수 부분이 같음(둘 다 있을 때), 그리고 한쪽 주택형 코드(띄어쓰기·대소문자만 정규화, 숫자와 글자가 함께 든 코드만)가
+    상대 원문 행의 칸 글 하나와 똑같음.
+    P마다 맞는 C가 정확히 하나이고, 그 C에 같은 표의 P가 하나뿐일 때만 옮깁니다. 둘 이상이거나 없으면 그대로 두며, 그 묶음은 검증의
+    V8 SUPPLY_PRICE_UNATTACHED(같은 번호의 모집 묶음이 있는데 가격이 따로 남음)로 검수에 오릅니다."""
+
+    def table_of(group: dict[str, Any]) -> str:
+        return group["id"].rsplit("-r", 1)[0]
+
+    def code(group: dict[str, Any]) -> str:
+        # 숫자만인 코드(「84」)는 수량 칸과, 숫자 없는 코드(「A」)는 동·블록 칸과 겹칠 수 있어 대조하지 않습니다
+        key = _code_key(group.get("housingTypeCode"))
+        return key if re.search(r"\d", key) and not re.fullmatch(r"\d+", key) else ""
+
+    def cells(group: dict[str, Any]) -> set[str]:
+        return {_code_key(cell) for cell in group.get("_row_cells") or []}
+
+    def offered(group: dict[str, Any]) -> bool:
+        return any(c["kind"] in SUPPLY_COUNT_KINDS for c in group["counts"])
+
+    complexes = {_norm(g.get("_complex")) for g in groups} - {""}
+    receivers = [g for g in groups if offered(g) and not g["prices"]]
+    sources = [
+        g for g in groups if g["prices"] and not g["counts"] and not g.get("_scope_uncertain") and not g.get("_type_ambiguous") and not g.get("_unsplit")
+    ]
+
+    def pairs(p: dict[str, Any], c: dict[str, Any]) -> bool:
+        if table_of(p) == table_of(c):
+            return False
+        if len(complexes) > 1 and _norm(p.get("_complex")) != _norm(c.get("_complex")):
+            return False
+        if not _classes_match(set(p["scope"]["targetGroups"]), set(c["scope"]["targetGroups"]), p.get("_row_words")):
+            return False
+        a, b = _housing_number(p), _housing_number(c)
+        if a is not None and b is not None and int(a) != int(b):
+            return False
+        return bool((code(p) and code(p) in cells(c)) or (code(c) and code(c) in cells(p)))
+
+    chosen: dict[int, dict[str, Any]] = {}
+    for p in sources:
+        found = [c for c in receivers if pairs(p, c)]
+        if len(found) == 1:
+            chosen[id(p)] = found[0]
+    # 한 모집 묶음에 같은 표의 가격 행이 둘 이상 오면(층·구간별 행 등) 어느 행이 그 묶음의 기본 가격인지 몰라 모두 잇지 않습니다
+    per_table = Counter((id(chosen[id(p)]), table_of(p)) for p in sources if id(p) in chosen)
+    moved = set()
+    for p in sources:
+        target = chosen.get(id(p))
+        if target is None or per_table[(id(target), table_of(p))] > 1:
+            continue
+        _move_prices(p, target, None)
+        moved.add(id(p))
+    return [g for g in groups if id(g) not in moved]
 
 
 def _join_type_tables(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
