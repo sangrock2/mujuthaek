@@ -1236,3 +1236,32 @@ def test_documents_numbered_in_a_cited_cell_are_checked_one_by_one():
     assert document_omission(text, [*listed, "한부모가족증명서", "국민건강보험 요양급여내역"]) is None
     # 한부모가족증명서 하나만 빠져도 알립니다(원문이 번호로 이름을 정한 서류)
     assert "「한부모가족증명서」" in document_omission(text, [*listed, "국민건강보험 요양급여내역"]).description
+
+
+# 2026-11-11 jbdc-16011 「출산가구 자산보유기준 완화」 모양: 행 이름이 자산 종류, 열이 출생자녀 수 조건(열 제목에 자산 낱말이 없음)
+BIRTH_ASSET_TABLE = "\n".join(
+    [
+        "<표3> 출산가구 자산보유기준 완화",
+        "[표 9-1]",
+        "| 구분 | 보유기준 |  |  | 자산보유기준 세부내역 |",
+        "|  | ① ‘23.03.28. 이후 출생한 자녀가 1명만 있는 경우 | ② ‘23.03.28. 이후 출생한 자녀가 2명 이상인 경우 | ① 또는 ②에 해당하지 않는 경우 |  |",
+        "| 부동산(건물+토지) | 237,050천원 이하 | 258,600천원 이하 | 215,500천원 이하 | <표2> 참고 |",
+        "| 자동차 | 49,960천원 이하 | 54,510천원 이하 | 45,420천원 이하 |  |",
+    ]
+)
+
+
+def test_asset_rows_named_by_the_row_with_conditions_as_columns_are_criteria_rows():
+    # 열 제목에 자산 낱말이 없어 기준표로 잡히지 않았음: 자동차 가산 기준 두 개가 빠져도 누락 검사가 몰랐음
+    text = TABLE + "\n" + BIRTH_ASSET_TABLE
+    assets = criterion("ASSETS", "TOTAL_ASSETS_KRW", 215_500_000, "KRW", 237_050_000, 258_600_000, groups=())
+    car = criterion("ASSETS", "CAR_ASSETS_KRW", 45_420_000, "KRW", groups=())
+    finding = criteria_omission(text, [assets, car])
+    # 한 행에 빠진 기준값이 둘이면 알립니다(열이 조건인 표는 행 하나에 기준값이 여럿). 행 이름(자동차)은 대상이 아닙니다
+    assert finding.code == "CRITERIA_TABLE_OMISSION_SUSPECTED"
+    assert "1행의 기준값 49,960천원, 54,510천원" in finding.description
+    full = criterion("ASSETS", "CAR_ASSETS_KRW", 45_420_000, "KRW", 49_960_000, 54_510_000, groups=())
+    assert criteria_omission(text, [assets, full]) is None
+    # 머리 행(조건 설명)과 단위 없는 금액은 기준값으로 읽지 않습니다
+    plain = BIRTH_ASSET_TABLE.replace("49,960천원 이하", "49,960").replace("54,510천원 이하", "54,510")
+    assert criteria_omission(TABLE + "\n" + plain, [assets, car]) is None

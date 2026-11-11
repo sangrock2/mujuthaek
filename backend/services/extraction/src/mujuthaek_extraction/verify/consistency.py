@@ -1593,6 +1593,28 @@ def _criteria_values(cells: list[str], titles: list[str]) -> list[tuple[str, flo
     return found
 
 
+# 행 이름 칸이 자산 종류(부동산·자동차·총자산)이고 열이 조건(출생자녀 수 등)인 자격 기준표. 열 제목에 자산 낱말이 없어 기준값을 읽지 못했음
+# (2026-11-11 유료 확인 jbdc-16011 「출산가구 자산보유기준 완화」 표 「| 구분 | ① ’23.03.28. 이후 출생한 자녀가 1명만 있는 경우 | ② … 2명 이상 … |
+# ① 또는 ②에 해당하지 않는 경우 |」의 「| 자동차 | 49,960천원 이하 | 54,510천원 이하 | 45,420천원 이하 |」 행: 자동차 가산 기준 2개가 빠졌는데
+# 기준표로 잡히지 않아 누락 검사에 걸리지 않음). 이름 칸은 행의 첫 글자 칸이고, 금액은 단위(원·천원·만원)까지 적힌 칸만 읽습니다
+ROW_NAME_CHARS = 30
+
+
+def _named_asset_values(cells: list[str]) -> list[tuple[str, float, str]]:
+    name = next((cell for cell in cells if cell and LETTER.search(cell)), None)
+    if name is None or len(name) > ROW_NAME_CHARS or not ASSET_WORD.search(name) or INCOME_WORD.search(name):
+        return []
+    found = []
+    for cell in cells:
+        if cell is name or len(cell) > CRITERIA_CELL_CHARS:
+            continue
+        for match in AMOUNT.finditer(cell):
+            krw = to_krw(re.sub(r"\s", "", match[0]), None).amount_krw
+            if krw:
+                found.append(("KRW", float(krw), match[0]))
+    return found
+
+
 def _varies(labels: list[list[str]]) -> bool:
     """대상 칸 가운데 행마다 값이 바뀌는 열이 있는지. 병합 칸은 빈칸으로 읽히므로 위 행 값을 이어받습니다."""
     for c in range(max(map(len, labels), default=0)):
@@ -1647,6 +1669,9 @@ def criteria_tables(text: str) -> list[list[CriteriaRow]]:
         for n in rows:
             cells = _cells(block[n])
             values = _criteria_values(cells, titles)
+            by_name = not values
+            if by_name:
+                values = _named_asset_values(cells)  # 행 이름이 자산 종류인 표(열이 출생자녀 수 같은 조건)
             if not values:
                 continue
             aid = block[n + 1][len(AID_LINE) :] if n + 1 < len(block) and block[n + 1].startswith(AID_LINE) else None
@@ -1657,6 +1682,8 @@ def criteria_tables(text: str) -> list[list[CriteriaRow]]:
                     carry[c] = cell
                     carry[c + 1 :] = [""] * (len(carry) - c - 1)
             group = next((cell for cell in carry[: len(cells)] if cell and not CONDITION_CELL.match(cell)), None)
+            if by_name:
+                group = None  # 행 이름은 자산 종류이지 대상(계층·공급유형)이 아님: 대상을 맞추지 않고 모든 조건의 값으로 셈
             lead = next((c for c, cell in enumerate(cells) if cell), len(cells))
             data.append(CriteriaRow(aid or " ".join(cell for cell in cells if cell), values, group, start + n, lead))
             labels.append(label)
@@ -1799,7 +1826,8 @@ def _check_criteria_rows(candidate: dict[str, Any], sources: SourceBundle, find:
             f"({len(whole)}행, 기준값 {_shown_values(whole)}). 그 대상마다 조건으로 넣어야 합니다(빠진 기준 의심): {_shown_rows(whole)}"
         )
         find("V8", CRITERIA_GROUP_OMISSION, "/quality/coverage/eligibility", description)
-    if len(partial) >= CRITERIA_OMISSION_MIN_ROWS:
+    # 행 수나 빠진 기준값 수로 셉니다: 열이 조건인 표는 한 행에 기준값이 여럿(자동차 행의 출생자녀 1명·2명 이상 가산 기준)
+    if len(partial) >= CRITERIA_OMISSION_MIN_ROWS or sum(len(gone) for _, gone, _ in partial) >= CRITERIA_OMISSION_MIN_ROWS:
         find("V8", CRITERIA_OMISSION, "/quality/coverage/eligibility", criteria_omission_description(partial))
 
 
