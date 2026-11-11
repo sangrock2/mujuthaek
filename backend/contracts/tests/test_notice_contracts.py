@@ -215,6 +215,23 @@ class NoticeContractTest(unittest.TestCase):
         self.notice["evidence"][0]["locator"].pop("printedPage")
         self.assert_valid()
 
+    def test_text_range_page_document_must_be_a_pdf(self):
+        # 여러 PDF를 이어 붙인 글자의 근거: 쪽이 어느 PDF의 쪽인지 함께 실을 수 있습니다(선택, page가 있어야 함)
+        pdf = {**self.notice["documents"][0], "id": "file-1", "kind": "PDF", "pageCount": 4}
+        self.notice["documents"].append(pdf)
+        locator = self.notice["evidence"][0]["locator"]
+        locator.update(page=3, pageDocumentId="file-1")
+        self.assert_valid()
+        locator.update(page=5)
+        self.assert_invalid("PAGE_OUT_OF_RANGE")
+        locator.update(page=3, pageDocumentId=self.notice["documents"][0]["id"])
+        self.assert_invalid("LOCATOR_SOURCE_CONFLICT")
+        locator.update(pageDocumentId="file-9")
+        self.assert_invalid("DANGLING_SOURCE")
+        locator.pop("page")
+        locator.update(pageDocumentId="file-1")
+        self.assert_error("SCHEMA", "/evidence/0/locator", "oneOf")
+
     def test_text_range_page_must_be_positive_and_within_document(self):
         self.notice["evidence"][0]["locator"].update(page=0)
         self.assert_error("SCHEMA", "/evidence/0/locator", "oneOf")
@@ -515,6 +532,20 @@ class NoticeContractTest(unittest.TestCase):
         self.event = contract.load(ROOT / "examples/extraction.completed.json")
         self.event["payload"]["conditions"][1]["targetGroups"] = ["다른 계층"]
         self.assert_error("EVENT_CONDITION_CONTENT_CONFLICT", "/payload/conditions/1", value=self.event, schema=schema)
+
+    def test_completed_event_source_files_point_to_pdf_documents(self):
+        # 원문 PDF 위치(선택): 상세의 PDF 문서를 한 번씩, raw/ 아래 경로로만 가리킵니다
+        schema = EVENT
+        notice = self.event["payload"]["notice"]
+        notice["documents"].append({**notice["documents"][0], "id": "file-1", "kind": "PDF", "pageCount": 2})
+        self.event["payload"]["sourceFiles"] = [{"documentId": "file-1", "s3Key": "raw/lh/123/v1/00-notice.pdf"}]
+        self.assert_valid(self.event, schema)
+        self.event["payload"]["sourceFiles"].append({"documentId": "file-1", "s3Key": "raw/lh/123/v1/00-notice.pdf"})
+        self.assert_error("EVENT_SOURCE_FILE_CONFLICT", "/payload/sourceFiles/1", value=self.event, schema=schema)
+        self.event["payload"]["sourceFiles"] = [{"documentId": notice["documents"][0]["id"], "s3Key": "raw/lh/1/v1/a.txt"}]
+        self.assert_error("EVENT_SOURCE_FILE_CONFLICT", "/payload/sourceFiles/0", value=self.event, schema=schema)
+        self.event["payload"]["sourceFiles"] = [{"documentId": "file-1", "s3Key": "area/x.csv"}]
+        self.assert_error("SCHEMA", "/payload/sourceFiles/0/s3Key", "pattern", self.event, schema)
 
     def test_completed_event_review_marks_may_differ_from_detail(self):
         # 승인 때 검수 표시만 바뀌는 것은 내용 불일치가 아닙니다

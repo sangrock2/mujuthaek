@@ -33,6 +33,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 ATTACHMENT_KINDS = {"pdf": "PDF", "xlsx": "SPREADSHEET", "xlsm": "SPREADSHEET", "xls": "SPREADSHEET"}
 TEXT_DOCUMENT_ID = "text"
 PDF_TEXT_DOCUMENT_ID = "pdf-text"  # 첨부 PDF·엑셀을 extraction이 직접 읽어 만든 글자 (쪽·표 구분)
+TEXT_LED_NAME = "수집 원문 텍스트 + "  # 수집 글자 뒤에 읽힌 PDF를 붙인 원문(text_led)의 문서 이름 머리
 UNITS_DOCUMENT_ID = "units"
 
 
@@ -341,8 +342,7 @@ def build_intake(
             {
                 "id": PDF_TEXT_DOCUMENT_ID,
                 "kind": "TEXT",
-                "name": ("수집 원문 텍스트 + " if text_led else "")
-                + ("첨부 PDF·엑셀에서 읽은 글자 (쪽·표 구분)" if sheets else "첨부 PDF에서 읽은 글자 (쪽·표 구분)"),
+                "name": (TEXT_LED_NAME if text_led else "") + ("첨부 PDF·엑셀에서 읽은 글자 (쪽·표 구분)" if sheets else "첨부 PDF에서 읽은 글자 (쪽·표 구분)"),
                 "sha256": sha256_hex(attachment_text.encode("utf-8")),
                 "originalUrl": None,
                 "pageCount": None,

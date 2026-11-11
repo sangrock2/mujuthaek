@@ -91,6 +91,12 @@ export type NoticeFollowUp = {
  */
 export type NoticeHeldPart = { key: NoticeSectionKey | null; label: string };
 
+/** 앱 안에서 열 수 있는 원문 PDF 하나 */
+export type NoticePdfFile = { id: string; name: string; pdfUrl: string; pageCount: number | null };
+
+/** 근거가 있는 원문 위치: 어느 PDF(fileId, 모르면 null)의 어느 문장(quote) */
+export type PdfAnchor = { fileId: string | null; quote: string | null };
+
 export type NoticeDoc = {
   /** 오늘 기준 접수 상태 (백엔드가 계산) */
   status: "UPCOMING" | "OPEN" | "CLOSED";
@@ -104,9 +110,18 @@ export type NoticeDoc = {
     pageCount: number | null;
     /** 기관 공고 페이지 */
     detailUrl: string;
+    /**
+     * 앱 안에서 열 수 있는 원문 PDF들 (백엔드 files[].viewUrl이 있는 것). 이 칸이 있으면 근거마다 그 PDF(fileId)를 열고,
+     * 없으면(목업) pdfUrl 하나로 열어요
+     */
+    files?: NoticePdfFile[];
+    /** 글자를 읽은 PDF가 하나뿐이면 그 파일 ID (어느 PDF인지 모르는 쪽 번호를 열 때만 써요) */
+    soleFileId?: string | null;
   };
   /** 섹션별 원문 쪽 번호 (1부터) */
   pages: Partial<Record<NoticeSectionKey, number>>;
+  /** 섹션 쪽 번호의 근거가 어느 PDF의 어느 문장인지 (실제 응답만, 목업은 없음) */
+  anchors?: Partial<Record<NoticeSectionKey, PdfAnchor>>;
   /** detail: 예외 조건. checking: 원문과 다시 확인하는 중인 조건 */
   eligibility: {
     id: string;

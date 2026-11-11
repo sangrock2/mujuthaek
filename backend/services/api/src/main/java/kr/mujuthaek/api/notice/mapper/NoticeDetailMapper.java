@@ -1,5 +1,7 @@
 package kr.mujuthaek.api.notice.mapper;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -12,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.ApplicationEmail;
@@ -31,6 +34,7 @@ import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.Summary;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.TimeRange;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.UnitType;
 import kr.mujuthaek.api.notice.dto.response.NoticeUnitResponse;
+import org.springframework.web.util.UriUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
@@ -72,7 +76,7 @@ public final class NoticeDetailMapper {
         requiredDocuments(detail),
         selectionRules(detail),
         guidance(detail),
-        files(detail),
+        files(payload, header == null ? null : header.id()),
         heldItems(detail),
         areaSummaries,
         followUps,
@@ -547,7 +551,13 @@ public final class NoticeDetailMapper {
     return out;
   }
 
-  static List<FileLink> files(JsonNode detail) {
+  /**
+   * 첨부. 기관 원문 주소가 있거나 앱 안에서 열 수 있는 원문 PDF(S3에 있는 것)만, 상세의 문서 순서대로. 보류한 문서는 빼요. viewUrl은 이 서버의 원문
+   * PDF 경로(GET /api/v1/notices/{id}/files/{문서 ID})예요.
+   */
+  static List<FileLink> files(JsonNode payload, UUID noticeId) {
+    JsonNode detail = payload.path("notice");
+    Map<String, SourcePdf> viewable = sourcePdfs(payload);
     List<FileLink> out = new ArrayList<>();
     JsonNode all = detail.path("documents");
     for (int i = 0; i < all.size(); i++) {
@@ -555,10 +565,63 @@ public final class NoticeDetailMapper {
         continue;
       }
       JsonNode d = all.get(i);
+      String id = text(d.path("id"));
       String url = text(d.path("originalUrl"));
-      if (url != null) {
-        out.add(new FileLink(text(d.path("name")), url));
+      boolean view = id != null && noticeId != null && viewable.containsKey(id);
+      if (url != null || view) {
+        out.add(
+            new FileLink(
+                text(d.path("name")),
+                url,
+                id,
+                view ? filePath(noticeId, id) : null,
+                d.path("pageCount").isInt() ? d.path("pageCount").asInt() : null));
       }
+    }
+    return out;
+  }
+
+  /** 공고 원문 PDF 경로 (NoticeFileController GET /api/v1/notices/{id}/files/{fileId}). */
+  static String filePath(UUID noticeId, String fileId) {
+    return "/api/v1/notices/" + noticeId + "/files/" + UriUtils.encodePathSegment(fileId, UTF_8);
+  }
+
+  /**
+   * 앱 안에서 열 수 있는 원문 PDF 하나: 상세의 문서 이름·해시와 S3 위치.
+   *
+   * @param sha256 문서 해시 (응답의 ETag로 써요)
+   */
+  public record SourcePdf(String id, String name, String sha256, String s3Key) {}
+
+  private static final Pattern SOURCE_KEY = Pattern.compile("^raw/[a-z0-9_]+/");
+
+  /**
+   * 앱 안에서 열 수 있는 원문 PDF: 문서 ID → 위치. 상세의 PDF 문서(kind PDF, 보류 아님) 중 이벤트의 sourceFiles에 raw/ 아래 위치가 있는
+   * 것만이에요. sourceFiles가 없는 이전 이벤트의 공고는 비어 있어 화면이 기관 사이트로 보내요.
+   */
+  public static Map<String, SourcePdf> sourcePdfs(JsonNode payload) {
+    Map<String, String> keys = new HashMap<>();
+    for (JsonNode f : payload.path("sourceFiles")) {
+      String id = text(f.path("documentId"));
+      String key = text(f.path("s3Key"));
+      if (id != null && key != null && SOURCE_KEY.matcher(key).find() && !key.contains("..")) {
+        keys.putIfAbsent(id, key);
+      }
+    }
+    JsonNode detail = payload.path("notice");
+    Map<String, SourcePdf> out = new LinkedHashMap<>();
+    JsonNode all = detail.path("documents");
+    for (int i = 0; i < all.size(); i++) {
+      JsonNode d = all.get(i);
+      String id = text(d.path("id"));
+      if (id == null
+          || !"PDF".equals(text(d.path("kind")))
+          || !keys.containsKey(id)
+          || held(detail, "/documents/" + i)) {
+        continue;
+      }
+      out.putIfAbsent(
+          id, new SourcePdf(id, text(d.path("name")), text(d.path("sha256")), keys.get(id)));
     }
     return out;
   }
@@ -777,25 +840,50 @@ public final class NoticeDetailMapper {
     return null;
   }
 
-  /** 상세의 근거 ID → 화면에 보여 줄 근거. 문서 이름은 sourceId로 documents에서 찾아요. */
+  /**
+   * 상세의 근거 ID → 화면에 보여 줄 근거. 문서 이름은 sourceId로 documents에서 찾아요.
+   *
+   * <p>fileId(쪽이 어느 첨부 PDF의 쪽인지): PDF 쪽 근거는 그 문서, 글자 범위 근거는 추출이 실은 pageDocumentId예요. 그 칸이 없는 이전 결과는
+   * 글자를 읽은 PDF(쪽 수를 아는 PDF)가 하나뿐일 때만 그 PDF로 봐요. 여럿이면 어느 것인지 몰라 비워요(다른 PDF의 같은 쪽을 가리키지 않게).
+   */
   private static Map<String, Evidence> evidence(JsonNode detail) {
     Map<String, String> names = new LinkedHashMap<>();
+    Set<String> pdfs = new LinkedHashSet<>();
+    List<String> readPdfs = new ArrayList<>();
     for (JsonNode d : detail.path("documents")) {
-      names.put(text(d.path("id")), text(d.path("name")));
+      String id = text(d.path("id"));
+      names.put(id, text(d.path("name")));
+      if ("PDF".equals(text(d.path("kind")))) {
+        pdfs.add(id);
+        if (d.path("pageCount").isInt()) {
+          readPdfs.add(id);
+        }
+      }
     }
+    String onlyPdf = readPdfs.size() == 1 ? readPdfs.getFirst() : null;
     Map<String, Evidence> out = new LinkedHashMap<>();
     for (JsonNode e : detail.path("evidence")) {
       JsonNode locator = e.path("locator");
       // 쪽은 PDF 쪽 근거와, 쪽 표시가 있는 PDF 글자의 글자 범위 근거(추출이 page를 실은 경우)에서 읽어요. 표 행 근거는 쪽이 없어요
       String kind = text(locator.path("kind"));
       boolean paged = "PDF_PAGE".equals(kind) || "TEXT_RANGE".equals(kind);
+      Integer page = paged && locator.path("page").isNumber() ? locator.path("page").asInt() : null;
+      String fileId = null;
+      if (page != null && "PDF_PAGE".equals(kind)) {
+        String source = text(e.path("sourceId"));
+        fileId = pdfs.contains(source) ? source : null;
+      } else if (page != null) {
+        String given = text(locator.path("pageDocumentId"));
+        fileId = given == null ? onlyPdf : pdfs.contains(given) ? given : null;
+      }
       out.put(
           text(e.path("id")),
           new Evidence(
               text(e.path("quote")),
-              paged && locator.path("page").isNumber() ? locator.path("page").asInt() : null,
+              page,
               paged ? text(locator.path("printedPage")) : null,
-              names.get(text(e.path("sourceId")))));
+              names.get(text(e.path("sourceId"))),
+              fileId));
     }
     return out;
   }

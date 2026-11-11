@@ -267,6 +267,14 @@
             }
           ],
           "description": "판정 틀(판정 담당이 정한 형식 그대로). HOUSING이면 housing-judgment.v1, BUSINESS_SPACE면 business-space-judgment.v1, STARTUP_SUPPORT면 startup-support-judgment.v1(rawPolicyId·rawVersion이 이 이벤트의 rawPostId·rawVersion과 같음, 수집 이벤트 raw.policy.collected에서 만들어 notice 없음). 틀이 없는 분야이거나 틀 검사를 통과하지 못하면 null 또는 칸 없음. 추출 결과(notice·conditions)에서 코드로 만들며, 확신이 없는 조건은 틀의 inReview로 표시합니다."
+        },
+        "sourceFiles": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "https://mujuthaek.kr/contracts/events/extraction.completed.v1.json#/$defs/sourceFile"
+          },
+          "description": "선택: 상세(notice.documents)의 PDF 첨부가 우리 S3 어디에 있는지(수집 이벤트 files[].s3Key를 그대로 옮김). api가 공고 원문 PDF를 앱 안에서 보여 줄 때 이 위치로 S3에서 읽어 내려줍니다(화면에는 주소를 내보내지 않음). S3에 원본이 있고 해시가 수집 이벤트와 같은 PDF만 넣고, 없으면 칸을 빼거나 빈 목록입니다. 이 칸이 없는 이전 이벤트의 공고는 기관 사이트로 보냅니다"
         }
       },
       "allOf": [
@@ -455,6 +463,27 @@
           }
         }
       ]
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentId",
+        "s3Key"
+      ],
+      "properties": {
+        "documentId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "notice.documents[].id (kind PDF인 첨부)"
+        },
+        "s3Key": {
+          "type": "string",
+          "pattern": "^raw/[a-z0-9_]+/",
+          "description": "S3 버킷 안 경로 (주소 아님, raw.notice.collected의 files[].s3Key)"
+        }
+      }
     },
     "schedule": {
       "type": "object",

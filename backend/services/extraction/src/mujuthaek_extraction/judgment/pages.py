@@ -14,6 +14,7 @@ from typing import Any
 PAGE_MARK = re.compile(r"^--- (\d+)쪽(?: 왼쪽| 오른쪽)? ---$", re.M)
 # 첨부 경계(「=== 첨부 …」)와 원문 끝의 그림 판독 묶음(「=== 그림 판독 …」, image_reading.py): 그 뒤 근거는 앞 PDF 쪽이 아님(리뷰 2026-10-22)
 FILE_MARK = re.compile(r"^=== (?:첨부|그림 판독) .* ===$", re.M)
+ATTACHMENT_MARK = re.compile(r"^=== 첨부 (.*) ===$", re.M)  # 첨부 머리(이름). 엑셀 머리는 「첨부 엑셀 이름」
 
 
 def evidence_pages(candidate: dict[str, Any], texts: dict[str, str]) -> dict[str, int]:
@@ -39,19 +40,48 @@ def evidence_pages(candidate: dict[str, Any], texts: dict[str, str]) -> dict[str
     return pages
 
 
-def attach_locator_pages(candidate: dict[str, Any], pages: dict[str, int], source_id: str) -> None:
+def page_documents(candidate: dict[str, Any], pages: dict[str, int], text: str, source_id: str, pdfs: list[tuple[str, str]]) -> dict[str, str]:
+    """근거 ID → 그 쪽(pages)이 속한 첨부 PDF의 문서 ID(공고 상세에서 근거의 원문 PDF를 열 때, 2026-11-11).
+
+    pdfs는 원문 글자에 이어 붙인 차례대로의 (문서 ID, 파일 이름)입니다(intake: material.pdf_pages). PDF가 여럿이거나 수집 글자 뒤에 붙였으면
+    PDF마다 「=== 첨부 이름 ===」 머리가 있어, 근거 시작 위치 앞의 마지막 첨부 머리가 그 PDF입니다. 머리의 차례와 이름이 모두 맞을 때만 정하고,
+    머리가 없으면 PDF가 하나일 때만 그 PDF로 봅니다. 엑셀(「=== 첨부 엑셀 …」)·그림 판독 머리는 PDF가 아닙니다. 정할 수 없으면 넣지 않습니다."""
+    marks = [(m.start(), m.group(1)) for m in ATTACHMENT_MARK.finditer(text) if not m.group(1).startswith("엑셀 ")]
+    starts = [at for at, _ in marks]
+    out: dict[str, str] = {}
+    for evidence in candidate.get("evidence") or []:
+        locator = evidence.get("locator") or {}
+        if evidence.get("id") not in pages or evidence.get("sourceId") != source_id or locator.get("kind") != "TEXT_RANGE":
+            continue
+        at = bisect.bisect_right(starts, locator.get("start", -1)) - 1
+        if at < 0:
+            if len(pdfs) == 1 and not marks:
+                out[evidence["id"]] = pdfs[0][0]
+            continue
+        if at < len(pdfs) and pdfs[at][1] == marks[at][1]:
+            out[evidence["id"]] = pdfs[at][0]
+    return out
+
+
+def attach_locator_pages(candidate: dict[str, Any], pages: dict[str, int], source_id: str, documents: dict[str, str] | None = None) -> None:
     """근거 위치(글자 범위)에 PDF 쪽 번호를 함께 싣습니다(그 자리에서 바꿈, 공고 상세 API의 쪽수 표시, 요구 2-07).
     쪽 표시가 있는 PDF 글자 원문(source_id) 근거만 받고, 쪽을 정하지 못한 근거(그림 판독 묶음 안·첨부 머리말)와
-    다른 원문(수집 글자·호별 표) 근거는 쪽 칸을 넣지 않습니다. 인쇄된 쪽 번호는 알 수 없어 넣지 않습니다."""
+    다른 원문(수집 글자·호별 표) 근거는 쪽 칸을 넣지 않습니다. 인쇄된 쪽 번호는 알 수 없어 넣지 않습니다.
+    documents(page_documents)에 있는 근거는 그 쪽이 어느 첨부 PDF의 쪽인지(pageDocumentId)도 싣습니다."""
     for evidence in candidate.get("evidence") or []:
         locator = evidence.get("locator") or {}
         if locator.get("kind") != "TEXT_RANGE" or evidence.get("sourceId") != source_id:
             continue
         page = pages.get(evidence.get("id"))
+        document = (documents or {}).get(evidence.get("id"))
         if page is None:
             locator.pop("page", None)  # 예전 값이 남아 다른 쪽을 가리키지 않게 합니다
         else:
             locator["page"] = page
+        if page is None or document is None:
+            locator.pop("pageDocumentId", None)
+        else:
+            locator["pageDocumentId"] = document
 
 
 def quote_pages(candidate: dict[str, Any], pages: dict[str, int]) -> dict[str, int]:

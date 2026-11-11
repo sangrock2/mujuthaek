@@ -1,5 +1,6 @@
 // GET /api/v1/notices/{id} 응답 (백엔드 NoticeDetailResponse) → 공고 상세 화면 값
 import { dueText } from "@/features/notice/format";
+import { API_BASE_URL } from "@/lib/api/client";
 import {
   noticeTypeLabel,
   providerName,
@@ -14,12 +15,15 @@ import type {
   NoticeDocumentGroup,
   NoticeFollowUp,
   NoticeHeldPart,
+  NoticePdfFile,
   NoticeScheduleItem,
   NoticeSelectionKind,
   NoticeTextItem,
+  PdfAnchor,
 } from "@/mocks/notice-doc";
 
-type Evidence = { quote: string; page: number | null };
+/** fileId: page가 어느 첨부 PDF의 쪽인지 (files[].id, 모르면 null · 이전 응답엔 없음) */
+type Evidence = { quote: string; page: number | null; fileId?: string | null };
 type TimeRange = { start: string; end: string };
 
 type ApiSchedule = {
@@ -120,7 +124,14 @@ export type ApiNoticeDetail = {
     phone: string | null;
     url: string | null;
   }[];
-  files: { name: string; url: string }[];
+  /** 첨부. viewUrl: 이 서버의 원문 PDF 경로 (우리 저장소에 PDF가 없으면 null · 이전 응답엔 없음) */
+  files: {
+    name: string | null;
+    url: string | null;
+    id?: string | null;
+    viewUrl?: string | null;
+    pageCount?: number | null;
+  }[];
   /** 원문 확인 전까지 화면에서 뺀 항목. section은 추출 결과의 섹션 이름(schedules·supplyGroups 등), description은 내부 검사 문구라 화면에 쓰지 않아요 */
   heldItems?: { section: string | null; target: string | null; description: string | null }[];
   areaSummaries: { siteId: string; kind: "LIVING" | "COMMERCIAL"; score: number }[];
@@ -196,10 +207,47 @@ const dayText: Record<string, string> = {
 const dayOf = (v: string | null) => (v ? v.slice(0, 10) : null);
 
 /** 근거 원문 중 가장 앞 쪽 */
-const firstPage = (items: { evidence: Evidence[] }[]) => {
-  const pages = items.flatMap((i) => i.evidence.map((e) => e.page)).filter((p) => p !== null);
-  return pages.length ? Math.min(...pages) : undefined;
+const firstPage = (items: { evidence: Evidence[] }[]) => firstEvidence(items)?.page ?? undefined;
+
+/** 쪽이 있는 근거 중 가장 앞 쪽의 첫 근거 (섹션의 「원문 p.N」이 여는 곳) */
+const firstEvidence = (items: { evidence: Evidence[] }[]) => {
+  let first: Evidence | undefined;
+  for (const e of items.flatMap((i) => i.evidence)) {
+    if (e.page !== null && (!first || e.page < first.page!)) first = e;
+  }
+  return first;
 };
+
+/** 섹션 「원문 p.N」의 근거가 어느 PDF의 어느 문장인지 */
+const anchorOf = (items: { evidence: Evidence[] }[]): PdfAnchor | undefined => {
+  const e = firstEvidence(items);
+  return e ? { fileId: e.fileId ?? null, quote: e.quote || null } : undefined;
+};
+
+/** 앱 안에서 열 수 있는 원문 PDF (viewUrl이 있는 첨부). 경로는 백엔드 주소를 붙여 써요 */
+function pdfFilesOf(d: ApiNoticeDetail): NoticePdfFile[] {
+  return d.files.flatMap((f) =>
+    f.id && f.viewUrl
+      ? [
+          {
+            id: f.id,
+            name: f.name ?? "공고 원문.pdf",
+            pdfUrl: `${API_BASE_URL}${f.viewUrl}`,
+            pageCount: f.pageCount ?? null,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * 글자를 읽은 PDF(쪽 수를 아는 첨부)가 하나뿐이고 앱 안에서 열 수 있으면 그 파일 ID. 판정 화면처럼 쪽 번호만 있고 어느 PDF인지 모를 때
+ * 이 PDF로만 열어요(다른 PDF의 같은 쪽을 가리키지 않게)
+ */
+function soleFileIdOf(d: ApiNoticeDetail, files: NoticePdfFile[]): string | null {
+  const read = d.files.filter((f) => f.pageCount);
+  return read.length === 1 && files.some((f) => f.id === read[0].id) ? read[0].id! : null;
+}
 
 const hoursText = (s: ApiSchedule) => {
   const hours = s.dailyHours.map((h) => `${h.start}~${h.end}`).join(", ");
@@ -419,18 +467,33 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
   const start = h.applyStart ?? h.applyEnd;
   const end = h.applyEnd ?? h.applyStart;
   const sites = d.sites.filter((s) => s.name || s.address);
+  const pdfFiles = pdfFilesOf(d);
+  const anchors: NoticeDoc["anchors"] = {};
+  const sectionItems = {
+    eligibility: d.conditions,
+    housing: d.unitTypes,
+    schedule: d.schedules,
+    apply: d.requiredDocuments,
+  } as const;
+  for (const [key, items] of Object.entries(sectionItems)) {
+    const anchor = anchorOf(items);
+    if (anchor) anchors[key as keyof typeof sectionItems] = anchor;
+  }
 
   return {
     status: statusOf[h.status],
     applyPeriod: start && end ? { start, end, note: application && hoursText(application) } : null,
     summary: d.summary.summaryText ?? "",
     source: {
-      fileName: d.files[0]?.name ?? "",
-      // 원문 PDF는 아직 우리 저장소에 없어서 기관 사이트로 보내요
-      pdfUrl: null,
-      pageCount: null,
-      detailUrl: h.detailUrl ?? d.files[0]?.url ?? "",
+      fileName: pdfFiles[0]?.name ?? d.files[0]?.name ?? "",
+      // 우리 저장소에 원문 PDF가 있으면 앱 안에서 열고(근거마다 그 PDF), 없으면(HWP·그림만·이전 결과) 기관 사이트로 보내요
+      pdfUrl: pdfFiles[0]?.pdfUrl ?? null,
+      pageCount: pdfFiles[0]?.pageCount ?? null,
+      detailUrl: h.detailUrl ?? d.files.find((f) => f.url)?.url ?? "",
+      files: pdfFiles,
+      soleFileId: soleFileIdOf(d, pdfFiles),
     },
+    anchors,
     pages: {
       eligibility: firstPage(d.conditions),
       housing: firstPage(d.unitTypes),

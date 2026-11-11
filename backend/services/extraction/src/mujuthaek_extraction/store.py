@@ -30,6 +30,7 @@ from psycopg.types.json import Jsonb
 
 from mujuthaek_extraction import extraction_stats
 from mujuthaek_extraction.cost_alert import monthly_costs
+from mujuthaek_extraction.intake.adapter import PDF_TEXT_DOCUMENT_ID, TEXT_LED_NAME
 from mujuthaek_extraction.pipeline import Outcome
 from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES
 from mujuthaek_platform import outbox
@@ -562,9 +563,15 @@ class JobStore:
 
     def job_usage(self, job_id: str) -> dict[str, Any] | None:
         """작업 하나의 측정 기록(관리자 「추출 과정 보기」). 검수 대기에 오르지 않은 작업도 볼 수 있게 작업 표에서 바로 읽습니다."""
+        # pdfs·textLed: 근거 id를 원문 PDF 쪽으로 여는 대응표가 기록에 없는 예전 작업용(trace_view). PDF 구조는 크니 차례·이름·쪽 수만 꺼내요
         row = self.conn.execute(
-            "select id, status, raw_post_id, model_used, cost_usd, usage from extraction_jobs where id = %s",
-            (job_id,),
+            "select id, status, raw_post_id, model_used, cost_usd, usage,"
+            " (select coalesce(jsonb_agg(jsonb_build_object('id', p->'documentId', 'name', p->'name', 'pageCount', p->'pageCount')), '[]'::jsonb)"
+            "  from jsonb_array_elements(case when jsonb_typeof(pdf_pages) = 'array' then pdf_pages else '[]'::jsonb end) p),"
+            " exists (select 1 from jsonb_array_elements(case when jsonb_typeof(candidate->'documents') = 'array' then candidate->'documents'"
+            "  else '[]'::jsonb end) d where d->>'id' = %s and d->>'name' like %s)"
+            " from extraction_jobs where id = %s",
+            (PDF_TEXT_DOCUMENT_ID, TEXT_LED_NAME + "%", job_id),
         ).fetchone()
         if row is None:
             return None
@@ -575,7 +582,29 @@ class JobStore:
             "modelUsed": row[3],
             "costUsd": float(row[4] or 0),
             "usage": row[5],
+            "pdfs": row[6] or [],
+            "textLed": bool(row[7]),
         }
+
+    def job_files(self, job_id: str) -> list[dict[str, Any]] | None:
+        """작업 원본(수집 이벤트)의 첨부 위치: [{documentId, name, fileType, s3Key, sha256}]. 관리자 원문 PDF 보기에서 api가 이 위치로 S3를
+        읽어요(문서 ID file-N = files[N-1], intake/adapter.py). 작업이 없으면 None."""
+        row = self.conn.execute("select raw_event from extraction_jobs where id = %s", (job_id,)).fetchone()
+        if row is None:
+            return None
+        payload = (row[0] or {}).get("payload") if isinstance(row[0], dict) else None
+        files = (payload or {}).get("files") if isinstance(payload, dict) else None
+        return [
+            {
+                "documentId": f"file-{index + 1}",
+                "name": file.get("name"),
+                "fileType": file.get("fileType"),
+                "s3Key": file.get("s3Key"),
+                "sha256": file.get("sha256"),
+            }
+            for index, file in enumerate(files if isinstance(files, list) else [])
+            if isinstance(file, dict)
+        ]
 
     def approve(
         self,

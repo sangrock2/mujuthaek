@@ -10,6 +10,7 @@ V2 작업 기록(usage.v2)에는 담당(섹션 에이전트)마다 차례별 도
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 VERIFY_CHARS = 2_000  # 차례마다 보여 줄 검증 메시지 앞부분
@@ -34,8 +35,19 @@ def label(name: str | None) -> str:
     return LABELS.get(name or "", name or "이름 없음")
 
 
-def trace_view(usage: dict[str, Any] | None) -> dict[str, Any]:
-    """작업 기록 → 화면용 요약. V2 기록이 없으면(V1 시절 작업·채팅 모델 없는 실행) engine=V1과 합계만."""
+# 문서 모델 id(v2/document.py)의 모양으로 쪽을 읽는 예전 작업용 규칙: 줄 p3.12 · 쪽 안 번호 없는 표 p3.t1 · V1 표 t3-1(쪽-차례), 행 .r2 · 칸 .c1,
+# 둘째 PDF부터 d2. 앞붙임. 엑셀(x1)·그림 판독(g1)·첨부 머리(b1) 묶음은 PDF 쪽이 아니라 읽지 않아요
+GUESS = re.compile(r"^(?:d(\d+)\.)?(?:p(\d+)\.(?:\d+|t\d+(?:\.r\d+(?:\.c\d+)?)?)|t(\d+)-\d+(?:\.r\d+(?:\.c\d+)?)?)$")
+TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*")
+MAX_REFS = 2_000
+
+
+def trace_view(usage: dict[str, Any] | None, pdfs: list[dict[str, Any]] | None = None, *, text_led: bool = False) -> dict[str, Any]:
+    """작업 기록 → 화면용 요약. V2 기록이 없으면(V1 시절 작업·채팅 모델 없는 실행) engine=V1과 합계만.
+
+    documents·refs: 근거 id(줄 p3.12·표 행 t4-1.r3 등)를 원문 PDF의 쪽으로 여는 대응표. 작업 기록에 담긴 대응표(usage.v2.sources)가 있으면
+    그대로 쓰고(쪽과 그 글), 없는 예전 작업은 pdfs(작업의 PDF 차례: id·name·pageCount)와 id 모양으로 쪽만 정합니다. 수집 글자 뒤에 PDF를
+    붙인 작업(text_led)은 수집 글자 줄도 1쪽 id(p1.N)를 받아, 첫 PDF 1쪽의 줄·번호 없는 표는 정하지 않습니다(틀린 쪽을 가리키지 않게)."""
     usage = usage or {}
     v1_totals = usage.get("totals") or {}
     v2 = usage.get("v2") or {}
@@ -63,7 +75,43 @@ def trace_view(usage: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(c, dict) and c.get("stopped")
         ],
         "agents": [_agent(t) for t in v2.get("traces") or [] if isinstance(t, dict)],
+        **_sources(v2, pdfs or [], text_led),
     }
+
+
+def _sources(v2: dict[str, Any], pdfs: list[dict[str, Any]], text_led: bool) -> dict[str, Any]:
+    sources = v2.get("sources")
+    if isinstance(sources, dict) and isinstance(sources.get("refs"), dict) and isinstance(sources.get("documents"), list):
+        return {"documents": sources["documents"], "refs": sources["refs"]}
+    documents = [{"id": str(p.get("id")), "name": str(p.get("name") or ""), "pageCount": p.get("pageCount")} for p in pdfs if isinstance(p, dict)]
+    refs: dict[str, dict[str, Any]] = {}
+    for text in _strings(v2.get("traces")):
+        for token in TOKEN.findall(text):
+            ref = token.rstrip(".-")
+            if ref in refs or len(refs) >= MAX_REFS or not (found := GUESS.match(ref)):
+                continue
+            order = int(found.group(1) or 1)
+            page = int(found.group(2) or found.group(3))
+            if not 1 <= order <= len(documents) or page < 1:
+                continue
+            count = documents[order - 1]["pageCount"]
+            if isinstance(count, int) and page > count:
+                continue
+            if text_led and order == 1 and page == 1 and found.group(2):
+                continue
+            refs[ref] = {"documentId": documents[order - 1]["id"], "page": page, "text": None}
+    return {"documents": documents, "refs": refs}
+
+
+def _strings(node: Any):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
 
 
 def _by_agent(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:

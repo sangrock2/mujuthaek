@@ -43,6 +43,7 @@ from mujuthaek_extraction.method import extraction_method
 from mujuthaek_extraction.rules.base import CallSpec, FieldRules, structure_summary
 from mujuthaek_extraction.v2.document import DocumentModel
 from mujuthaek_extraction.v2.document import build as build_document
+from mujuthaek_extraction.v2.sources import cited_sources
 
 STRUCTURE = "structure"
 SLEEP: Callable[[float], None] = time.sleep  # 시험에서 바꿔 끼움
@@ -208,7 +209,10 @@ def conclude(state: V2State, runtime: Context) -> dict[str, Any]:
         model = paid if state.get("usage") else state.get("structure_model") or names.get("primary", "primary")
         recheck = state.get("recheck_model") or rt.models.primary
         extracted = pipeline.Extracted(run, state.get("structure_first_run"), model, recheck)
-        rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": state.get("traces") or []})
+        traces = state.get("traces") or []
+        # 근거 id → 원문 PDF 위치(관리자 「추출 과정 보기」에서 id를 누르면 그 쪽을 열어요, v2/sources.py)
+        sources = cited_sources(state["document"], material, traces)
+        rt.usage.record("v2", {"calls": state.get("usage") or [], "workers": state["plan"]["workers"], "traces": traces, "sources": sources})
         scope = workers(state["rules"])[STRUCTURE].sections
     report = pipeline.first_report(extracted, material, context, rt)
     if report is None:

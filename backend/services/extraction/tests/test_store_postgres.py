@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from psycopg.types.json import Jsonb
 from test_pipeline import answers, new_event, raw_event, run
 from test_worker_parts import pending_item
 
@@ -178,6 +179,23 @@ def test_usage_summary_is_saved_with_the_job(store):
     job_id = store.save(event, outcome)
     calls, stages = store.conn.execute("select usage->'totals'->>'calls', usage->'stages' from extraction_jobs where id = %s", (job_id,)).fetchone()
     assert int(calls) == len(outcome.attempts) and "sections" in stages
+
+
+def test_job_usage_and_files_give_pdf_order_and_s3_locations(store):
+    # 관리자 「추출 과정 보기」의 원문 PDF: 예전 작업용 PDF 차례(쪽 수)와 수집 글자 앞 원문 여부, 첨부 S3 위치(문서 ID file-N = files[N-1])
+    event = raw_event()
+    outcome = run(event, NoticeModels(RecordedModel(answers()), None))
+    pdfs = [{"documentId": "file-1", "name": "공고문.pdf", "pageCount": 3, "pages": [{"page": 1, "blocks": []}]}]
+    pdf = {"name": "공고문.pdf", "fileType": "pdf", "role": "NOTICE_DOC", "s3Key": "raw/lh/1/v1/00-a.pdf", "downloadUrl": "https://x.kr/a", "sha256": "a" * 64}
+    event["payload"]["files"] = [pdf]
+    job_id = store.save(event, Outcome(**{**outcome.__dict__, "pdf_pages": pdfs}))
+    job = store.job_usage(job_id)
+    assert job["pdfs"] == [{"id": "file-1", "name": "공고문.pdf", "pageCount": 3}] and job["textLed"] is False
+    led = {**outcome.candidate, "documents": [{"id": "pdf-text", "kind": "TEXT", "name": "수집 원문 텍스트 + 첨부 PDF에서 읽은 글자 (쪽·표 구분)"}]}
+    store.conn.execute("update extraction_jobs set candidate = %s where id = %s", (Jsonb(led), job_id))
+    assert store.job_usage(job_id)["textLed"] is True
+    assert store.job_files(job_id) == [{"documentId": "file-1", "name": "공고문.pdf", "fileType": "pdf", "s3Key": "raw/lh/1/v1/00-a.pdf", "sha256": "a" * 64}]
+    assert store.job_files(str(uuid.uuid4())) is None and store.job_usage(str(uuid.uuid4())) is None
 
 
 def test_spent_before_sums_only_unfinished_attempts_of_same_raw_version(store):

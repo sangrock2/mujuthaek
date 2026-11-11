@@ -78,7 +78,8 @@ class OpenApiTest(unittest.TestCase):
                 self.assertNotIn(operation["operationId"], seen)
                 seen.add(operation["operationId"])
                 success = operation["responses"]["200"]
-                self.assertIn("application/json", success["content"])
+                # 원문 PDF 내려받기(application/pdf)만 JSON이 아닌 성공 응답입니다
+                self.assertTrue({"application/json", "application/pdf"} & set(success["content"]), success["content"])
 
     def test_path_parameters_match_path_template(self):
         for path, method, operation in operations(self.document):
@@ -95,7 +96,7 @@ class OpenApiTest(unittest.TestCase):
         self.assertTrue({"VALIDATION_FAILED", "INVALID_CURSOR", "NOT_FOUND", "NOTICE_NOT_FOUND", "METHOD_NOT_ALLOWED"} <= codes)
         for path, method, operation in operations(self.document):
             for status, response in operation["responses"].items():
-                if status.startswith("2"):
+                if status.startswith("2") or status == "304":  # 304(ETag 같음)는 본문이 없습니다
                     continue
                 with self.subTest(operation=f"{method.upper()} {path}", status=status):
                     response = resolve(self.document, response["$ref"]) if "$ref" in response else response

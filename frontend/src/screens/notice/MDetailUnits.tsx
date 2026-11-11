@@ -9,7 +9,8 @@ import { NoticeSections, NoticeToc } from "@/components/notice/NoticeSections";
 import { NoticeTags } from "@/components/notice/NoticeTags";
 import { PdfViewer } from "@/components/notice/PdfViewer";
 import { MRankCard } from "@/components/notice/RankCard";
-import { pdfSections, dueText } from "@/features/notice/format";
+import { dueText } from "@/features/notice/format";
+import { noticeOriginal } from "@/features/notice/original";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
 import { useNotice } from "@/features/notice/queries";
 import { usePdfViewer } from "@/features/notice/usePdfViewer";
@@ -38,13 +39,11 @@ export function MDetailUnits({ id }: { id: string }) {
   useJudgmentViewed(id, n);
   if (n?.kind !== "units") return null;
   const { doc } = n;
-  const pdfUrl = doc.source.pdfUrl;
-  /** 원문 PDF가 있으면 시트로 열고, 없으면 기관 사이트로 */
-  const openOriginal = (page = 1, label?: string) => {
-    track("notice_source_open", { ...noticeParams(n), via: pdfUrl ? "pdf" : "site" });
-    if (pdfUrl) pdf.show(page, label);
-    else window.open(doc.source.detailUrl, "_blank", "noreferrer");
-  };
+  /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 시트로 열고, 없으면 기관 사이트로 */
+  const original = noticeOriginal(doc, pdf, (via) =>
+    track("notice_source_open", { ...noticeParams(n), via }),
+  );
+  const openOriginal = original.openOriginal;
 
   const seg = (on: boolean) =>
     cn(
@@ -206,7 +205,11 @@ export function MDetailUnits({ id }: { id: string }) {
         {n.ranking && <MRankCard ranking={n.ranking} />}
 
         <NoticeToc doc={doc} variant="mobile" />
-        <NoticeSections doc={doc} variant="mobile" onOpenPage={pdfUrl ? openOriginal : undefined} />
+        <NoticeSections
+          doc={doc}
+          variant="mobile"
+          onOpenPage={original.hasPdf ? openOriginal : undefined}
+        />
 
         <NoticeChat noticeId={n.id} variant="mobile" />
       </main>
@@ -232,19 +235,7 @@ export function MDetailUnits({ id }: { id: string }) {
           </button>
         </div>
       </MBottomActions>
-      {pdfUrl && (
-        <PdfViewer
-          open={pdf.open}
-          onClose={pdf.close}
-          src={pdfUrl}
-          fileName={doc.source.fileName}
-          detailUrl={doc.source.detailUrl}
-          target={pdf.target}
-          sections={pdfSections(doc)}
-          onJump={pdf.show}
-          variant="mobile"
-        />
-      )}
+      {original.viewer && <PdfViewer {...original.viewer} variant="mobile" />}
     </MPage>
   );
 }

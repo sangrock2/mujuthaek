@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 공고 상세 (API 설계 "상세 응답의 묶음"). 현재 공개 버전의 추출 결과에서 만들어요. 첨부는 기관 링크만 주고 파일은 주지 않아요.
+ * 공고 상세 (API 설계 "상세 응답의 묶음"). 현재 공개 버전의 추출 결과에서 만들어요. 첨부는 기관 링크와, 우리 저장소에 원문 PDF가 있으면 그
+ * 경로(files[].viewUrl)를 줘요.
  *
  * @param requiredDocuments 제출 서류 (서류 묶음 순서: 공통·해당자·본인 방문·배우자 대리·그 밖의 대리·묶음 없음). 보류한 서류는 빠져요
  * @param selectionRules 선정 방식 (순위·배점·추첨·선착순 등, 원문 순서). 보류한 항목은 빠져요
@@ -260,10 +261,21 @@ public record NoticeDetailResponse(
    * @param page PDF의 실제 쪽 (1부터). 글자 범위 근거는 PDF 글자에서 쪽을 정한 경우만, 표 행 근거·쪽을 모르면 null
    * @param printedPage 그 쪽에 인쇄된 쪽 번호 (없으면 null)
    * @param documentName 근거 문서 이름 (첨부 파일 이름 또는 원문 글자 묶음 이름)
+   * @param fileId page가 어느 첨부 PDF의 쪽인지 (files[].id). 쪽이 없거나 어느 PDF인지 모르면 null
    */
-  public record Evidence(String quote, Integer page, String printedPage, String documentName) {}
+  public record Evidence(
+      String quote, Integer page, String printedPage, String documentName, String fileId) {}
 
-  public record FileLink(String name, String url) {}
+  /**
+   * 첨부 하나.
+   *
+   * @param url 기관 원문 주소 (없으면 null)
+   * @param id 문서 ID (근거의 fileId와 같아요)
+   * @param viewUrl 이 서버에서 원문 PDF를 받는 경로 (GET /api/v1/notices/{id}/files/{fileId}). 우리 저장소에 PDF가
+   *     없으면(HWP·보관 기한 지남·이전 결과) null이고 화면은 기관 사이트로 보내요
+   * @param pageCount PDF 쪽 수 (모르면 null)
+   */
+  public record FileLink(String name, String url, String id, String viewUrl, Integer pageCount) {}
 
   /**
    * 원문 확인 전까지 보여 주지 않는 항목.

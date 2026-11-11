@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Minus, Plus, X } from "lucide-react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import { type QuoteBox, quoteBoxes } from "@/features/notice/pdfQuote";
 import type { PdfTarget } from "@/features/notice/usePdfViewer";
 import { cn } from "@/lib/cn";
 
@@ -11,27 +12,35 @@ const ZOOM_MAX = 2;
 const ZOOM_STEP = 0.2;
 /** 쪽 사이 간격 */
 const PAGE_GAP = 12;
+/** 강조한 문장 위로 남길 여백 */
+const QUOTE_MARGIN = 96;
+
+/** 강조 결과: 찾았으면 그 쪽 안 위치(px), 못 찾았으면 missed */
+type QuoteResult = { nonce: number; top?: number; missed?: boolean };
 
 type PdfViewerProps = {
   open: boolean;
   onClose: () => void;
   src: string;
   fileName: string;
-  /** 불러오지 못하면 보내는 기관 공고 페이지 */
-  detailUrl: string;
+  /** 불러오지 못하면 보내는 기관 공고 페이지 (없으면 안내만) */
+  detailUrl?: string;
+  /** 로그인이 필요한 주소(관리자)처럼 직접 받아야 하면: PDF 바이트를 돌려줘요. 이때는 내려받기·새 창 단추를 숨겨요 */
+  fetchData?: (src: string) => Promise<ArrayBuffer>;
   target: PdfTarget | null;
   /** 뷰어 위 섹션 목차 (쪽 순서) */
   sections?: { label: string; page: number }[];
   /** 섹션을 누르면 그 쪽으로 이동해요 */
   onJump?: (page: number, label: string) => void;
-  /** web: 왼쪽 패널 · mobile: 아래 시트 */
-  variant: "web" | "mobile";
+  /** web: 왼쪽 패널 · mobile: 아래 시트 · dialog: 가운데 창(관리자) */
+  variant: "web" | "mobile" | "dialog";
 };
 
-/** 공고 원문 PDF 보기 */
+/** 공고 원문 PDF 보기. 근거 문장(target.quote)을 그 쪽 글자 층에서 찾으면 강조하고, 못 찾으면 쪽만 열어요 */
 export function PdfViewer(props: PdfViewerProps) {
   if (!props.open) return null;
-  return <PdfViewerPanel {...props} />;
+  // 다른 PDF로 바꾸면 처음부터 다시 그려요 (쪽 위치·크기를 섞지 않게)
+  return <PdfViewerPanel key={props.src} {...props} />;
 }
 
 function PdfViewerPanel({
@@ -39,6 +48,7 @@ function PdfViewerPanel({
   src,
   fileName,
   detailUrl,
+  fetchData,
   target,
   variant,
   sections = [],
@@ -55,6 +65,8 @@ function PdfViewerPanel({
   const [chipHidden, setChipHidden] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const pageEls = useRef(new Map<number, HTMLDivElement>());
+  const [quote, setQuote] = useState<QuoteResult | null>(null);
+  const fetcher = useRef(fetchData);
 
   // PDF 불러오기 (pdf.js는 브라우저에서만 불러와요)
   useEffect(() => {
@@ -67,7 +79,10 @@ function PdfViewerPanel({
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
         ).toString();
-        task = pdfjs.getDocument({ url: src });
+        // 범위 요청(Range) 없이 한 번에 받아요: api가 Range를 받지 않고, 다른 주소(로컬 백엔드)면 CORS 사전 요청이 생겨요
+        task = fetcher.current
+          ? pdfjs.getDocument({ data: await fetcher.current(src) })
+          : pdfjs.getDocument({ url: src, disableRange: true, disableStream: true });
         const loaded = await task.promise;
         const vp = (await loaded.getPage(1)).getViewport({ scale: 1 });
         if (cancelled) return;
@@ -109,9 +124,33 @@ function PdfViewerPanel({
     const t = window.setTimeout(() => setChipHidden(target.nonce), 2500);
     return () => window.clearTimeout(t);
   }, [doc, target, width, goTo]);
+  const missed = quote?.missed === true && quote.nonce === target?.nonce;
   const chip =
-    doc && target?.label && chipHidden !== target.nonce
-      ? `${target.label} (p.${Math.min(target.page, doc.numPages)})`
+    doc && target && (target.label || missed) && chipHidden !== target.nonce
+      ? [
+          target.label && `${target.label} (p.${Math.min(target.page, doc.numPages)})`,
+          missed && "근거 문장 위치는 표시하지 못했어요",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null;
+
+  // 근거 문장을 찾으면 그 줄이 보이게 내려요
+  const onQuote = useCallback(
+    (result: QuoteResult) => {
+      setQuote(result);
+      if (result.top === undefined) return;
+      const box = scroller.current;
+      const el = target
+        ? pageEls.current.get(Math.min(target.page, doc?.numPages ?? target.page))
+        : undefined;
+      if (box && el) box.scrollTo({ top: Math.max(0, el.offsetTop + result.top - QUOTE_MARGIN) });
+    },
+    [target, doc],
+  );
+  const highlight =
+    doc && target?.quote
+      ? { page: Math.min(target.page, doc.numPages), quote: target.quote, nonce: target.nonce }
       : null;
 
   // 스크롤 위치로 지금 쪽 계산
@@ -215,10 +254,12 @@ function PdfViewerPanel({
       >
         <Plus size={18} aria-hidden />
       </button>
-      <a href={src} download={fileName} aria-label="PDF 내려받기" className={iconBtn}>
-        <Download size={18} aria-hidden />
-      </a>
-      {variant === "web" && (
+      {!fetchData && (
+        <a href={src} download={fileName} aria-label="PDF 내려받기" className={iconBtn}>
+          <Download size={18} aria-hidden />
+        </a>
+      )}
+      {variant === "web" && !fetchData && (
         <a
           href={src}
           target="_blank"
@@ -252,16 +293,26 @@ function PdfViewerPanel({
         {error ? (
           <div className="flex h-full flex-col items-center justify-center gap-[12px] px-[24px] text-center">
             <span className="text-[16px] font-bold">원문을 불러오지 못했어요</span>
-            <span className="text-text-sub text-[14px]">기관 사이트에서 원문을 확인해 주세요</span>
-            <a
-              href={detailUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="bg-surface text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[16px] text-[14px] font-bold no-underline"
-            >
-              <ExternalLink size={16} aria-hidden />
-              기관 사이트에서 보기
-            </a>
+            {detailUrl ? (
+              <>
+                <span className="text-text-sub text-[14px]">
+                  기관 사이트에서 원문을 확인해 주세요
+                </span>
+                <a
+                  href={detailUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-surface text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[16px] text-[14px] font-bold no-underline"
+                >
+                  <ExternalLink size={16} aria-hidden />
+                  기관 사이트에서 보기
+                </a>
+              </>
+            ) : (
+              <span className="text-text-sub text-[14px]">
+                우리 저장소에 원본이 없거나 잠시 불러올 수 없어요
+              </span>
+            )}
           </div>
         ) : !doc ? (
           <div className="text-text-sub flex h-full items-center justify-center text-[14px]">
@@ -280,6 +331,8 @@ function PdfViewerPanel({
                 width={pageWidth}
                 ratio={ratio}
                 root={scroller}
+                highlight={highlight?.page === n ? highlight : null}
+                onQuote={onQuote}
                 register={(el) => {
                   if (el) pageEls.current.set(n, el);
                   else pageEls.current.delete(n);
@@ -292,9 +345,15 @@ function PdfViewerPanel({
     </div>
   );
 
-  if (variant === "mobile") {
+  if (variant === "mobile" || variant === "dialog") {
+    const dialog = variant === "dialog";
     return (
-      <div className="fixed inset-0 z-[40] flex flex-col justify-end">
+      <div
+        className={cn(
+          "fixed inset-0 z-[40] flex flex-col",
+          dialog ? "items-center justify-center" : "justify-end",
+        )}
+      >
         <button
           type="button"
           aria-label="원문 닫기"
@@ -305,13 +364,22 @@ function PdfViewerPanel({
           role="dialog"
           aria-modal="true"
           aria-label="공고 원문"
-          className="bg-surface relative flex h-[92dvh] flex-col overflow-hidden rounded-t-[20px]"
+          className={cn(
+            "bg-surface relative flex flex-col overflow-hidden",
+            dialog ? "h-[92dvh] w-[min(92vw,900px)] rounded-[20px]" : "h-[92dvh] rounded-t-[20px]",
+          )}
         >
-          <span aria-hidden className="bg-line mx-auto mt-[8px] h-[4px] w-[40px] rounded-[2px]" />
+          {!dialog && (
+            <span aria-hidden className="bg-line mx-auto mt-[8px] h-[4px] w-[40px] rounded-[2px]" />
+          )}
           <div className="flex items-start justify-between gap-[12px] px-[20px] pt-[10px] pb-[8px]">
             <div className="flex min-w-0 flex-col gap-[2px]">
-              <span className="text-[18px] font-extrabold">PDF 원문</span>
-              <span className="text-text-sub text-[13px]">닫으면 보던 공고로 돌아가요</span>
+              <span className="truncate text-[18px] font-extrabold">
+                {dialog ? fileName : "PDF 원문"}
+              </span>
+              <span className="text-text-sub text-[13px]">
+                {dialog ? "근거 위치의 원문이에요" : "닫으면 보던 공고로 돌아가요"}
+              </span>
             </div>
             <button type="button" aria-label="원문 닫기" onClick={onClose} className={iconBtn}>
               <X size={22} aria-hidden />
@@ -350,6 +418,8 @@ function PdfPage({
   ratio,
   root,
   register,
+  highlight,
+  onQuote,
 }: {
   doc: PDFDocumentProxy;
   n: number;
@@ -357,11 +427,17 @@ function PdfPage({
   ratio: number;
   root: React.RefObject<HTMLDivElement | null>;
   register: (el: HTMLDivElement | null) => void;
+  /** 이 쪽에서 찾아 강조할 근거 문장 */
+  highlight: { quote: string; nonce: number } | null;
+  onQuote: (result: QuoteResult) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [near, setNear] = useState(false);
   const [height, setHeight] = useState<number | null>(null);
+  const [marks, setMarks] = useState<{ nonce: number; boxes: QuoteBox[] } | null>(null);
+  const quote = highlight?.quote;
+  const nonce = highlight?.nonce;
 
   useEffect(() => {
     const el = box.current;
@@ -397,6 +473,40 @@ function PdfPage({
     };
   }, [near, width, doc, n]);
 
+  // 근거 문장: 이 쪽 글자 층(getTextContent)에서 꼭 한 번 나오면 강조하고, 아니면 쪽만 열었다고 알려요
+  useEffect(() => {
+    if (!near || width === 0 || !quote || nonce === undefined) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [pdfjs, page] = await Promise.all([import("pdfjs-dist"), doc.getPage(n)]);
+        const base = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: width / base.width });
+        const content = await page.getTextContent();
+        const pieces = content.items.flatMap((item) =>
+          "str" in item ? [{ str: item.str, transform: item.transform, width: item.width }] : [],
+        );
+        const boxes = quoteBoxes(
+          pieces,
+          quote,
+          (t) => pdfjs.Util.transform(viewport.transform, t),
+          viewport.scale,
+        );
+        if (cancelled) return;
+        setMarks(boxes ? { nonce, boxes } : null);
+        onQuote(
+          boxes ? { nonce, top: Math.min(...boxes.map((b) => b.top)) } : { nonce, missed: true },
+        );
+      } catch {
+        if (!cancelled) onQuote({ nonce, missed: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [near, width, doc, n, quote, nonce, onQuote]);
+  const shown = marks && marks.nonce === nonce ? marks.boxes : [];
+
   return (
     <div
       ref={(el) => {
@@ -408,6 +518,15 @@ function PdfPage({
       style={{ width, height: height ?? Math.round(width * ratio) }}
     >
       <canvas ref={canvas} className="block h-full w-full" />
+      {shown.map((b, i) => (
+        <span
+          key={i}
+          aria-hidden
+          className="pointer-events-none absolute rounded-[2px] bg-[rgba(255,196,0,0.38)] mix-blend-multiply"
+          style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
+        />
+      ))}
+      {shown.length > 0 && <span className="sr-only">근거 문장을 노란색으로 표시했어요</span>}
     </div>
   );
 }

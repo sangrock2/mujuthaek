@@ -16,7 +16,8 @@ import { NoticeTags } from "@/components/notice/NoticeTags";
 import { PdfViewer } from "@/components/notice/PdfViewer";
 import { WebRankCard } from "@/components/notice/RankCard";
 import { WebUnitFilter } from "@/components/notice/UnitFilter";
-import { pdfSections, dueText } from "@/features/notice/format";
+import { dueText } from "@/features/notice/format";
+import { noticeOriginal } from "@/features/notice/original";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
 import { useNotice } from "@/features/notice/queries";
 import { track } from "@/lib/analytics";
@@ -44,13 +45,12 @@ export function WebDetailUnits({ id }: { id: string }) {
   useJudgmentViewed(id, n);
   if (n?.kind !== "units") return null;
   const { doc } = n;
-  const pdfUrl = doc.source.pdfUrl;
-  /** 원문 PDF가 있으면 옆에 열고, 없으면 기관 사이트로 */
-  const openOriginal = (page = 1, label?: string) => {
-    track("notice_source_open", { ...noticeParams(n), via: pdfUrl ? "pdf" : "site" });
-    if (pdfUrl) pdf.show(page, label);
-    else window.open(doc.source.detailUrl, "_blank", "noreferrer");
-  };
+  /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 옆에 열고, 없으면 기관 사이트로 */
+  const original = noticeOriginal(doc, pdf, (via) =>
+    track("notice_source_open", { ...noticeParams(n), via }),
+  );
+  const openOriginal = original.openOriginal;
+  const pdfUrl = original.viewer?.src;
 
   return (
     <WebPage>
@@ -337,7 +337,7 @@ export function WebDetailUnits({ id }: { id: string }) {
               <NoticeSections
                 doc={doc}
                 variant="web"
-                onOpenPage={pdfUrl ? openOriginal : undefined}
+                onOpenPage={original.hasPdf ? openOriginal : undefined}
               />
               <NoticeChat noticeId={n.id} variant="web" />
             </div>
@@ -351,7 +351,7 @@ export function WebDetailUnits({ id }: { id: string }) {
                   <h2 className="tracking-title m-0 text-[20px] font-extrabold">내 자격</h2>
                   <button
                     type="button"
-                    onClick={() => openOriginal(doc.pages.eligibility ?? 1, "신청 자격")}
+                    onClick={() => original.openEligibility()}
                     className="text-brand-strong inline-flex min-h-[44px] cursor-pointer items-center border-0 bg-transparent p-0 text-[14px] font-bold"
                   >
                     근거 원문
@@ -401,19 +401,7 @@ export function WebDetailUnits({ id }: { id: string }) {
           </div>
         </WebMain>
       </div>
-      {pdfUrl && (
-        <PdfViewer
-          open={pdf.open}
-          onClose={pdf.close}
-          src={pdfUrl}
-          fileName={doc.source.fileName}
-          detailUrl={doc.source.detailUrl}
-          target={pdf.target}
-          sections={pdfSections(doc)}
-          onJump={pdf.show}
-          variant="web"
-        />
-      )}
+      {original.viewer && <PdfViewer {...original.viewer} variant="web" />}
     </WebPage>
   );
 }

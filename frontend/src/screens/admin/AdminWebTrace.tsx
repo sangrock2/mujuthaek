@@ -1,17 +1,58 @@
 "use client";
 
-import { ArrowLeft, Check, ChevronDown, CircleAlert, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, CircleAlert, FileText, X } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { createContext, useContext } from "react";
 import { AdminTitle, AdminTitleRow } from "@/components/admin/AdminShell";
+import { PdfViewer } from "@/components/notice/PdfViewer";
 import { Badge } from "@/components/ui/Badge";
 import {
   type ExtractionTrace,
   type TraceAgent,
+  type TraceDocument,
+  type TraceRef,
   type TraceTurn,
+  fetchAdminPdf,
+  splitRefs,
+  tracePdfUrl,
   useExtractionTrace,
 } from "@/features/admin/trace";
+import { usePdfViewer } from "@/features/notice/usePdfViewer";
+import { USE_MOCKS } from "@/lib/api/config";
 import { cn } from "@/lib/cn";
+
+/** 근거 id → 원문 PDF 위치와 여는 함수 (차례별 대화 안의 id를 누르면 원문을 열어요) */
+const RefsContext = createContext<{
+  refs: Record<string, TraceRef>;
+  documents: TraceDocument[];
+  open: (ref: string) => void;
+} | null>(null);
+
+/** 글 속 근거 id를 원문 PDF 단추로 바꿔 보여요. 위치를 모르는 id는 글 그대로 */
+function RefText({ text }: { text: string }) {
+  const ctx = useContext(RefsContext);
+  return (
+    <>
+      {splitRefs(text, ctx?.refs).map((part, i) => {
+        const at = part.ref ? ctx?.refs[part.ref] : undefined;
+        if (!part.ref || !at || !ctx) return <span key={i}>{part.text}</span>;
+        const name = ctx.documents.find((d) => d.id === at.documentId)?.name ?? "원문";
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => ctx.open(part.ref!)}
+            title={`${name} ${at.page}쪽 열기`}
+            className="text-brand-strong cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] underline decoration-dotted underline-offset-2"
+          >
+            {part.text}
+          </button>
+        );
+      })}
+    </>
+  );
+}
 
 const card = "rounded-card bg-surface flex flex-col gap-[14px] px-[26px] py-[22px]";
 const num = (n: number) => n.toLocaleString("ko-KR");
@@ -43,6 +84,15 @@ function toolLabel(name: string | null) {
 export function AdminWebTrace() {
   const job = useSearchParams().get("job");
   const trace = useExtractionTrace(job);
+  const pdf = usePdfViewer();
+  const documents = trace.data?.documents ?? [];
+  const refs = trace.data?.refs ?? {};
+  const file = documents.find((d) => d.id === pdf.target?.fileId) ?? documents[0];
+  /** 근거 id의 원문 PDF를 그 쪽으로 열고, 그 id의 글이 있으면 찾아 강조해요 (못 찾으면 쪽만) */
+  const openRef = (ref: string) => {
+    const at = refs[ref];
+    if (at) pdf.show(at.page, ref, { fileId: at.documentId, quote: at.text });
+  };
 
   return (
     <div className="flex flex-col gap-[20px]">
@@ -67,13 +117,35 @@ export function AdminWebTrace() {
           추출 과정을 불러오지 못했어요. 작업이 없거나 추출 서버에 연결하지 못했어요.
         </p>
       ) : (
-        <TraceBody trace={trace.data} />
+        <RefsContext.Provider value={{ refs, documents, open: openRef }}>
+          <TraceBody
+            trace={trace.data}
+            onOpenDocument={(id) => pdf.show(1, undefined, { fileId: id })}
+          />
+        </RefsContext.Provider>
+      )}
+      {file && (
+        <PdfViewer
+          open={pdf.open}
+          onClose={pdf.close}
+          src={tracePdfUrl(job, file.id)}
+          fileName={file.name}
+          fetchData={USE_MOCKS ? undefined : fetchAdminPdf}
+          target={pdf.target}
+          variant="dialog"
+        />
       )}
     </div>
   );
 }
 
-function TraceBody({ trace }: { trace: ExtractionTrace }) {
+function TraceBody({
+  trace,
+  onOpenDocument,
+}: {
+  trace: ExtractionTrace;
+  onOpenDocument: (id: string) => void;
+}) {
   const t = trace.totals;
   const tiles = [
     { label: "비용", value: usd(t.costUsd) },
@@ -107,6 +179,28 @@ function TraceBody({ trace }: { trace: ExtractionTrace }) {
             </div>
           ))}
         </dl>
+        {(trace.documents ?? []).length > 0 && (
+          <div className="flex flex-wrap items-center gap-[6px] text-[14px]">
+            <span className="text-text-sub">원문 PDF</span>
+            {trace.documents!.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => onOpenDocument(d.id)}
+                className="bg-bg text-text inline-flex min-h-[36px] cursor-pointer items-center gap-[4px] rounded-sm border-0 px-[10px] text-[13px] font-bold"
+              >
+                <FileText size={14} aria-hidden />
+                {d.name}
+                {d.pageCount ? ` (${d.pageCount}쪽)` : ""}
+              </button>
+            ))}
+            {Object.keys(trace.refs ?? {}).length > 0 && (
+              <span className="text-text-sub text-[13px]">
+                · 대화 속 밑줄 친 근거 id를 누르면 그 쪽을 열어요
+              </span>
+            )}
+          </div>
+        )}
         {trace.engine === "V1" && (
           <p className="text-text-sub m-0 text-[14px]">
             V2 기록이 없는 작업이에요(예전 방식으로 처리했거나 채팅 모델 없이 처리). 합계만 보여요.
@@ -309,7 +403,7 @@ function Timeline({ turns }: { turns: TraceTurn[] }) {
                   </span>
                   {c.args && (
                     <code className="bg-surface block overflow-x-auto rounded-sm px-[8px] py-[6px] text-[12px] break-all whitespace-pre-wrap">
-                      {c.args}
+                      <RefText text={c.args} />
                     </code>
                   )}
                   {r?.result && (
@@ -319,7 +413,7 @@ function Timeline({ turns }: { turns: TraceTurn[] }) {
                         r.failed ? "bg-danger-bg" : "bg-surface",
                       )}
                     >
-                      {r.result}
+                      <RefText text={r.result} />
                     </code>
                   )}
                 </div>
@@ -332,7 +426,7 @@ function Timeline({ turns }: { turns: TraceTurn[] }) {
                   검증 결과 (다음 차례에 고칠 것)
                 </summary>
                 <pre className="bg-surface m-0 mt-[6px] max-h-[320px] overflow-auto rounded-sm px-[10px] py-[8px] text-[12px] whitespace-pre-wrap">
-                  {turn.verify}
+                  <RefText text={turn.verify} />
                 </pre>
               </details>
             )}

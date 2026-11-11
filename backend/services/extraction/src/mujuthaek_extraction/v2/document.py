@@ -67,6 +67,8 @@ class DocumentModel:
     source_id: str = "text"  # 원문 글자의 문서 ID(V1 material.text_document_id). 인용의 documentId
     blocks: tuple[tuple[str, str], ...] = ()  # 묶음 id → 원래 이름(x1 → 「첨부 엑셀 목록.xlsx」, g1 → 「그림 판독 3쪽」)
     source: str = field(default="", compare=False, repr=False)  # 읽은 원문 글자 그대로(V1 결합기가 인용 위치를 찾는 글자, 표 읽기 도움 줄 포함)
+    # 줄·표 id → (원문에 글자가 들어간 PDF 차례(1부터), PDF 쪽). 쪽 표시(「--- 3쪽 ---」) 아래에 있던 것만(수집 글자·엑셀·그림 판독 묶음은 없음)
+    located: dict[str, tuple[int, int]] = field(default_factory=dict, compare=False, repr=False)
     _by_id: dict[str, Line | Table] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -114,6 +116,16 @@ class DocumentModel:
         if not isinstance(table, Table) or row >= len(table.lines):
             return []
         return [*reversed(table.lines[max(0, row - reach) : row]), *table.lines[row + 1 : row + 1 + reach]]
+
+    def locate(self, ref: str) -> tuple[int, int] | None:
+        """id(줄·표·행·칸) → (PDF 차례, 쪽). 관리자 「추출 과정 보기」에서 근거 id를 원문 PDF의 그 쪽으로 열 때 씁니다. 쪽 표시 아래가 아니면 None."""
+        if ref in self.located:
+            return self.located[ref]
+        try:
+            table_id, _, _ = _split_cell_ref(ref)
+        except KeyError:
+            return None
+        return self.located.get(table_id) if self.exists(ref) else None
 
     def exists(self, ref: str) -> bool:
         try:
@@ -290,16 +302,20 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
     blocks: dict[str, int] = {}
     names: list[tuple[str, str]] = []
     table: dict[str, Any] | None = None
+    located: dict[str, tuple[int, int]] = {}
+    paged: tuple[int, int] | None = None  # 지금 줄이 쪽 표시 아래면 (PDF 차례, 쪽). 묶음 머리(=== … ===)를 만나면 끝
 
     def close() -> None:
         nonlocal table
         if table is not None and table["lines"]:
             items.append(Table(table["id"], table["area"], tuple(table["lines"]), tuple(table["columns"]), table["caption"], tuple(table["spots"])))
+            if table["paged"] is not None:
+                located[table["id"]] = table["paged"]
         table = None
 
     def unnamed(caption: str = "") -> dict[str, Any]:
         counters[f"{area}.t"] = counters.get(f"{area}.t", 0) + 1
-        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption, "spots": []}
+        return {"id": f"{area}.t{counters[f'{area}.t']}", "area": area, "lines": [], "columns": [], "caption": caption, "spots": [], "paged": paged}
 
     for at, raw in enumerate(text.split("\n")):
         line = raw.rstrip("\r")
@@ -313,9 +329,11 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
                 document += 1
             last_page = number
             area = f"p{number}" if document == 1 else f"d{document}.p{number}"
+            paged = (document, number)
             continue
         if block := BLOCK.match(line):
             close()
+            paged = None
             if block.group(1).startswith("첨부 ") and not block.group(1).startswith("첨부 엑셀") and last_page:
                 # 첨부 PDF 머리(「=== 첨부 공고문.pdf ===」)가 앞 PDF 쪽 뒤에 오면 다음 첨부예요. 쪽 번호가 줄 때만 보면 1쪽짜리 PDF 뒤의
                 # PDF가 같은 문서로 남아 두 PDF의 표 id가 겹치고(t1-1), 앞 표 인용이 뒤 표 글자로 풀렸어요(2026-11-10 코드 검토)
@@ -329,7 +347,7 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
         if marker := TABLE.match(line):
             close()
             prefix = "" if document == 1 else f"d{document}."
-            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": "", "spots": []}
+            table = {"id": f"{prefix}t{marker.group(1)}", "area": area, "lines": [], "columns": [], "caption": "", "spots": [], "paged": paged}
             continue
         if sheet := SHEET.match(line):
             close()
@@ -350,8 +368,10 @@ def parse(text: str, source_id: str = "text") -> DocumentModel:
         close()
         counters[area] = counters.get(area, 0) + 1
         items.append(Line(f"{area}.{counters[area]}", line))
+        if paged is not None:
+            located[items[-1].id] = paged
     close()
-    return DocumentModel(tuple(items), source_id=source_id, blocks=tuple(names), source=text)
+    return DocumentModel(tuple(items), source_id=source_id, blocks=tuple(names), source=text, located=located)
 
 
 def _is_row(line: str) -> bool:

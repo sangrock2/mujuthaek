@@ -152,6 +152,14 @@ public class ExtractionReviewClient {
   }
 
   /**
+   * 작업 원본의 첨부 위치(추출 GET /reviews/{id}/files): {files: [{documentId, name, fileType, s3Key,
+   * sha256}]}. 관리자 원문 PDF 보기에서 이 위치로 S3를 읽어요. 문서 ID는 추출 결과 documents[].id와 같아요.
+   */
+  public JsonNode files(String jobId) {
+    return call(() -> http.get().uri("/reviews/{id}/files", jobId).retrieve().body(JsonNode.class));
+  }
+
+  /**
    * 추출 비용·품질 집계(추출 GET /stats/extraction, extraction_stats.py): 최근 days일(한국 시간)의 처리 공고 수·상태 묶음별
    * 비율·공고당 비용·담당별 비용 비중·캐시 읽기 비율·멈춤·넣기 거절·해결 담당 채택·하루 추이·비용이 큰 작업.
    */

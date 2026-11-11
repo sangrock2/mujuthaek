@@ -17,7 +17,8 @@ import { PdfViewer } from "@/components/notice/PdfViewer";
 import { RegulationNotice } from "@/components/notice/RegulationNotice";
 import { MRankCard } from "@/components/notice/RankCard";
 import { VerdictBadge } from "@/components/ui/Badge";
-import { dueText, formatPeriod, statusLabel, pdfSections } from "@/features/notice/format";
+import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
+import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
 import {
   bySite,
@@ -285,13 +286,11 @@ export function MDetail({ id }: { id: string }) {
   };
   const doc = withMine(n.doc, j.judgment?.mineTypes ?? []);
   const money = j.judgment?.money;
-  const pdfUrl = doc.source.pdfUrl;
-  /** 원문 PDF가 있으면 시트로 열고, 없으면 기관 사이트로 */
-  const openOriginal = (page = 1, label?: string) => {
-    track("notice_source_open", { ...noticeParams(n), via: pdfUrl ? "pdf" : "site" });
-    if (pdfUrl) pdf.show(page, label);
-    else window.open(doc.source.detailUrl, "_blank", "noreferrer");
-  };
+  /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 시트로 열고, 없으면 기관 사이트로 */
+  const original = noticeOriginal(doc, pdf, (via) =>
+    track("notice_source_open", { ...noticeParams(n), via }),
+  );
+  const openOriginal = original.openOriginal;
 
   return (
     <MPage>
@@ -355,6 +354,15 @@ export function MDetail({ id }: { id: string }) {
               <span className="tracking-title text-[28px] font-extrabold">{money.prep}</span>
             </span>
             {money.note && <span className="text-brand-deep-text text-[13px]">{money.note}</span>}
+            {/* 대출 예상은 구간 값으로 본 것이라, 정확한 소득·순자산으로 다시 보는 화면으로 */}
+            {money.loan && (
+              <Link
+                href={routes.loans}
+                className="text-[14px] font-bold text-white no-underline hover:text-white"
+              >
+                대출 자격 정확히 확인하기 →
+              </Link>
+            )}
           </section>
         )}
 
@@ -363,7 +371,7 @@ export function MDetail({ id }: { id: string }) {
           loading={j.loading}
           error={j.error}
           variant="mobile"
-          onOpenOriginal={(page) => openOriginal(page ?? doc.pages.eligibility ?? 1, "신청 자격")}
+          onOpenOriginal={original.openEligibility}
         />
 
         {n.hasUnits && <MApiUnits notice={n} judgment={j.judgment} onShowLife={showLife} />}
@@ -377,7 +385,11 @@ export function MDetail({ id }: { id: string }) {
         <NoticeHeldBanner doc={doc} variant="mobile" />
         <NoticeVersions noticeId={n.id} variant="mobile" />
         <NoticeToc doc={doc} variant="mobile" />
-        <NoticeSections doc={doc} variant="mobile" onOpenPage={pdfUrl ? openOriginal : undefined} />
+        <NoticeSections
+          doc={doc}
+          variant="mobile"
+          onOpenPage={original.hasPdf ? openOriginal : undefined}
+        />
 
         <NoticeChat noticeId={n.id} variant="mobile" />
 
@@ -443,19 +455,7 @@ export function MDetail({ id }: { id: string }) {
           {n.agency} 공고 원문 보기
         </button>
       </MBottomActions>
-      {pdfUrl && (
-        <PdfViewer
-          open={pdf.open}
-          onClose={pdf.close}
-          src={pdfUrl}
-          fileName={doc.source.fileName}
-          detailUrl={doc.source.detailUrl}
-          target={pdf.target}
-          sections={pdfSections(doc)}
-          onJump={pdf.show}
-          variant="mobile"
-        />
-      )}
+      {original.viewer && <PdfViewer {...original.viewer} variant="mobile" />}
     </MPage>
   );
 }
