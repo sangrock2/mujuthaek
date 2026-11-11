@@ -1739,8 +1739,8 @@ def _pair_by_row_codes(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     묶음으로 따로 남음(11/10에는 같은 표를 다른 칸으로 읽어 이어짐).
     잇는 조건(모두): 가격 묶음 P는 모집 수가 없고 가격이 있으며 대상·주택형 미정 표시가 없음, 모집 묶음 C는 다른 표의 행이고 모집 수가 있으며
     이 단계 전에 가격이 하나도 없음(이미 가격이 있는 묶음과 섞지 않음), 같은 단지(단지가 둘 이상이면 이름이 같아야 함), 대상 계층이 맞음,
-    주택형 번호의 정수 부분이 같음(둘 다 있을 때), 그리고 한쪽 주택형 코드(띄어쓰기·대소문자만 정규화, 숫자만인 코드는 수량 칸과 겹칠 수 있어
-    빼고)가 상대 원문 행의 칸 글 하나와 똑같음.
+    주택형 번호의 정수 부분이 같음(둘 다 있을 때), 그리고 한쪽 주택형 코드(띄어쓰기·대소문자만 정규화, 숫자와 글자가 함께 든 코드만)가
+    상대 원문 행의 칸 글 하나와 똑같음.
     P마다 맞는 C가 정확히 하나이고, 그 C에 같은 표의 P가 하나뿐일 때만 옮깁니다. 둘 이상이거나 없으면 그대로 두며, 그 묶음은 검증의
     V8 SUPPLY_PRICE_UNATTACHED(같은 번호의 모집 묶음이 있는데 가격이 따로 남음)로 검수에 오릅니다."""
 
@@ -1748,8 +1748,9 @@ def _pair_by_row_codes(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return group["id"].rsplit("-r", 1)[0]
 
     def code(group: dict[str, Any]) -> str:
+        # 숫자만인 코드(「84」)는 수량 칸과, 숫자 없는 코드(「A」)는 동·블록 칸과 겹칠 수 있어 대조하지 않습니다
         key = _code_key(group.get("housingTypeCode"))
-        return "" if re.fullmatch(r"\d+", key) else key
+        return key if re.search(r"\d", key) and not re.fullmatch(r"\d+", key) else ""
 
     def cells(group: dict[str, Any]) -> set[str]:
         return {_code_key(cell) for cell in group.get("_row_cells") or []}

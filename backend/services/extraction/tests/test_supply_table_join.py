@@ -230,3 +230,11 @@ def test_row_code_join_needs_the_same_type_number():
     price_rows = (("유형", "주택형", "약식", "보증금", "월임대료"), ("공공임대", "084.9288A", "59A", "72,000,000", "489,000"))
     groups = jbdc_tables(JBDC_SUPPLY[:2], price_rows)["supplyGroups"]
     assert [(g["housingTypeCode"], [p["sourceAmount"] for p in g["prices"]]) for g in groups] == [("59A", []), ("084.9288A", ["72,000,000", "489,000"])]
+
+
+def test_row_code_join_skips_codes_without_digits_or_with_digits_only():
+    # 「A」(동·블록 칸과 겹침)·「59」(수량 칸과 겹침)는 칸 대조에 쓰지 않습니다
+    supply_rows = (("번호", "주택형", "약식", "전용", "세대수"), ("A", "059. 9288 A", "59", "59.9288", "83"))
+    price_rows = (("유형", "주택형", "약식", "보증금", "월임대료"), ("공공임대", "A", "B", "72,000,000", "489,000"))
+    groups = jbdc_tables(supply_rows, price_rows)["supplyGroups"]
+    assert [(g["housingTypeCode"], [p["sourceAmount"] for p in g["prices"]]) for g in groups] == [("59", []), ("A", ["72,000,000", "489,000"])]
