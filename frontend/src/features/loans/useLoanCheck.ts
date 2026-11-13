@@ -5,10 +5,10 @@ import { useMemo, useState } from "react";
 import { birthDateOf } from "@/features/conditions/applicant";
 import { useConditions } from "@/features/conditions/store";
 import type { DeviceConditions } from "@/features/conditions/types";
-import { api, ApiError } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { loanExample, loanResultExample } from "@/mocks/loans";
+import { api, ApiError } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { loanExample, loanResultExample } from "@/features/loans/mocks/loans";
 import {
   formProblems,
   seoulToday,
@@ -34,11 +34,11 @@ export const CHILD_MAX = 6;
  * (집이 없다고 해도 다른 세대원 집은 모르니 직접 고르게 해요)
  */
 function prefillOf(device: DeviceConditions): LoanForm {
-  const kids = Math.min(Math.max(device.kids, 0), CHILD_MAX);
+  const kids = device.kids === null ? undefined : Math.min(Math.max(device.kids, 0), CHILD_MAX);
   return {
     birthDate: birthDateOf(device.birth),
-    marital: maritalOf[device.marry],
-    children: Array.from({ length: kids }, () => ""),
+    marital: device.marry ? maritalOf[device.marry] : undefined,
+    children: kids === undefined ? undefined : Array.from({ length: kids }, () => ""),
     householdSize: sizeOf(device.householdSize),
     homeless: device.homelessPeriod === "집이 있어요" ? false : undefined,
   };

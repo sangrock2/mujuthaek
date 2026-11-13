@@ -102,17 +102,7 @@ export function formatMan(v: string) {
   return digits ? Number(digits).toLocaleString("ko-KR") : "";
 }
 
-/** 원 → "3억 4,500만 원" (음수는 앞에 −) */
-export function wonText(won: number) {
-  const sign = won < 0 ? "−" : "";
-  const abs = Math.abs(won);
-  const eok = Math.floor(abs / 100_000_000);
-  const man = Math.floor((abs % 100_000_000) / 10_000);
-  const parts = [];
-  if (eok) parts.push(`${eok.toLocaleString("ko-KR")}억`);
-  if (man || !eok) parts.push(`${man.toLocaleString("ko-KR")}만`);
-  return `${sign}${parts.join(" ")} 원`;
-}
+export { formatWon as wonText } from "@/shared/lib/money";
 
 /** 혼인했거나 결혼 예정이면 부부 소득을 나눠 물어요 */
 export const isCouple = (m?: LoanMarital) => m === "MARRIED" || m === "ENGAGED";

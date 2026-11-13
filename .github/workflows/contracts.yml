@@ -1,17 +1,8 @@
 name: Contracts
 
 on:
-  pull_request:
-    paths:
-      - "backend/contracts/**"
-      - "backend/services/extraction/**"
-      - ".github/workflows/contracts.yml"
-  push:
-    branches: [main]
-    paths:
-      - "backend/contracts/**"
-      - "backend/services/extraction/**"
-      - ".github/workflows/contracts.yml"
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read

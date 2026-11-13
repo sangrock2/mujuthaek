@@ -16,7 +16,7 @@
 대상 계층 이름이 달라도(「청년」↔「3순위 19세 이상 39세 이하인 사람」) 원문이 같은 문장이면 같은 조건으로 세고 그 줄에 함께 알립니다.
 
   # 채점 스크립트 자체 시험
-  python -m pytest scripts/test_score_answer_keys.py
+  python -m pytest tests/tools/test_score_answer_keys.py
 """
 
 from __future__ import annotations

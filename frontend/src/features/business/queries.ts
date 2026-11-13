@@ -14,7 +14,7 @@ import {
   type BizProfileInput,
   type BizSession,
 } from "@/features/business/profile";
-import { USE_MOCKS } from "@/lib/api/config";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 import {
   bizOnboarding,
   bizProfile,
@@ -22,7 +22,7 @@ import {
   spaceDetails,
   supportList,
   type SpaceType,
-} from "@/mocks/business";
+} from "@/features/business/mocks/business";
 
 export { useRegionScope, type RegionScope } from "@/features/business/api";
 
@@ -32,7 +32,6 @@ export function useInitialSpaceType(): "all" | SpaceType {
   const needs = stored.status === "ready" ? (stored.profile?.needs ?? []) : [];
   const byNeed: Record<string, SpaceType> = {
     STARTUP_SPACE: "startup",
-    SHOP_RENTAL: "shop",
     MEETING_ROOM: "room",
   };
   return needs.length === 1 ? (byNeed[needs[0]] ?? "all") : "all";

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ageOf } from "@/features/conditions/format";
 import { useConditions } from "@/features/conditions/store";
 import { useRegions } from "@/features/regions/queries";
-import type { BizStage } from "@/mocks/business";
+import type { BizStage } from "@/features/business/mocks/business";
 import {
   emptyBizProfile,
   emptyBizSession,

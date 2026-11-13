@@ -1,0 +1,36 @@
+server:
+  address: 127.0.0.1
+  port: 18080
+spring:
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:15439/api_e2e
+    username: e2e
+    password: e2e-only
+  rabbitmq:
+    host: 127.0.0.1
+    port: 15679
+    username: e2e
+    password: e2e-only
+app:
+  frontend-url: http://127.0.0.1:13000
+  jwt:
+    secret: e2e-only-secret-never-used-in-production-0123456789
+  outbox:
+    relay-interval-ms: 200
+mujuthaek:
+  judging:
+    prewarm: false
+  s3:
+    endpoint: http://127.0.0.1:19009
+    bucket: e2e-raw
+    access-key: e2e-minio
+    secret-key: e2e-only-minio
+notification:
+  deadline-reminder:
+    enabled: false
+notice:
+  status-refresh:
+    enabled: false
+logging:
+  level:
+    kr.mujuthaek: INFO

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MBenefits } from "@/screens/benefits/MBenefits";
-import { WebBenefits } from "@/screens/benefits/WebBenefits";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MBenefits } from "@/features/benefits/screens/MBenefits";
+import { WebBenefits } from "@/features/benefits/screens/WebBenefits";
 
 export const metadata: Metadata = { title: "내 혜택 | 무주택자들" };
 

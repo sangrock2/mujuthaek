@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Responsive } from "@/components/layout/Responsive";
-import { MStates } from "@/screens/states/MStates";
-import { WebStates } from "@/screens/states/WebStates";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MStates } from "@/shared/states/screens/MStates";
+import { WebStates } from "@/shared/states/screens/WebStates";
 
 export const metadata: Metadata = { title: "빈 상태 · 오류 미리보기 | 무주택자들" };
 

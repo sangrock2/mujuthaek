@@ -9,3 +9,7 @@
 .idea
 .docs
 infra/.env
+**/.env
+**/.env.*
+**/test-results
+infra/deploy/personal/runtime

@@ -1,13 +1,13 @@
 // GET /api/v1/notices/{id} 응답 (백엔드 NoticeDetailResponse) → 공고 상세 화면 값
 import { dueText } from "@/features/notice/format";
-import { API_BASE_URL } from "@/lib/api/client";
+import { API_BASE_URL } from "@/shared/lib/api/client";
 import {
   noticeTypeLabel,
   providerName,
   tagLabel,
   targetGroupLabel,
 } from "@/features/notice/labels";
-import type { NoticeFact, StandardNotice } from "@/mocks/notice";
+import type { NoticeFact, StandardNotice } from "@/features/notice/mocks/notice";
 import type {
   EligibilityCategory,
   NoticeDoc,
@@ -20,7 +20,7 @@ import type {
   NoticeSelectionKind,
   NoticeTextItem,
   PdfAnchor,
-} from "@/mocks/notice-doc";
+} from "@/features/notice/mocks/notice-doc";
 
 /** fileId: page가 어느 첨부 PDF의 쪽인지 (files[].id, 모르면 null · 이전 응답엔 없음) */
 type Evidence = { quote: string; page: number | null; fileId?: string | null };

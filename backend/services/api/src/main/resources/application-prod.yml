@@ -1,6 +1,12 @@
 # Vercel rewrites → nginx → 이 서버. X-Forwarded-Proto·Host로 https 주소(쿠키·OAuth 리다이렉트)를 만들어요
 server:
   forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
 
 # 운영은 health와 prometheus만 열어요. nginx가 /actuator/health 말고는 막고 포트도 127.0.0.1에만 묶여 있어
 # prometheus는 서버 안(SSH 터널)에서만 읽혀요

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { NoticeUnit } from "@/mocks/notice";
+import type { NoticeUnit } from "@/features/notice/mocks/notice";
 
 /** 공급 주택 목록: 신청 가능만 보기 + 집 하나 고르기 */
 export function useUnitPicker(units: NoticeUnit[]) {

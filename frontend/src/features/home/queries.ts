@@ -6,12 +6,12 @@ import { toApplicant } from "@/features/conditions/applicant";
 import { useConditions } from "@/features/conditions/store";
 import { useCriteria } from "@/features/eligibility/criteria";
 import { mockQuery } from "@/features/mock-query";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
 import { providerName } from "@/features/notice/labels";
 import { formatWon } from "@/features/notice/format";
-import { homeSummary, type HomeNewsItem, type HomeSummary } from "@/mocks/home";
+import { homeSummary, type HomeNewsItem, type HomeSummary } from "@/features/home/mocks/home";
 
 export const homeKeys = {
   summary: ["home", "summary"] as const,

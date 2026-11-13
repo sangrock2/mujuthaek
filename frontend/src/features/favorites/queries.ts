@@ -5,10 +5,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useSession } from "@/features/auth/session";
-import { api, ApiError } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { routes } from "@/lib/routes";
+import { api, ApiError } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { routes } from "@/shared/lib/routes";
 
 /** NOTICE 공고 · BENEFIT 혜택 · STARTUP_SUPPORT 창업지원 사업 · SPACE_RECRUITMENT 사업공간 모집 */
 export type FavoriteType = "NOTICE" | "BENEFIT" | "STARTUP_SUPPORT" | "SPACE_RECRUITMENT";

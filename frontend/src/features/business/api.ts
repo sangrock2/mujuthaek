@@ -5,7 +5,7 @@
 // 공간 상세: 공고면 공고 상세(GET /notices/{id}) + 판정, 모집 정책(K-Startup·기업마당)은 판정 응답(기간·지역·자격 조건)만으로
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import type { ListingVerdict } from "@/components/ui/Badge";
+import type { ListingVerdict } from "@/shared/ui/Badge";
 import {
   toBusinessApplicant,
   useBizProfileInput,
@@ -20,9 +20,9 @@ import type { DeviceConditions } from "@/features/conditions/types";
 import { formatPeriod } from "@/features/notice/format";
 import { providerName, tagLabel } from "@/features/notice/labels";
 import { useNotice } from "@/features/notice/queries";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
-import { snapshotRegions } from "@/lib/regions";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { snapshotRegions } from "@/shared/lib/regions";
 import {
   type BusinessSummary,
   type SpaceDetail,
@@ -32,8 +32,8 @@ import {
   type SupportItem,
   type SupportList,
   type SupportType,
-} from "@/mocks/business";
-import { routes } from "@/lib/routes";
+} from "@/features/business/mocks/business";
+import { routes } from "@/shared/lib/routes";
 
 type Overall = "ELIGIBLE" | "NEEDS_INPUT" | "INELIGIBLE";
 type ApiSpaceType = "STARTUP_SPACE" | "SHOP_RENTAL" | "MEETING_ROOM";
@@ -319,7 +319,11 @@ export function useApiBusinessPreview(draft: BizProfileInput, session: BizSessio
     [stored, draft, session],
   );
   const regionCodes = draft.regionCode ? [draft.regionCode] : undefined;
-  const body = { filters: { regionCodes }, applicant, size: 1 };
+  const body = {
+    filters: { regionCodes, spaceTypes: ["STARTUP_SPACE", "MEETING_ROOM"] },
+    applicant,
+    size: 1,
+  };
   const spaces = useQuery({
     queryKey: ["spaces", "preview", applicant, regionCodes] as const,
     queryFn: () => api.post<ApiSpaceSearch>(endpoints.spacesSearch, body),
@@ -353,7 +357,7 @@ export function useApiBusinessSummary(scope?: RegionScope) {
     queryKey: ["spaces", "search", applicant, regionCodes] as const,
     queryFn: () =>
       api.post<ApiSpaceSearch>(endpoints.spacesSearch, {
-        filters: { regionCodes },
+        filters: { regionCodes, spaceTypes: ["STARTUP_SPACE", "MEETING_ROOM"] },
         applicant,
         size: PAGE_SIZE,
       }),
@@ -364,7 +368,7 @@ export function useApiBusinessSummary(scope?: RegionScope) {
     const items = q.data?.items ?? [];
     return {
       spaces: {
-        count: q.data?.counts.eligible ?? 0,
+        count: items.length,
         closingSoon: items.filter((i) => i.dday !== null && i.dday <= CLOSING_SOON_DAYS).length,
       },
       support: supports.data

@@ -11,9 +11,9 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useSession } from "@/features/auth/session";
-import { API_BASE_URL } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
+import { API_BASE_URL } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
 import {
   chatKeys,
   deleteMessage,

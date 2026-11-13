@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FaqFilter, FaqItem } from "@/mocks/content";
+import type { FaqFilter, FaqItem } from "@/features/content/mocks/content";
 
 /** FAQ 분류 · 검색 · 펼침 상태 (PC/모바일 공통) */
 export function useFaqFilter(items: FaqItem[], initiallyOpen: string[]) {

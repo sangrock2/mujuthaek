@@ -1,9 +1,9 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { snapshotRegions } from "@/lib/regions";
+import { snapshotRegions } from "@/shared/lib/regions";
 import type { ConditionsSnapshot, DeviceConditions, SessionConditions } from "./types";
-import { track } from "@/lib/analytics";
+import { track } from "@/shared/lib/analytics";
 
 const DEVICE_KEY = "mujuthaek:conditions:v1";
 const SAVE_PREF_KEY = "mujuthaek:save-on-device";
@@ -63,9 +63,19 @@ type LegacyDevice = Partial<{
  * 예전 조건 정리: 이름으로 저장한 지역 → 코드, 지금은 받지 않는 칸(직장 위치)은 버려요. 찾아볼 지역은 한 곳만 (예전엔 3곳까지).
  * 예전 가구원 수 「4명 이상」은 4명인지 그보다 많은지 몰라서 비워요 (다시 고를 때까지 소득 조건은 확인 필요)
  */
-function migrateDevice(raw: DeviceConditions & LegacyDevice): DeviceConditions {
+export function migrateDevice(raw: DeviceConditions & LegacyDevice): DeviceConditions {
   const { sido, sigungu, searchRegions, ...rest } = raw;
   delete rest.workplace;
+  if (rest.selectionVersion !== 2) {
+    rest.head = "";
+    rest.marry = "";
+    rest.kids = null;
+    rest.householdSize = "";
+    rest.homelessPeriod = "";
+    rest.bankbookPeriod = "";
+    rest.selectionVersion = 2;
+    rest.needsReconfirmation = true;
+  }
   if (typeof rest.householdSize === "string" && rest.householdSize.includes("이상")) {
     rest.householdSize = "";
   }

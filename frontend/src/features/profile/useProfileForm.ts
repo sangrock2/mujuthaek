@@ -9,9 +9,10 @@ import {
   useConditions,
 } from "@/features/conditions/store";
 import type { DeviceConditions, SessionConditions } from "@/features/conditions/types";
-import { birthProblem } from "@/components/profile/BirthField";
-import { routes, safeNext } from "@/lib/routes";
-import type { ProfileFormData, RankCriteria } from "@/mocks/profile";
+import { defaultDevice } from "./defaults";
+import { birthProblem } from "@/features/profile/components/BirthField";
+import { routes, safeNext } from "@/shared/lib/routes";
+import type { RankCriteria } from "@/features/profile/mocks/profile";
 import { useConditionsPreview } from "./preview";
 import { useProfileFormData } from "./queries";
 
@@ -40,33 +41,11 @@ export function estimateRank(criteria: RankCriteria[], checked: string[]) {
   return hit?.rank ?? null;
 }
 
-/** 가구원 수 − / + 범위 (나 포함) */
-export const MIN_HOUSEHOLD = 1;
-export const MAX_HOUSEHOLD = 10;
-
 /** "3명" → 3. 모르면(빈 값) null */
 const householdCount = (v: string) => (/^\d+명$/.test(v) ? Number.parseInt(v, 10) : null);
 
 const toggle = (xs: string[], x: string) =>
   xs.includes(x) ? xs.filter((v) => v !== x) : [...xs, x];
-
-function defaultDevice(data: ProfileFormData): DeviceConditions {
-  const { options } = data;
-  return {
-    birth: "",
-    regionCode: "",
-    searchRegionCodes: [],
-    head: "head",
-    statuses: [],
-    marry: "single",
-    kids: 0,
-    householdSize: `${MIN_HOUSEHOLD}명`,
-    homelessPeriod: options.homelessPeriod[0],
-    bankbookPeriod: options.bankbookPeriod[0],
-    paymentCount: "",
-    priorities: data.defaultPriorities,
-  };
-}
 
 const emptySession: SessionConditions = {
   income: "",
@@ -157,26 +136,12 @@ export function useProfileForm() {
     marry: device.marry,
     setMarry: (marry: Marry) => patch({ marry }),
     kids: device.kids,
+    setKids: (kids: number | undefined) => patch({ kids: kids ?? null }),
+    setHousehold: (n: number | undefined) =>
+      patch({ householdSize: n === undefined ? "" : `${n}명` }),
+    needsReconfirmation: device.needsReconfirmation,
     /** 함께 사는 가족 수. 모르면 null (예전 「4명 이상」은 다시 골라야 해요) */
     household: householdCount(device.householdSize),
-    householdDown: () =>
-      setDevice((d) => {
-        const n = householdCount(d.householdSize);
-        return {
-          ...d,
-          householdSize: `${Math.max(MIN_HOUSEHOLD, (n ?? MIN_HOUSEHOLD + 1) - 1)}명`,
-        };
-      }),
-    householdUp: () =>
-      setDevice((d) => {
-        const n = householdCount(d.householdSize);
-        return {
-          ...d,
-          householdSize: `${n === null ? MIN_HOUSEHOLD : Math.min(MAX_HOUSEHOLD, n + 1)}명`,
-        };
-      }),
-    kidsDown: () => setDevice((d) => ({ ...d, kids: Math.max(0, d.kids - 1) })),
-    kidsUp: () => setDevice((d) => ({ ...d, kids: Math.min(9, d.kids + 1) })),
     prios: device.priorities,
     togglePrio: (p: string) => setDevice((d) => ({ ...d, priorities: toggle(d.priorities, p) })),
     statuses: device.statuses,
@@ -200,7 +165,7 @@ export function useProfileForm() {
     /** 확인하기: 저장하고 결과(홈, 또는 ?next로 받은 곳)로 */
     submit: () => {
       if (!canLeaveStep1()) return;
-      saveConditions(device, sess);
+      saveConditions({ ...device, selectionVersion: 2, needsReconfirmation: false }, sess);
       router.push(next);
     },
   };

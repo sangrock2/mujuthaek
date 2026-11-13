@@ -1,9 +1,9 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { businessSummary } from "@/mocks/business";
-import { MSpaceDetail } from "@/screens/business/MSpaceDetail";
-import { WebSpaceDetail } from "@/screens/business/WebSpaceDetail";
+import { Responsive } from "@/shared/layout/Responsive";
+import { businessSummary } from "@/features/business/mocks/business";
+import { MSpaceDetail } from "@/features/business/screens/MSpaceDetail";
+import { WebSpaceDetail } from "@/features/business/screens/WebSpaceDetail";
 
 type Params = { params: Promise<{ id: string }> };
 

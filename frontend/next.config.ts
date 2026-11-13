@@ -1,13 +1,18 @@
 import type { NextConfig } from "next";
+import { secureApiOrigin } from "./src/shared/lib/api/origin";
 
 /**
- * 백엔드 주소 (서버 전용, Vercel 환경별로 설정. 예: http://3.37.131.73). 있으면 브라우저는 이 사이트 주소만 부르고
- * Vercel이 백엔드로 대신 넘겨요(rewrites). 백엔드는 HTTPS·도메인이 없어도 되고, refresh 토큰 쿠키(SameSite=Lax)가 같은 사이트 쿠키가 돼요.
+ * 백엔드 주소 (서버 전용, Vercel 환경별 HTTPS origin). 있으면 브라우저는 이 사이트 주소만 부르고
+ * Vercel이 TLS로 백엔드에 넘겨요(rewrites). refresh token 쿠키는 같은 사이트 쿠키로 사용해요.
  * 없으면(로컬 개발) 넘기지 않고, 브라우저가 NEXT_PUBLIC_API_BASE_URL로 백엔드를 바로 불러요.
  */
-const API_ORIGIN = process.env.API_ORIGIN?.replace(/\/+$/, "");
+const hosted = process.env.VERCEL === "1";
+const API_ORIGIN = secureApiOrigin(process.env.API_ORIGIN, hosted);
+secureApiOrigin(process.env.NEXT_PUBLIC_API_BASE_URL, hosted);
+secureApiOrigin(process.env.TRAFFIC_INGEST_URL, hosted);
 
 const nextConfig: NextConfig = {
+  output: process.env.DEPLOY_TARGET === "standalone" ? "standalone" : undefined,
   cacheComponents: true,
   partialPrefetching: true,
   experimental: {

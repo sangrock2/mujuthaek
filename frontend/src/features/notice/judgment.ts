@@ -2,19 +2,19 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import type { ListingVerdict } from "@/components/ui/Badge";
+import type { ListingVerdict } from "@/shared/ui/Badge";
 import { availableCashWon, toApplicant } from "@/features/conditions/applicant";
 import { inputHrefOf } from "@/features/conditions/needs";
 import { useConditions } from "@/features/conditions/store";
 import { useCriteria } from "@/features/eligibility/criteria";
 import { formatWon } from "@/features/notice/format";
 import { prepareNoteLabel } from "@/features/notice/labels";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { routes } from "@/lib/routes";
-import type { NoticeMoney, StandardNotice } from "@/mocks/notice";
-import type { NoticeDoc } from "@/mocks/notice-doc";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { routes } from "@/shared/lib/routes";
+import type { NoticeMoney, StandardNotice } from "@/features/notice/mocks/notice";
+import type { NoticeDoc } from "@/features/notice/mocks/notice-doc";
 
 type ApiStatus = "MET" | "NOT_MET" | "UNKNOWN";
 type ApiOverall = "ELIGIBLE" | "NEEDS_INPUT" | "INELIGIBLE";

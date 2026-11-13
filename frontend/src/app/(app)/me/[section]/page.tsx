@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { Responsive } from "@/components/layout/Responsive";
-import { MMeSection, type MeSection } from "@/screens/me/MMeSection";
-import { WebMe } from "@/screens/me/WebMe";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MMeSection, type MeSection } from "@/features/me/screens/MMeSection";
+import { WebMe } from "@/features/me/screens/WebMe";
 
 export const metadata: Metadata = { title: "내 정보 | 무주택자들" };
 
-const sections: MeSection[] = ["favorites", "interests", "notifications", "reports"];
+const sections: MeSection[] = [
+  "favorites",
+  "preparations",
+  "interests",
+  "notifications",
+  "reports",
+];
 
 export function generateStaticParams() {
   return sections.map((section) => ({ section }));

@@ -1,0 +1,14 @@
+.env*
+.next
+node_modules
+.git
+.design
+.docs
+test-results
+playwright-report
+coverage
+*.log
+public/mock/*.pdf
+!public/mock/notice-n1.pdf
+!public/mock/notice-n4.pdf
+!public/mock/notice-n7.pdf

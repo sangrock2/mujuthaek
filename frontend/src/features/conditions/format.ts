@@ -1,6 +1,7 @@
+import { formatWon } from "@/shared/lib/money";
 import { estimateRank, marryOptions } from "@/features/profile/useProfileForm";
-import type { Regions } from "@/lib/regions";
-import type { RankCriteria } from "@/mocks/profile";
+import type { Regions } from "@/shared/lib/regions";
+import type { RankCriteria } from "@/features/profile/mocks/profile";
 import type { DeviceConditions, SessionConditions } from "./types";
 
 /** 생년월일(1997.03.15 · 19970315 · 1997-03-15)로 만 나이 */
@@ -18,16 +19,17 @@ export function ageOf(birth: string, today = new Date()) {
 
 const won = (v: string) => {
   const n = Number(v.replace(/\D/g, ""));
-  return n ? `${n.toLocaleString("ko-KR")}만 원` : null;
+  return v.trim() ? formatWon(n * 10_000) : null;
 };
 
 const marryLabel = (c: DeviceConditions) =>
-  marryOptions.find((o) => o.key === c.marry)?.label ?? "";
+  marryOptions.find((o) => o.key === c.marry)?.label ?? "미입력";
 
 /** "3명" → "3인". 모르면 "" */
 const householdLabel = (size: string) => size.replace("명", "인");
 
-const homelessChip = (period: string) => (period === "집이 있어요" ? "유주택" : `무주택 ${period}`);
+const homelessChip = (period: string) =>
+  !period ? "" : period === "집이 있어요" ? "유주택" : `무주택 ${period}`;
 
 /** 사는 곳 "서울 마포구". 안 골랐으면 "" */
 const place = (c: DeviceConditions, regions: Regions) =>
@@ -93,9 +95,12 @@ export function conditionRows(c: DeviceConditions, regions: Regions): ConditionR
     { k: "사는 곳", v: place(c, regions) || MISSING, muted: !c.regionCode },
     {
       k: "세대",
-      v: `${c.head === "head" ? "세대주" : "세대원"} · ${c.householdSize ? `${householdLabel(c.householdSize)} 가구` : `가구원 수 ${MISSING}`}`,
+      v: `${c.head === "head" ? "세대주" : c.head === "member" ? "세대원" : "세대주 여부 미입력"} · ${c.householdSize ? `${householdLabel(c.householdSize)} 가구` : `가구원 수 ${MISSING}`}`,
     },
-    { k: "결혼 · 자녀", v: `${marryLabel(c)} · ${c.kids ? `자녀 ${c.kids}명` : "자녀 없음"}` },
+    {
+      k: "결혼 · 자녀",
+      v: `${marryLabel(c)} · ${c.kids === null ? "자녀 수 미입력" : c.kids ? `자녀 ${c.kids}명` : "자녀 없음"}`,
+    },
     {
       k: "지금 상황",
       v: c.statuses.length ? c.statuses.join(" · ") : MISSING,
@@ -104,7 +109,7 @@ export function conditionRows(c: DeviceConditions, regions: Regions): ConditionR
     { k: "연소득", v: NOT_STORED, muted: true },
     { k: "자산", v: NOT_STORED, muted: true },
     { k: "순위 세부 조건", v: NOT_STORED, muted: true },
-    { k: "무주택 기간", v: c.homelessPeriod },
+    { k: "무주택 기간", v: c.homelessPeriod || MISSING },
     {
       k: "청약통장",
       v: c.paymentCount ? `${c.bankbookPeriod} · ${c.paymentCount}회` : c.bankbookPeriod,

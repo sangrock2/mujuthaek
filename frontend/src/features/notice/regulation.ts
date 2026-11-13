@@ -4,10 +4,10 @@
 // 판정 값은 바꾸지 않고 판정 화면에 함께 보여 줄 안내예요
 import { useQuery } from "@tanstack/react-query";
 import { mockQuery } from "@/features/mock-query";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { snapshotRegions } from "@/lib/regions";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { snapshotRegions } from "@/shared/lib/regions";
 
 type ApiRegulation = {
   noticeId: string;

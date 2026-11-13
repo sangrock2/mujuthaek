@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from mujuthaek_collector.config import USER_AGENT
+from mujuthaek_collector.core.public_http import PublicHTTPTransport, validate_public_url
 from mujuthaek_collector.core.robots import ALLOW_ALL, RobotRules
 from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, RobotsUnavailable
 
@@ -77,7 +78,8 @@ class PoliteClient:
             timeout=timeout,
             verify=verify,
             follow_redirects=False,  # 이동하는 주소마다 robots.txt를 확인하려고 직접 따라감
-            transport=transport,
+            transport=transport if transport is not None else PublicHTTPTransport(verify if isinstance(verify, ssl.SSLContext) else None),
+            trust_env=False,  # 환경 proxy가 목적지 DNS/IP 검사를 우회하지 못하게 해요
         )
         self._user_agent = user_agent
         self._delay = delay_seconds
@@ -140,6 +142,7 @@ class PoliteClient:
 
     # ── 내부 ──────────────────────────────────────────────────────────
     def _rules_for(self, url: str) -> RobotRules:
+        validate_public_url(url)
         parts = urllib.parse.urlsplit(url)
         host = parts.netloc
         cached = _ROBOTS_CACHE.get((self._user_agent, host))
@@ -148,7 +151,16 @@ class PoliteClient:
         self._wait(host)
         robots_url = f"{parts.scheme or 'https'}://{host}/robots.txt"
         try:
-            response = self._client.get(robots_url, follow_redirects=True)
+            for _ in range(MAX_REDIRECTS + 1):
+                validate_public_url(robots_url)
+                response = self._client.get(robots_url)
+                if not response.is_redirect:
+                    break
+                location = urllib.parse.urljoin(robots_url, response.headers.get("Location", ""))
+                response.close()
+                robots_url = location
+            else:
+                raise RobotsUnavailable("robots.txt 주소 이동이 너무 많아요")
         except httpx.HTTPError as error:
             raise RobotsUnavailable(f"robots.txt를 받지 못해 이 도메인은 요청하지 않아요: {host} ({error})") from error
         finally:
@@ -183,6 +195,7 @@ class PoliteClient:
         raise BlockedError(f"주소 이동이 너무 많아요: {url}")
 
     def _send_once(self, method, url, *, data, referer, stream, retries) -> httpx.Response:
+        validate_public_url(url)
         host = urllib.parse.urlsplit(url).netloc
         headers = {"Referer": referer} if referer else {}
         last_error: Exception | None = None

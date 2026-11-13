@@ -139,3 +139,29 @@ tasks.jacocoTestCoverageVerification {
 tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
+
+// E2E 보조 서버는 별도 소스 세트. 운영 bootJar에는 로그인·fixture 제어 코드가 들어가지 않는다.
+val e2e = sourceSets.create("e2e") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[e2e.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+configurations[e2e.runtimeOnlyConfigurationName].extendsFrom(configurations.runtimeOnly.get())
+tasks.named<ProcessResources>(e2e.processResourcesTaskName) {
+    from("../../contracts") { include("examples/**"); into("contracts") }
+}
+tasks.register<JavaExec>("e2eRun") {
+    dependsOn(e2e.classesTaskName)
+    classpath = e2e.runtimeClasspath
+    mainClass = "kr.mujuthaek.e2e.E2eApiApplication"
+}
+val verifyE2eIsolation by tasks.registering {
+    dependsOn(tasks.bootJar)
+    doLast {
+        val entries = zipTree(tasks.bootJar.get().archiveFile.get().asFile)
+        check(entries.matching { include("**/kr/mujuthaek/e2e/**", "**/application-e2e.yml") }.isEmpty) {
+            "운영 jar에 E2E 제어 코드가 포함됐어요"
+        }
+    }
+}
+tasks.check { dependsOn(verifyE2eIsolation) }

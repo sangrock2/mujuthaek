@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:ui": "node scripts/test-ui-regressions.cjs",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "preview:api": "node scripts/run-e2e.mjs --preview",
+    "preview:resume": "node scripts/run-e2e.mjs --resume-preview",
     "typecheck": "next typegen && tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -23,6 +27,7 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/turbopack": "^4",
     "@tanstack/react-query-devtools": "^5.104.4",
     "@types/node": "^20",

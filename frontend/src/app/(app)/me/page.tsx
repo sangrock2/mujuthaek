@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Responsive } from "@/components/layout/Responsive";
-import { MMe } from "@/screens/me/MMe";
-import { WebMe } from "@/screens/me/WebMe";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MMe } from "@/features/me/screens/MMe";
+import { WebMe } from "@/features/me/screens/WebMe";
 
 export const metadata: Metadata = { title: "내 정보 | 무주택자들" };
 

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Responsive } from "@/components/layout/Responsive";
-import { MProfile } from "@/screens/profile/MProfile";
-import { WebProfile } from "@/screens/profile/WebProfile";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MProfile } from "@/features/profile/screens/MProfile";
+import { WebProfile } from "@/features/profile/screens/WebProfile";
 
 export const metadata: Metadata = { title: "조건 입력 | 무주택자들" };
 

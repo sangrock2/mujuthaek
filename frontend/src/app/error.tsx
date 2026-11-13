@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MLoadErrorState, WebLoadErrorState } from "@/components/states/LoadErrorState";
-import { StateFrame } from "@/components/states/StateFrame";
+import { MLoadErrorState, WebLoadErrorState } from "@/shared/states/LoadErrorState";
+import { StateFrame } from "@/shared/states/StateFrame";
 
 const formatAt = (d: Date) =>
   `${d.getMonth() + 1}월 ${d.getDate()}일 ${String(d.getHours()).padStart(2, "0")}:${String(

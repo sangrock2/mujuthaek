@@ -3,9 +3,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { mockQuery } from "@/features/mock-query";
-import { USE_MOCKS } from "@/lib/api/config";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 import { formatWon } from "@/features/notice/format";
-import { benefitsSummary, type Benefit, type BenefitCategory } from "@/mocks/benefits";
+import {
+  benefitsSummary,
+  type Benefit,
+  type BenefitCategory,
+} from "@/features/benefits/mocks/benefits";
 import { toBenefit, useBenefitDetailQuery, useBenefitSearch } from "./api";
 
 export const benefitKeys = {

@@ -1,10 +1,10 @@
 "use client";
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { ListingVerdict } from "@/components/ui/Badge";
+import type { ListingVerdict } from "@/shared/ui/Badge";
 import { noticeTypeLabel } from "@/features/notice/labels";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
 
 /** GET /api/v1/notices/map 응답 (백엔드 NoticeMapResponse) */
 export type MapCluster = {

@@ -158,12 +158,14 @@ export function toApplicant(
   const a: Applicant = {
     birthDate: birthDateOf(device.birth),
     regionCode: judgeRegionCode(device.regionCode),
-    householdHead: device.head === "head",
+    householdHead: device.head ? device.head === "head" : undefined,
     householdSize: size,
-    targetGroups: device.statuses.map((s) => targetGroups[s]).filter(Boolean),
-    marital: marital[device.marry],
-    children: device.kids,
-    homeOwner: owner,
+    targetGroups: device.statuses.length
+      ? device.statuses.map((s) => targetGroups[s]).filter(Boolean)
+      : undefined,
+    marital: device.marry ? marital[device.marry] : undefined,
+    children: device.kids ?? undefined,
+    homeOwner: owner ? true : homelessYears[device.homelessPeriod] ? false : undefined,
     homelessYears: owner ? undefined : homelessYears[device.homelessPeriod],
     subscription:
       months || payments
@@ -172,11 +174,13 @@ export function toApplicant(
   };
   if (!session) return a;
 
-  a.welfareStatuses = session.rankChecks.map((k) => welfare[k]).filter(Boolean);
+  const welfareStatuses = session.rankChecks.map((k) => welfare[k]).filter(Boolean);
+  a.welfareStatuses = welfareStatuses.length ? welfareStatuses : undefined;
   // 2·3순위 체크 키 "r2-income" → "R2_INCOME"
-  a.rankChecks = session.rankChecks
+  const rankChecks = session.rankChecks
     .filter((k) => /^r[23]-/.test(k))
     .map((k) => k.toUpperCase().replace(/-/g, "_"));
+  a.rankChecks = rankChecks.length ? rankChecks : undefined;
   if (!criteria) return a;
 
   const income = manWon(session.income);

@@ -7,7 +7,7 @@ COPY contracts contracts
 COPY services/extraction/data/legal-dong-codes services/extraction/data/legal-dong-codes
 COPY services/api services/api
 WORKDIR /src/services/api
-RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon bootJar -x test \
+RUN --mount=type=cache,target=/root/.gradle bash ./gradlew --no-daemon bootJar -x test \
  && find build/libs -name '*.jar' ! -name '*-plain.jar' -exec cp {} /src/app.jar \;
 
 FROM eclipse-temurin:25-jre

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { isPushSupported, subscribePush, unsubscribePush } from "@/lib/push";
+import { isPushSupported, subscribePush, unsubscribePush } from "@/shared/lib/push";
 
 /**
  * 이 브라우저의 푸시 알림 구독 상태.

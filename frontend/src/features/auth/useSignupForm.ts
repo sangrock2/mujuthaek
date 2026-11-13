@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { contactEmailError, isEmail, useSaveContactEmail } from "@/features/auth/contactEmail";
-import { routes } from "@/lib/routes";
+import { routes } from "@/shared/lib/routes";
 
 export const signupTerms = [
   { key: "age", required: true, label: "만 14세 이상이에요" },
