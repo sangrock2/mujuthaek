@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MLogin } from "@/screens/auth/MLogin";
-import { WebLogin } from "@/screens/auth/WebLogin";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MLogin } from "@/features/auth/screens/MLogin";
+import { WebLogin } from "@/features/auth/screens/WebLogin";
 
 export const metadata: Metadata = { title: "로그인 | 무주택자들" };
 

@@ -3,9 +3,9 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { formatWon } from "@/features/notice/format";
 import type { NoticeJudgment } from "@/features/notice/judgment";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
-import type { NoticeSite, NoticeUnit } from "@/mocks/notice";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type { NoticeSite, NoticeUnit } from "@/features/notice/mocks/notice";
 
 /** GET /api/v1/notices/{id}/units 한 줄 (백엔드 NoticeUnitResponse) */
 type ApiUnit = {
@@ -129,5 +129,7 @@ export function scrollToVisible(id: string) {
   const target = Array.from(document.querySelectorAll<HTMLElement>(`#${id}`)).find(
     (el) => el.offsetParent !== null,
   );
-  target?.scrollIntoView({ behavior: "smooth" });
+  target?.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+  });
 }

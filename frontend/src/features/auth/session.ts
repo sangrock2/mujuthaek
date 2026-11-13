@@ -5,10 +5,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
-import { api, ApiError, authToken } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { routes } from "@/lib/routes";
+import { api, ApiError, authToken } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { routes } from "@/shared/lib/routes";
 
 /** GET /api/users/me (백엔드 MeResponse) */
 export type Session = {
@@ -62,6 +62,8 @@ export function useLogout() {
       await api.post(endpoints.authLogout).catch(() => undefined);
     }
     authToken.set(null);
+    await client.cancelQueries();
+    client.clear();
     client.setQueryData(sessionKey, null);
   }, [client]);
 }

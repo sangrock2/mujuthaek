@@ -1,16 +1,9 @@
 name: Web
 
-# 프론트(frontend/): 가져오기 전 프론트 저장소 CI와 같은 검사(format · lint · typecheck · build)
+# 프론트(frontend/): format · lint · 입력 회귀 · typecheck · build
 on:
-  pull_request:
-    paths:
-      - "frontend/**"
-      - ".github/workflows/web.yml"
-  push:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/web.yml"
+  workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: web-${{ github.ref }}
@@ -39,5 +32,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
+      - run: pnpm test:ui
       - run: pnpm typecheck
       - run: pnpm build

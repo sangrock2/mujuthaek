@@ -1,0 +1,164 @@
+name: mujuthaek-personal
+x-log: &log
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+x-app: &app
+  restart: unless-stopped
+  logging: *log
+  security_opt: [no-new-privileges:true]
+  depends_on:
+    postgres: {condition: service_healthy}
+    rabbitmq: {condition: service_healthy}
+x-aws: &aws
+  AWS_REGION: ap-northeast-2
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?runtime S3 key required}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?runtime S3 secret required}
+  S3_ENDPOINT: ""
+  S3_BUCKET: ${S3_BUCKET:?private bucket required}
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    mem_limit: 768m
+    logging: *log
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      API_DB_PASSWORD: ${API_DB_PASSWORD:?required}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?required}
+      COLLECTOR_DB_PASSWORD: ${COLLECTOR_DB_PASSWORD:?required}
+      EXTRACTION_DB_PASSWORD: ${EXTRACTION_DB_PASSWORD:?required}
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=40, -c, work_mem=2MB]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db-init.sh:/docker-entrypoint-initdb.d/01-personal.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    hostname: rabbitmq
+    restart: unless-stopped
+    mem_limit: 320m
+    logging: *log
+    environment:
+      RABBITMQ_DEFAULT_USER: mujuthaek
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?required}
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 30s
+      timeout: 30s
+      start_period: 60s
+      retries: 10
+  api:
+    <<: *app
+    image: mujuthaek-personal-api:${API_RELEASE:-${RELEASE:?required}}
+    build: {context: ../../.., dockerfile: services/api/Dockerfile}
+    mem_limit: 1024m
+    environment:
+      <<: *aws
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_SERVLET_SESSION_COOKIE_SECURE: "true"
+      SERVER_SERVLET_SESSION_COOKIE_HTTP_ONLY: "true"
+      SERVER_SERVLET_SESSION_COOKIE_SAME_SITE: lax
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError
+      API_DB_URL: jdbc:postgresql://postgres:5432/api
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "8"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: mujuthaek
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      FRONTEND_URL: ${FRONTEND_URL:-${PUBLIC_ORIGIN:?required}}
+      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-${PUBLIC_ORIGIN}}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      NOTIFICATION_SERVER_URL: http://notification:8081
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:?required}
+      COLLECTOR_ADMIN_URL: http://collector:8093
+      COLLECTOR_ADMIN_TOKEN: ${COLLECTOR_ADMIN_TOKEN:?required}
+      EXTRACTION_REVIEW_URL: http://extraction:8092
+      EXTRACTION_REVIEW_TOKEN: ${EXTRACTION_REVIEW_TOKEN:?required}
+      TRAFFIC_INGEST_TOKEN: ${TRAFFIC_INGEST_TOKEN:?required}
+      API_DOCS_ENABLED: "false"
+      JUDGING_CACHE_SIZE: "2000"
+      JUDGING_BENEFIT_CACHE_SIZE: "2000"
+      JUDGING_PREWARM: "false"
+    ports: ["127.0.0.1:8080:8080"]
+  notification:
+    <<: *app
+    image: mujuthaek-personal-notification:${NOTIFICATION_RELEASE:-${RELEASE}}
+    build: {context: ../../.., dockerfile: services/notification/Dockerfile}
+    mem_limit: 384m
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError
+      NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/notification
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: mujuthaek
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN}
+      NOTIFICATION_WEB_BASE_URL: ${FRONTEND_URL:-${PUBLIC_ORIGIN}}
+      NOTIFICATION_MAIL_PROVIDER: log
+      NOTIFICATION_PUSH_PROVIDER: log
+  collector:
+    <<: *app
+    profiles: [workers]
+    image: mujuthaek-personal-collector:${RELEASE}
+    build: {context: ../../.., dockerfile: services/collector/Dockerfile}
+    mem_limit: 384m
+    environment:
+      <<: *aws
+      SERVICE_NAME: collector
+      DB_URL: postgresql://collector_app:${COLLECTOR_DB_PASSWORD}@postgres:5432/collector
+      RABBITMQ_URL: amqp://mujuthaek:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      COLLECTOR_ADMIN_TOKEN: ${COLLECTOR_ADMIN_TOKEN}
+      COLLECTOR_PARALLEL_SOURCES: "1"
+      COLLECTOR_INTAKE_HOUSING_LH: "1"
+      COLLECTOR_INTAKE_HOUSING_OTHER: "1"
+      COLLECTOR_INTAKE_SPACE: "1"
+      COLLECTOR_INTAKE_POLICY: "1"
+  extraction:
+    <<: *app
+    profiles: [workers]
+    image: mujuthaek-personal-extraction:${RELEASE}
+    build: {context: ../../.., dockerfile: services/extraction/Dockerfile}
+    mem_limit: 1536m
+    environment:
+      <<: *aws
+      SERVICE_NAME: extraction
+      DB_URL: postgresql://extraction_app:${EXTRACTION_DB_PASSWORD}@postgres:5432/extraction
+      RABBITMQ_URL: amqp://mujuthaek:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      EXTRACTION_REVIEW_TOKEN: ${EXTRACTION_REVIEW_TOKEN}
+      EXTRACTION_PARALLEL_CALLS: "1"
+      EXTRACTION_DAILY_BUDGET_USD: "0"
+      EXTRACTION_MONTHLY_BUDGET_USD: "0"
+  frontend:
+    restart: unless-stopped
+    image: mujuthaek-personal-frontend:${RELEASE}
+    build: {context: ../../../../frontend}
+    mem_limit: 384m
+    logging: *log
+    security_opt: [no-new-privileges:true]
+    environment:
+      NODE_OPTIONS: --max-old-space-size=256
+      TRAFFIC_INGEST_TOKEN: ${TRAFFIC_INGEST_TOKEN}
+  nginx:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    mem_limit: 96m
+    logging: *log
+    ports: ["80:80", "443:443"]
+    depends_on: [api, frontend]
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/acme.conf:/etc/nginx/conf.d/acme.conf:ro
+      - ./acme-webroot:/var/www/certbot:ro
+      - ${API_TLS_CERT_DIR:?required}:/etc/nginx/tls:ro
+volumes:
+  postgres-data:
+  rabbitmq-data:

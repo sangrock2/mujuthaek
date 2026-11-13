@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { MInstall } from "@/screens/install/MInstall";
+import { MInstall } from "@/features/install/screens/MInstall";
 
 export const metadata: Metadata = { title: "홈 화면에 추가 | 무주택자들" };
 

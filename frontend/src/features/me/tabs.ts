@@ -2,11 +2,18 @@ import type { GeneralReportKind } from "@/features/me/api";
 
 /** 내 정보 탭 (웹 ?tab= · 모바일 /me/{tab}) */
 export type MeTab =
-  "conditions" | "favorites" | "interests" | "notifications" | "privacy" | "reports";
+  | "conditions"
+  | "favorites"
+  | "preparations"
+  | "interests"
+  | "notifications"
+  | "privacy"
+  | "reports";
 
 export const meTabs: MeTab[] = [
   "conditions",
   "favorites",
+  "preparations",
   "interests",
   "notifications",
   "privacy",

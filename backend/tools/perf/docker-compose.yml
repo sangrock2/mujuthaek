@@ -1,0 +1,45 @@
+# 노트북에서만 띄우는 측정 도구. 서버 지표는 tunnel.sh가 연 SSH 터널(127.0.0.1:18080 …)로 읽어요.
+#   docker compose -f tools/perf/docker-compose.yml up -d   → Grafana http://localhost:3300 , Prometheus http://localhost:9090
+# Prometheus 데이터(perf-prometheus-data)는 지우지 않아요: 개선 전후 구간을 나중에도 Grafana에서 나란히 다시 볼 수 있게.
+name: mujuthaek-perf
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=400d
+      - --web.enable-remote-write-receiver   # k6 결과를 받아요 (-o experimental-prometheus-rw)
+      - --web.enable-admin-api               # run.sh가 테스트마다 스냅숏을 떠요
+    ports: ["127.0.0.1:9090:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    depends_on: [prometheus, renderer]
+    ports: ["127.0.0.1:3300:3000"]
+    environment:
+      # 노트북 안에서만 쓰니 로그인 없이 열어요 (run.sh가 그래프를 이미지로 받아요)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      GF_DATE_FORMATS_DEFAULT_TIMEZONE: Asia/Seoul
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+  renderer:
+    image: grafana/grafana-image-renderer:3.11.6
+    environment:
+      BROWSER_TZ: Asia/Seoul
+
+volumes:
+  prometheus-data:
+    name: perf-prometheus-data
+  grafana-data:

@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useAdminMe } from "@/components/admin/AdminGuard";
+import { useAdminMe } from "@/features/admin/components/AdminGuard";
 import { useCallback } from "react";
 import { mockQuery } from "@/features/mock-query";
 import {
@@ -18,7 +18,7 @@ import {
   type ReportItem,
   type ReportStatus,
   type ReviewReason,
-} from "@/mocks/admin";
+} from "@/features/admin/mocks/admin";
 import {
   EMPTY_REVIEW,
   liveCounts,
@@ -45,13 +45,26 @@ import {
   groupChatReports,
   liveChatReports,
 } from "./api";
-import { USE_MOCKS } from "@/lib/api/config";
-import { botTrafficMock, noticeTitlesMock, realtimeMock, trafficMock } from "@/mocks/admin-traffic";
-import { chatReportTitlesMock, chatReportsMock, type ChatReviewStatus } from "@/mocks/admin-chat";
-import { adminChangesMock, adminUsersMock, type AdminUserFilter } from "@/mocks/admin-users";
-import { activityMock } from "@/mocks/admin-activity";
-import { notificationStatsMock } from "@/mocks/admin-notifications";
-import { duplicatesMock, type DuplicateStatus } from "@/mocks/admin-duplicates";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import {
+  botTrafficMock,
+  noticeTitlesMock,
+  realtimeMock,
+  trafficMock,
+} from "@/features/admin/mocks/admin-traffic";
+import {
+  chatReportTitlesMock,
+  chatReportsMock,
+  type ChatReviewStatus,
+} from "@/features/admin/mocks/admin-chat";
+import {
+  adminChangesMock,
+  adminUsersMock,
+  type AdminUserFilter,
+} from "@/features/admin/mocks/admin-users";
+import { activityMock } from "@/features/admin/mocks/admin-activity";
+import { notificationStatsMock } from "@/features/admin/mocks/admin-notifications";
+import { duplicatesMock, type DuplicateStatus } from "@/features/admin/mocks/admin-duplicates";
 
 export const adminKeys = {
   counts: ["admin", "counts"] as const,

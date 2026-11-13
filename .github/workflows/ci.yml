@@ -1,17 +1,10 @@
 name: CI
 
-# 개인 저장소: 추출 서비스(Python)만 검사해요. api·notification을 다시 고치게 되면 그때 잡을 되살려요.
+# Python 공통·추출·수집과 Java API·알림 서버를 검사해요.
 # 프론트(frontend/)는 web.yml이 따로 검사해요.
 on:
-  pull_request:
-    paths:
-      - "backend/**"
-      - ".github/workflows/ci.yml"
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/ci.yml"
+  workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,6 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  java:
+    name: ${{ matrix.service }} (check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, notification]
+    defaults:
+      run:
+        working-directory: backend/services/${{ matrix.service }}
+    env:
+      NOTIFICATION_MAIL_PROVIDER: log
+      NOTIFICATION_PUSH_PROVIDER: log
+    steps:
+      # API는 contracts와 extraction의 법정동코드 원본도 빌드에 사용해요.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      # Testcontainers가 PostGIS·RabbitMQ를 직접 띄워요. Docker 없이는 건너뛰지 않아요.
+      - name: Docker 확인
+        run: docker info
+      # gradlew의 저장소 실행 비트에 의존하지 않아요.
+      - name: 포맷·테스트·커버리지 검사
+        run: bash ./gradlew --no-daemon --stacktrace check
+      - name: 검사 보고서 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-${{ matrix.service }}-reports
+          path: |
+            backend/services/${{ matrix.service }}/build/reports/
+            backend/services/${{ matrix.service }}/build/test-results/
+          if-no-files-found: warn
+          retention-days: 7
+
   python:
     name: python (ruff · pytest)
     runs-on: ubuntu-latest
@@ -41,3 +75,16 @@ jobs:
       - name: extraction 테스트
         working-directory: backend/services/extraction
         run: uv run --frozen pytest -q
+      - name: collector 보안·오프라인 회귀 검사
+        working-directory: backend/services/collector
+        run: |
+          uv run --frozen ruff check src/mujuthaek_collector/core/public_http.py src/mujuthaek_collector/core/http_client.py tests/core/test_public_http.py
+          uv run --frozen ruff format --check src/mujuthaek_collector/core/public_http.py src/mujuthaek_collector/core/http_client.py tests/core/test_public_http.py
+          uv run --frozen pytest -q
+      - name: 배포·롤백 안전장치 검사
+        run: python3 -m unittest discover -s infra/deploy/personal/tests -v
+      - name: nginx HTTPS 통합 검사
+        run: python3 infra/deploy/tests/verify_https.py
+      - name: 인증서 자동화 오프라인 검사
+        working-directory: backend/services/collector
+        run: uv run --frozen pytest -q ../../infra/deploy/tests/test_certificates.py

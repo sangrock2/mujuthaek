@@ -1,6 +1,6 @@
 import { pdfSections, sectionTitles } from "@/features/notice/format";
 import type { usePdfViewer } from "@/features/notice/usePdfViewer";
-import type { NoticeDoc, NoticeSectionKey, PdfAnchor } from "@/mocks/notice-doc";
+import type { NoticeDoc, NoticeSectionKey, PdfAnchor } from "@/features/notice/mocks/notice-doc";
 
 /** 근거를 앱 안에서 열 곳: PDF 주소·이름, 쪽, 강조할 문장 */
 export type OriginalPlace = {

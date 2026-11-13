@@ -2,12 +2,12 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { useState } from "react";
-import { Analytics } from "@/components/analytics/Analytics";
-import { DemoNotice } from "@/components/layout/DemoNotice";
-import { OfflineBanner } from "@/components/pwa/OfflineBanner";
-import { ServiceHoursBanner } from "@/components/pwa/ServiceHoursBanner";
-import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
+import { Suspense, useState } from "react";
+import { Analytics } from "@/shared/analytics/Analytics";
+import { DemoNotice } from "@/shared/layout/DemoNotice";
+import { OfflineBanner } from "@/shared/pwa/OfflineBanner";
+import { ServiceHoursBanner } from "@/shared/pwa/ServiceHoursBanner";
+import { ServiceWorkerRegister } from "@/shared/pwa/ServiceWorkerRegister";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -24,7 +24,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <ServiceWorkerRegister />
       <OfflineBanner />
       <ServiceHoursBanner />
-      <Analytics />
+      <Suspense fallback={null}>
+        <Analytics />
+      </Suspense>
       <DemoNotice />
       {children}
       <ReactQueryDevtools initialIsOpen={false} />

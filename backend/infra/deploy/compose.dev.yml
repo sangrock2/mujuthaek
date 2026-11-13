@@ -31,10 +31,10 @@ services:
       # 컨테이너 상한(200MB)보다 낮게: 180MB를 넘으면 발행을 잠시 막아요
       RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit vm_memory_high_watermark {absolute,188743680}"
     ports:
-      - "127.0.0.1:15672:15672"   # 관리 화면은 서버 안에서만
+      - "127.0.0.1:15672:15672" # 관리 화면은 서버 안에서만
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
-      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # 관리 화면 + shovel
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro # 관리 화면 + shovel
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -56,13 +56,13 @@ services:
     image: ${IMAGE_PREFIX:-ghcr.io/prgrms-be-devcourse/nbe11-13-final-team02}/api:${API_TAG:?versions.env에 API_TAG가 없어요}
     mem_limit: 600m
     environment:
-      MUJUTHAEK_ENV: dev               # 슬랙 알림 머리 [dev api]
+      MUJUTHAEK_ENV: dev # 슬랙 알림 머리 [dev api]
       NOTIFICATION_SERVER_URL: http://notification:8081
       # 같은 compose 안의 서비스 주소. 없으면 api 컨테이너 안의 localhost로 불러 연결이 거부돼요(관리자 검수·수집 현황 503)
       EXTRACTION_REVIEW_URL: http://extraction:8092
       # 개발 서버에는 수집기가 없어서 수집 현황 화면은 503이 정상이에요
-      OPS_ALERT_IGNORE_CODES: NOTICE_COLLECTOR_UNAVAILABLE  # 그 503은 슬랙으로 알리지 않아요
-      API_DOCS_ENABLED: "true"         # API 문서(스웨거) /swagger-ui.html. 운영은 꺼져 있어요
+      OPS_ALERT_IGNORE_CODES: NOTICE_COLLECTOR_UNAVAILABLE # 그 503은 슬랙으로 알리지 않아요
+      API_DOCS_ENABLED: "true" # API 문서(스웨거) /swagger-ui.html. 운영은 꺼져 있어요
     ports: ["127.0.0.1:8080:8080"]
 
   notification:
@@ -86,9 +86,12 @@ services:
     restart: unless-stopped
     logging: *logging
     depends_on: [api]
-    ports: ["0.0.0.0:80:80"]
+    ports: ["0.0.0.0:80:80", "0.0.0.0:443:443"]
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/acme.conf:/etc/nginx/conf.d/acme.conf:ro
+      - ./acme-webroot:/var/www/certbot:ro
+      - ${API_TLS_CERT_DIR:?API_TLS_CERT_DIR is required}:/etc/nginx/tls:ro
 
 volumes:
   rabbitmq-data:

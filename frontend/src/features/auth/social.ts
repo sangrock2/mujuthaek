@@ -1,6 +1,6 @@
-import { API_BASE_URL } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { routes } from "@/lib/routes";
+import { API_BASE_URL } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { routes } from "@/shared/lib/routes";
 
 export type SocialProvider = "kakao" | "naver" | "google";
 

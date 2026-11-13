@@ -1,14 +1,17 @@
-import type { Metadata } from "next";
+import { detailMetadata } from "@/shared/lib/detail-metadata";
 import { Suspense } from "react";
-import { Responsive } from "@/components/layout/Responsive";
-import { USE_MOCKS } from "@/lib/api/config";
-import { notices } from "@/mocks/notice";
-import { MDetail } from "@/screens/notice/MDetail";
-import { MDetailUnits } from "@/screens/notice/MDetailUnits";
-import { WebDetail } from "@/screens/notice/WebDetail";
-import { WebDetailUnits } from "@/screens/notice/WebDetailUnits";
+import { Responsive } from "@/shared/layout/Responsive";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { notices } from "@/features/notice/mocks/notice";
+import { MDetail } from "@/features/notice/screens/MDetail";
+import { MDetailUnits } from "@/features/notice/screens/MDetailUnits";
+import { WebDetail } from "@/features/notice/screens/WebDetail";
+import { WebDetailUnits } from "@/features/notice/screens/WebDetailUnits";
 
-export const metadata: Metadata = { title: "공고 상세 | 무주택자들" };
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return detailMetadata("notices", id);
+}
 
 export function generateStaticParams() {
   return notices.map((n) => ({ id: n.id }));

@@ -7,17 +7,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { liveAlerts, markAlertRead, markAllAlertsRead } from "@/features/alerts/api";
 import { useSession } from "@/features/auth/session";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
 import { mockQuery } from "@/features/mock-query";
-import { USE_MOCKS } from "@/lib/api/config";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 import {
   alertsData,
   type AlertGroup,
   type AlertItem,
   type AlertsData,
   type AlertType,
-} from "@/mocks/alerts";
+} from "@/features/alerts/mocks/alerts";
 
 export const alertsKeys = {
   all: ["alerts"] as const,

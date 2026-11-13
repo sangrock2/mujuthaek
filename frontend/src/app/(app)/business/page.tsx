@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MBusiness } from "@/screens/business/MBusiness";
-import { WebBusiness } from "@/screens/business/WebBusiness";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MBusiness } from "@/features/business/screens/MBusiness";
+import { WebBusiness } from "@/features/business/screens/WebBusiness";
 
 export const metadata: Metadata = { title: "사업공간 | 무주택자들" };
 

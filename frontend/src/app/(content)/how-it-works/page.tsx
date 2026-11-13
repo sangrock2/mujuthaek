@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MHowItWorks } from "@/screens/content/MHowItWorks";
-import { WebHowItWorks } from "@/screens/content/WebHowItWorks";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MHowItWorks } from "@/features/content/screens/MHowItWorks";
+import { WebHowItWorks } from "@/features/content/screens/WebHowItWorks";
 
 export const metadata: Metadata = {
   title: "무주택자들은 어떻게 만들었나요 | 무주택자들",

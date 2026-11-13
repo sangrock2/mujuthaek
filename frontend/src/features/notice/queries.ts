@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { mockQuery } from "@/features/mock-query";
 import { toNotice, type ApiNoticeDetail } from "@/features/notice/detail";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { notices, type Notice } from "@/mocks/notice";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { notices, type Notice } from "@/features/notice/mocks/notice";
 
 export const noticeKeys = {
   detail: (id: string) => ["notice", "detail", id] as const,

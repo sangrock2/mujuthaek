@@ -3,7 +3,7 @@
 LH 공고를 **팀 공통 파이프라인**(`pipeline.py`) 위에서 수집해요. 원본 저장(collector DB·S3), 버전 비교, 새벽 정정 확인, `raw.notice.collected` 이벤트 발행은 공통 파이프라인이 하고, 이 폴더는 **LH 공고를 어떻게 읽나**만 맡아요.
 
 ```bash
-# 저장소 루트에서 make infra && make migrate-collector 후 (services/collector)
+# backend/에서 make infra && make migrate-collector 후 (backend/services/collector에서 실행)
 LH_API_KEY=공공데이터포털_인증키 uv run python -m mujuthaek_collector run-once lh
 LH_API_KEY=… uv run python -m mujuthaek_collector run-once lh --recheck   # 마감 전 공고 다시 열어 정정 확인
 uv run pytest tests/sources/lh                                         # LH 테스트 (실제 사이트에 요청하지 않아요)

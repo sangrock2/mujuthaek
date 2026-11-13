@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useConditions } from "@/features/conditions/store";
 import { useRegions } from "@/features/regions/queries";
-import type { Regions } from "@/lib/regions";
-import type { HomeListing } from "@/mocks/homes";
+import type { Regions } from "@/shared/lib/regions";
+import type { HomeListing } from "@/features/homes/mocks/homes";
 
 const NATIONWIDE = "nationwide";
 

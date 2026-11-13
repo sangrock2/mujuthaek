@@ -1,7 +1,13 @@
 // 알림함 API (백엔드 notification 모듈)를 화면 모양(AlertsData)으로 바꿔요
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
-import type { AlertGroup, AlertIcon, AlertItem, AlertsData, AlertType } from "@/mocks/alerts";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type {
+  AlertGroup,
+  AlertIcon,
+  AlertItem,
+  AlertsData,
+  AlertType,
+} from "@/features/alerts/mocks/alerts";
 
 /** GET /api/users/me/notifications 한 줄 */
 type InboxItem = {

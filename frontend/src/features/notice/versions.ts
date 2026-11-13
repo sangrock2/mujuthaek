@@ -4,9 +4,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { mockQuery } from "@/features/mock-query";
 import { formatDay } from "@/features/notice/format";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
 
 type ApiVersion = {
   version: number;

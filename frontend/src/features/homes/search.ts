@@ -5,16 +5,16 @@ import { useMemo } from "react";
 import { toApplicant, type Applicant } from "@/features/conditions/applicant";
 import { useConditions } from "@/features/conditions/store";
 import { useCriteria } from "@/features/eligibility/criteria";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
-import type { ListingVerdict } from "@/components/ui/Badge";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type { ListingVerdict } from "@/shared/ui/Badge";
 import {
   noticeTypeLabel,
   prepareNoteLabel,
   providerName,
   tagLabel,
 } from "@/features/notice/labels";
-import type { HomeListing } from "@/mocks/homes";
+import type { HomeListing } from "@/features/homes/mocks/homes";
 
 /** POST /api/v1/notices/search 응답 (백엔드 NoticeSearchResponse) */
 export type SearchItem = {

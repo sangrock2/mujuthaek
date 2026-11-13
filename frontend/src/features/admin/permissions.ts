@@ -1,6 +1,6 @@
 // 관리자 권한. 일반 관리자는 받은 권한만큼만 관리 화면을 써요. 최상위 관리자는 모두 가진 것으로 봐요.
 // 실제 확인은 서버가 요청마다 해요(백엔드 SecurityConfig·AdminUserService). 화면은 메뉴·버튼을 고르는 데만 써요.
-import { routes } from "@/lib/routes";
+import { routes } from "@/shared/lib/routes";
 
 export type AdminPermission =
   | "NOTICE_REVIEW"

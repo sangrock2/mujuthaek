@@ -1,6 +1,6 @@
 // 공고 채팅 (백엔드 chat 모듈). 방 = 공고 ID라 방을 따로 만들지 않아요. 읽기는 로그인 없이, 쓰기는 로그인한 회원만
-import { api, ApiError } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
+import { api, ApiError } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
 
 export type ChatMessageStatus = "VISIBLE" | "DELETED" | "HIDDEN_REPORTED" | "HIDDEN_ADMIN";
 export type ChatReportReason = "AD" | "ABUSE" | "PRIVACY" | "FALSE_INFO" | "ETC";

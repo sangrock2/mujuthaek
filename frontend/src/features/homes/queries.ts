@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { mockQuery } from "@/features/mock-query";
-import { homesSummary } from "@/mocks/homes";
+import { homesSummary } from "@/features/homes/mocks/homes";
 
 export const homesKeys = {
   summary: ["homes", "summary"] as const,

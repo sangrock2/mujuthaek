@@ -1,4 +1,4 @@
-import { routes } from "@/lib/routes";
+import { routes } from "@/shared/lib/routes";
 
 /**
  * 조건 입력(/profile)에서 받는 판정 입력. 주거·혜택은 판정 입력 경로(applicant.*)로, 사업공간·사업 지원은 판정 엔진 입력 칸 이름으로 와요.

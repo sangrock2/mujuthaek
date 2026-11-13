@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MSignup } from "@/screens/auth/MSignup";
-import { WebSignup } from "@/screens/auth/WebSignup";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MSignup } from "@/features/auth/screens/MSignup";
+import { WebSignup } from "@/features/auth/screens/WebSignup";
 
 export const metadata: Metadata = { title: "가입 마무리 | 무주택자들", robots: { index: false } };
 

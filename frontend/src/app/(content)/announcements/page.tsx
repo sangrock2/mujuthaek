@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MNotices } from "@/screens/content/MNotices";
-import { WebNotices } from "@/screens/content/WebNotices";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MNotices } from "@/features/content/screens/MNotices";
+import { WebNotices } from "@/features/content/screens/WebNotices";
 
 export const metadata: Metadata = { title: "공지사항 | 무주택자들" };
 
