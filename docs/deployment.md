@@ -2,7 +2,7 @@
 
 ## 브랜치
 
-작업 브랜치는 dev에서 만들고 PR의 대상은 dev로 지정한다. 운영 반영은 같은 저장소의 dev → main PR로만 진행한다. main과 dev에 직접 push·force push·삭제를 금지하고 PR direction, CI ready 검사를 필수로 둔다. 병합 방식(merge/squash/rebase)은 기존 설정을 유지한다.
+작업 브랜치는 dev에서 만들고 PR의 대상은 dev로 지정한다. 운영 반영은 같은 저장소의 dev → main PR로만 진행한다. main과 dev에 직접 push·force push·삭제를 금지하고 PR direction, CI ready 검사를 필수로 둔다. 모든 PR은 Merge commit으로 통일한다. 브랜치별로 방식을 나누지 않으며, 장기 dev/main 브랜치의 공통 이력을 보존한다.
 
 PR Direction은 pull_request_target 이벤트에서 PR 메타데이터만 검사한다. PR 코드를 checkout하거나 실행하지 않는다. Checks는 PR 코드의 포맷·테스트·계약·실제 API E2E를 실행한다. main 병합 후 Production이 다시 검증하고 배포한다. main에 직접 push하거나 다른 브랜치에서 병합한 커밋은 Production의 별도 검사에서도 거절한다.
 
