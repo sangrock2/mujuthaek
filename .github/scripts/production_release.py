@@ -59,11 +59,13 @@ def main():
             with open(summary, 'a', encoding='utf-8') as output:
                 output.write(f"Release: `{result['release']}`\n\nPrevious: `{result.get('previous')}`\n\nFrontend: https://mujuthaek.vercel.app\n")
     except Exception:
-        run('frontend_release.py', 'restore-before')
-        # A migration/schema mismatch is deliberately refused by the host.
-        previous = json.loads(Path('deployment-result.json').read_text()).get('previous')
-        if previous:
-            run('backend_release.py', 'rollback', previous, '--request', request + '-recovery')
+        try:
+            run('frontend_release.py', 'restore-before')
+        finally:
+            # Attempt both recoveries even if one provider is unavailable.
+            previous = json.loads(Path('deployment-result.json').read_text()).get('previous')
+            if previous:
+                run('backend_release.py', 'rollback', previous, '--request', request + '-recovery')
         raise
 
 

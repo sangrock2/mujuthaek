@@ -22,7 +22,8 @@ result = aws.call('iam', 'create-role', '--role-name', role, '--assume-role-poli
                   '--tags', 'Key=Project,Value=mujuthaek-personal')
 bucket = 'arn:aws:s3:::mujuthaek-personal-659355919826-raw'
 policy = {'Version': '2012-10-17', 'Statement': [
-    {'Effect': 'Allow', 'Action': ['s3:GetObject', 's3:PutObject'], 'Resource': bucket + '/deployments/*'},
+    {'Effect': 'Allow', 'Action': 's3:GetObject', 'Resource': bucket + '/deployments/*'},
+    {'Effect': 'Allow', 'Action': 's3:PutObject', 'Resource': [bucket + '/deployments/releases/*', bucket + '/deployments/desired.json']},
     {'Effect': 'Allow', 'Action': 's3:ListBucket', 'Resource': bucket,
      'Condition': {'StringLike': {'s3:prefix': ['deployments/*']}}},
 ]}
