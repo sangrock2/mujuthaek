@@ -1,7 +1,7 @@
 "use client";
 
-import { USE_MOCKS } from "@/lib/api/config";
-import type { HomeListing } from "@/mocks/homes";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import type { HomeListing } from "@/features/homes/mocks/homes";
 import { sortParam, tenureParam, type MoveInMode, type SortOption } from "./filters";
 import { useHomes } from "./queries";
 import type { RegionFilter } from "./region";

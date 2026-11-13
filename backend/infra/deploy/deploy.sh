@@ -87,6 +87,10 @@ for s in "${SERVICES[@]}"; do
   [ -n "$(get_tag "$s")" ] || set_tag "$s" "$VERSION"
 done
 
+# 서비스 교체 전에 인증서·TLS 설정을 검사해요. 첫 배포에도 API DNS가 없어 검사하지 못하는 일을 피하려고
+# 검사 전용 일회성 컨테이너 안에서만 api 이름을 loopback에 매핑해요. 연결 요청은 하지 않아요.
+compose run --rm --no-deps --entrypoint sh nginx -ec 'printf "\n127.0.0.1 api\n" >> /etc/hosts; exec nginx -t'
+
 # compose 파일의 image와 같은 규칙 (IMAGE_PREFIX를 versions.env에 두면 바꿀 수 있어요)
 image_of() {
   local prefix line
@@ -180,6 +184,8 @@ for s in "${TARGETS[@]}"; do
   echo "[$s] 정상"
 done
 
+# 인증서 누락·키 불일치·nginx 설정 오류 시 평문으로 대신 열지 않고 배포를 중단해요.
+compose run --rm --no-deps nginx nginx -t || rollback
 compose up -d nginx
 docker image prune -f > /dev/null
 echo "== 끝: $(tr '\n' ' ' < versions.env)"

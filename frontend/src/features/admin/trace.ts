@@ -1,7 +1,13 @@
 // 관리자 「추출 과정 보기」: GET /api/admin/reviews/{jobId}/trace (추출 서비스 trace_view.py 요약을 api가 그대로 넘겨요)
 import { useQuery } from "@tanstack/react-query";
-import { API_BASE_URL, ApiError, api, authToken, refreshAccessToken } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
+import {
+  API_BASE_URL,
+  ApiError,
+  api,
+  authToken,
+  refreshAccessToken,
+} from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 
 export type TraceToolCall = { name: string | null; args: string | null };
 export type TraceToolResult = { name: string | null; result: string | null; failed: boolean };

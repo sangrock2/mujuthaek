@@ -1,6 +1,6 @@
-import { Responsive } from "@/components/layout/Responsive";
-import { MMain } from "@/screens/main/MMain";
-import { WebMain } from "@/screens/main/WebMain";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MMain } from "@/features/main/screens/MMain";
+import { WebMain } from "@/features/main/screens/WebMain";
 
 export default function MainPage() {
   return <Responsive web={<WebMain />} mobile={<MMain />} />;

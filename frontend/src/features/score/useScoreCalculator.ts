@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { birthDateOf } from "@/features/conditions/applicant";
 import { useConditions } from "@/features/conditions/store";
 import type { DeviceConditions } from "@/features/conditions/types";
-import { USE_MOCKS } from "@/lib/api/config";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 import { useScore, useScoreProfile } from "./queries";
 import type { ScoreInput, ScoreItemKey } from "./score";
 
@@ -21,9 +21,12 @@ function prefillOf(device: DeviceConditions): ScoreForm {
   const owner = device.homelessPeriod === "집이 있어요";
   return {
     birthDate: birthDateOf(device.birth),
-    marital: maritalOf[device.marry],
+    marital: device.marry ? maritalOf[device.marry] : undefined,
     homeOwner: owner ? true : device.homelessPeriod ? false : undefined,
-    dependents: (device.marry === "married" ? 1 : 0) + device.kids,
+    dependents:
+      device.marry && device.kids !== null
+        ? (device.marry === "married" ? 1 : 0) + device.kids
+        : undefined,
   };
 }
 

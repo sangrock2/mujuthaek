@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MBizSupport } from "@/screens/business/MBizSupport";
-import { WebBizSupport } from "@/screens/business/WebBizSupport";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MBizSupport } from "@/features/business/screens/MBizSupport";
+import { WebBizSupport } from "@/features/business/screens/WebBizSupport";
 
 export const metadata: Metadata = { title: "사업 지원 | 무주택자들" };
 

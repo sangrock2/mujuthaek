@@ -47,6 +47,11 @@ public enum ErrorCode {
   WITHDRAWAL_ACCOUNT_MISMATCH(HttpStatus.BAD_REQUEST, "탈퇴하려는 계정과 다시 로그인한 계정이 달라요"),
   FAVORITE_TARGET_NOT_FOUND(HttpStatus.NOT_FOUND, "관심으로 저장할 공고·정책을 찾을 수 없어요"),
   FAVORITE_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "관심 공고는 200개까지 저장할 수 있어요"),
+  PREPARATION_NOT_FOUND(HttpStatus.NOT_FOUND, "준비 기록을 찾을 수 없어요"),
+  PREPARATION_CONFLICT(HttpStatus.CONFLICT, "공고나 준비 기록이 바뀌었어요. 최신 내용을 확인해 주세요"),
+  PREPARATION_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "신청 준비함은 200개까지 저장할 수 있어요"),
+  PREPARATION_TASK_NOT_FOUND(HttpStatus.NOT_FOUND, "할 일을 찾을 수 없어요"),
+  PREPARATION_TASK_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "공고 하나에 할 일은 30개까지 추가할 수 있어요"),
   EMAIL_ALREADY_USED(HttpStatus.CONFLICT, "이미 다른 계정에서 쓰고 있는 이메일이에요"),
   ACCOUNT_SUSPENDED(HttpStatus.FORBIDDEN, "이용이 정지된 계정이에요"),
 

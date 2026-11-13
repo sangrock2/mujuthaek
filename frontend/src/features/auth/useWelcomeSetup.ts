@@ -5,9 +5,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { usePush } from "@/features/alerts/usePush";
 import { useConditions } from "@/features/conditions/store";
 import { interestKey, toInterestRegion, type InterestKind } from "@/features/me/api";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
 
 export const interestOptions = ["청약 · 공공임대", "정부 혜택", "전월세", "사업공간"] as const;
 

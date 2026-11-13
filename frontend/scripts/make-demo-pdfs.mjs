@@ -1,5 +1,5 @@
 // 목업(시연) 모드에서 앱 안 PDF 보기로 여는 「시연용 예시 문서」를 만들어요. 실제 기관 공고문이 아니에요.
-// 목업 공고(src/mocks/notice-doc.ts)의 근거 인용 문장(anchors)과 추출 과정 목업(src/features/admin/trace.ts)의 근거 글(refs)이
+// 목업 공고(src/features/notice/mocks/notice-doc.ts)의 근거 인용 문장(anchors)과 추출 과정 목업(src/features/admin/trace.ts)의 근거 글(refs)이
 // 해당 쪽에 실제 글자로 꼭 한 번씩 들어 있어야 PDF 보기가 그 문장을 강조해요. 문장을 바꾸면 이 파일과 목업을 함께 바꾸고 다시 만들어요.
 //
 // 도구는 프론트 의존성이 아니라서 임시 폴더에 받아 써요 (저장소에 의존성을 더하지 않아요):

@@ -1,4 +1,5 @@
 import type { NextFetchEvent, NextRequest } from "next/server";
+import { secureApiOrigin } from "./shared/lib/api/origin";
 
 /**
  * 화면 요청 기록: 화면 주소를 직접 연 요청(첫 방문·새로 고침·봇)을 api 트래픽 기록으로 넘겨요.
@@ -6,7 +7,7 @@ import type { NextFetchEvent, NextRequest } from "next/server";
  * 응답을 기다리게 하지 않고 뒤에서 보내요. 설정(서버 전용 환경 변수)이 없으면 아무것도 하지 않아요.
  * 보내는 값: 경로(쿼리 제외), 브라우저 종류(User-Agent), 접속 IP. 회원 정보·쿠키는 보내지 않아요.
  */
-const INGEST_URL = process.env.TRAFFIC_INGEST_URL; // api 주소 (예: http://api:8080)
+const INGEST_URL = secureApiOrigin(process.env.TRAFFIC_INGEST_URL, process.env.VERCEL === "1");
 const INGEST_TOKEN = process.env.TRAFFIC_INGEST_TOKEN; // api의 TRAFFIC_INGEST_TOKEN과 같은 값
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {

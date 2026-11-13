@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 
 /* 무주택자들 디자인 토큰 (.design/design-tokens.css와 같은 값). 색은 이 토큰으로만 써요. */
 @theme {
@@ -19,7 +20,7 @@
   /* 글자 */
   --color-text: #191f28;
   --color-text-sub: #4e5968;
-  --color-text-tertiary: #6b7684;
+  --color-text-tertiary: #596574;
   --color-text-body-long: #333d4b;
 
   /* 바탕 · 선 */
@@ -66,7 +67,7 @@
   --color-naver-text: #0b1f12;
 
   /* 글꼴 */
-  --font-sans: var(--font-pretendard), "Pretendard", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-sans: "Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", system-ui, sans-serif;
   --tracking-body: -0.01em;
   --tracking-title: -0.03em;
   --tracking-h1: -0.04em;
@@ -105,6 +106,8 @@
     color: var(--color-text);
     font-family: var(--font-sans);
     letter-spacing: var(--tracking-body);
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
 
   a {
@@ -131,6 +134,20 @@
   :where(a, button, input, select, textarea, summary):focus-visible {
     outline: 3px solid var(--color-brand);
     outline-offset: 2px;
+  }
+}
+
+main {
+  scroll-margin-top: 80px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

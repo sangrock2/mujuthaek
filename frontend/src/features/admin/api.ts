@@ -3,9 +3,13 @@
  * 백엔드 응답을 화면이 쓰는 타입(@/mocks/admin)으로 바꿔요. NEXT_PUBLIC_USE_MOCKS=false일 때만 써요.
  * 관리자 API는 ADMIN 로그인이 필요해요(토큰은 공통 API 클라이언트가 붙여요).
  */
-import { api } from "@/lib/api/client";
-import { routes } from "@/lib/routes";
-import type { BotTrafficData, RealtimeData, TrafficData } from "@/mocks/admin-traffic";
+import { api } from "@/shared/lib/api/client";
+import { routes } from "@/shared/lib/routes";
+import type {
+  BotTrafficData,
+  RealtimeData,
+  TrafficData,
+} from "@/features/admin/mocks/admin-traffic";
 import { PERMISSION_INFO, type AdminPermission } from "@/features/admin/permissions";
 import type {
   AdminChange,
@@ -13,16 +17,16 @@ import type {
   AdminUserFilter,
   AdminUserName,
   AdminUsersPage,
-} from "@/mocks/admin-users";
-import type { ActivityData, ActivityItem } from "@/mocks/admin-activity";
-import type { NotificationStats } from "@/mocks/admin-notifications";
-import type { DuplicateList, DuplicateStatus } from "@/mocks/admin-duplicates";
+} from "@/features/admin/mocks/admin-users";
+import type { ActivityData, ActivityItem } from "@/features/admin/mocks/admin-activity";
+import type { NotificationStats } from "@/features/admin/mocks/admin-notifications";
+import type { DuplicateList, DuplicateStatus } from "@/features/admin/mocks/admin-duplicates";
 import type {
   ChatReport,
   ChatReportGroup,
   ChatReviewAction,
   ChatReviewStatus,
-} from "@/mocks/admin-chat";
+} from "@/features/admin/mocks/admin-chat";
 import type {
   AdminCriteria,
   AdminCounts,
@@ -36,7 +40,7 @@ import type {
   SourceRow,
   SourceRun,
   SourceStatus,
-} from "@/mocks/admin";
+} from "@/features/admin/mocks/admin";
 
 // ---------- 공통 ----------
 const KST = "Asia/Seoul";

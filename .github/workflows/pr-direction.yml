@@ -1,0 +1,20 @@
+name: PR Direction
+on:
+  pull_request_target:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  direction:
+    name: PR direction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const same = pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            if (!(pr.base.ref === 'dev' || (pr.base.ref === 'main' && same && pr.head.ref === 'dev'))) {
+              core.setFailed('PRs must target dev; main accepts only this repository’s dev branch.');
+            }

@@ -52,3 +52,25 @@ spotless {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+val e2e = sourceSets.create("e2e") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[e2e.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+configurations[e2e.runtimeOnlyConfigurationName].extendsFrom(configurations.runtimeOnly.get())
+tasks.register<JavaExec>("e2eRun") {
+    dependsOn(e2e.classesTaskName)
+    classpath = e2e.runtimeClasspath
+    mainClass = "kr.mujuthaek.e2e.E2eNotificationApplication"
+}
+val verifyE2eIsolation by tasks.registering {
+    dependsOn(tasks.bootJar)
+    doLast {
+        val entries = zipTree(tasks.bootJar.get().archiveFile.get().asFile)
+        check(entries.matching { include("**/kr/mujuthaek/e2e/**", "**/application-e2e.yml") }.isEmpty) {
+            "운영 jar에 E2E 제어 코드가 포함됐어요"
+        }
+    }
+}
+tasks.check { dependsOn(verifyE2eIsolation) }

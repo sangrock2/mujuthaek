@@ -3,9 +3,9 @@
 // 계정 연락용 이메일 (선택): 가입 마무리 화면과 내 정보에서 등록·변경·삭제해요.
 // 약관·개인정보처리방침 변경, 이용 제한, 계정 안내처럼 꼭 알려야 할 때만 쓰고 광고·공고 알림은 보내지 않아요
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
+import { api, ApiError } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
 import { sessionKey, type Session } from "@/features/auth/session";
 
 /** 동의 문구 버전. 아래 CONTACT_EMAIL_CONSENT 문구를 바꾸면 올려요 (백엔드에 동의 기록으로 남아요) */

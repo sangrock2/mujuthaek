@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { MLoadErrorState, WebLoadErrorState } from "@/components/states/LoadErrorState";
-import { StateFrame } from "@/components/states/StateFrame";
+import { MLoadErrorState, WebLoadErrorState } from "@/shared/states/LoadErrorState";
+import { StateFrame } from "@/shared/states/StateFrame";
 
 export const metadata: Metadata = { title: "오프라인 | 무주택자들" };
 

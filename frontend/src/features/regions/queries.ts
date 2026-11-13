@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { regionIndex, type RegionTree } from "@/lib/regions";
-import { regionSnapshot } from "@/lib/regions-data";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { regionIndex, type RegionTree } from "@/shared/lib/regions";
+import { regionSnapshot } from "@/shared/lib/regions-data";
 
 export const regionKeys = {
   tree: ["regions"] as const,

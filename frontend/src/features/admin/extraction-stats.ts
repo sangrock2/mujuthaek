@@ -1,7 +1,7 @@
 // 관리자 「추출 비용·품질」: GET /api/admin/reviews/extraction-stats?days= (추출 서비스 extraction_stats.py 집계를 api가 그대로 넘겨요)
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
 
 /** 상태 묶음: 자동 게시 COMPLETED · 부분 게시 PARTIAL · 검수로 감 IN_REVIEW·INTAKE_REVIEW·APPROVED · 실패 FAILED·WAITING_SOURCE·INTERRUPTED · 그 밖 */
 export type StatusGroup = "AUTO" | "PARTIAL" | "REVIEW" | "FAILED" | "OTHER";

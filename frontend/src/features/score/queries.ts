@@ -2,10 +2,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { mockQuery } from "@/features/mock-query";
 import { calculateScore, type Score, type ScoreInput } from "@/features/score/score";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { scoreProfile } from "@/mocks/score";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { scoreProfile } from "@/features/score/mocks/score";
 
 export const scoreKeys = {
   profile: ["score", "profile"] as const,

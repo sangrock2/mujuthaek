@@ -2,8 +2,8 @@
 
 // 사업 정보 (사업공간 · 사업 지원 판정 입력). 조건 입력과 같이 이 기기에 저장하고, 매출은 이번 탭에서만 써요
 import { useSyncExternalStore } from "react";
-import { snapshotRegions } from "@/lib/regions";
-import type { BizStage } from "@/mocks/business";
+import { snapshotRegions } from "@/shared/lib/regions";
+import type { BizStage } from "@/features/business/mocks/business";
 
 /** 이 기기에 저장하는 사업 정보. 매출은 넣지 않아요 */
 export type BizProfileInput = {
@@ -105,7 +105,6 @@ export const industryGroups = Array.from(new Set(industries.map((i) => i.group))
 
 export const needOptions = [
   { key: "STARTUP_SPACE", label: "사무실 · 창업 공간" },
-  { key: "SHOP_RENTAL", label: "상가" },
   { key: "MEETING_ROOM", label: "회의실" },
 ] as const;
 

@@ -1,0 +1,7 @@
+/tls/
+/acme-webroot/
+/letsencrypt/
+/letsencrypt-work/
+/letsencrypt-logs/
+/tls-settings*.json
+/tls-contact.json

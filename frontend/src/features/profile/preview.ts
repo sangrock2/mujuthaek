@@ -6,10 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import { toApplicant } from "@/features/conditions/applicant";
 import type { DeviceConditions, SessionConditions } from "@/features/conditions/types";
 import { useCriteria } from "@/features/eligibility/criteria";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import type { ProfilePreview } from "@/mocks/profile";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type { ProfilePreview } from "@/features/profile/mocks/profile";
 
 /** 입력이 이만큼 멈추면 다시 세어요 (글자마다 부르지 않게) */
 const DEBOUNCE_MS = 600;

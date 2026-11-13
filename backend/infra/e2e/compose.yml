@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_USER: e2e
+      POSTGRES_PASSWORD: e2e-only
+      POSTGRES_DB: api_e2e
+    ports: ["127.0.0.1:15439:5432"]
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/01-e2e.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e2e -d api_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: e2e
+      RABBITMQ_DEFAULT_PASS: e2e-only
+    ports: ["127.0.0.1:15679:5672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  minio:
+    image: bitnamilegacy/minio:2025.7.23
+    environment:
+      MINIO_ROOT_USER: e2e-minio
+      MINIO_ROOT_PASSWORD: e2e-only-minio
+      MINIO_DEFAULT_BUCKETS: e2e-raw
+    ports: ["127.0.0.1:19009:9000"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

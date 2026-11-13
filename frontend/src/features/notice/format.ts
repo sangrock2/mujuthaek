@@ -5,17 +5,10 @@ import type {
   NoticeDocumentGroup,
   NoticeSectionKey,
   NoticeSelectionKind,
-} from "@/mocks/notice-doc";
+} from "@/features/notice/mocks/notice-doc";
 
-/** 18_551_000 → "1,855만 1,000원" · 114_150 → "11만 4,150원" */
-export function formatWon(won: number): string {
-  if (won < 10_000) return `${won.toLocaleString("ko-KR")}원`;
-  const man = Math.floor(won / 10_000);
-  const rest = won % 10_000;
-  return rest
-    ? `${man.toLocaleString("ko-KR")}만 ${rest.toLocaleString("ko-KR")}원`
-    : `${man.toLocaleString("ko-KR")}만 원`;
-}
+import { formatWon } from "@/shared/lib/money";
+export { formatWon } from "@/shared/lib/money";
 
 /** 원문에 금액이 없으면 "원문 확인" */
 export const formatWonOr = (won: number | null) => (won === null ? "원문 확인" : formatWon(won));
@@ -92,7 +85,13 @@ export function visibleSections(doc: NoticeDoc): NoticeSectionKey[] {
     living: doc.living.length > 0,
     contacts: doc.contacts.length > 0,
   };
-  return (Object.keys(sectionTitles) as NoticeSectionKey[]).filter((k) => has[k]);
+  return (
+    [
+      "eligibility",
+      "cautions",
+      ...Object.keys(sectionTitles).filter((k) => k !== "eligibility" && k !== "cautions"),
+    ] as NoticeSectionKey[]
+  ).filter((k) => has[k]);
 }
 
 export const categoryLabel: Record<EligibilityCategory, string> = {

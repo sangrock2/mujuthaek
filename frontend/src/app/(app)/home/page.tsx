@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Responsive } from "@/components/layout/Responsive";
-import { MHome } from "@/screens/home/MHome";
-import { WebHome } from "@/screens/home/WebHome";
+import { Responsive } from "@/shared/layout/Responsive";
+import { MHome } from "@/features/home/screens/MHome";
+import { WebHome } from "@/features/home/screens/WebHome";
 
 export const metadata: Metadata = { title: "홈 | 무주택자들" };
 

@@ -5,10 +5,10 @@ import { useQueries } from "@tanstack/react-query";
 import { useNoticeApplicant } from "@/features/notice/judgment";
 import { formatWon } from "@/features/notice/format";
 import { prepareNoteLabel } from "@/features/notice/labels";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import type { NoticeUnit } from "@/mocks/notice";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type { NoticeUnit } from "@/features/notice/mocks/notice";
 
 /** 백엔드 PrepareCost.Result */
 type ApiPrepareCost = {

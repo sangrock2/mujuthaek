@@ -1,0 +1,105 @@
+name: Production
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Previously successful backend release ID to roll back to (Actions/S3 history)"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: production
+  cancel-in-progress: false
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Only main can run production
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+      - name: Verify dev to main merge
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/production_guard.py
+  web-check:
+    needs: guard
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/web.yml
+  backend-check:
+    needs: guard
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+  contracts-check:
+    needs: guard
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/contracts.yml
+  e2e-check:
+    needs: guard
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/e2e.yml
+  deploy:
+    needs: [guard, web-check, backend-check, contracts-check, e2e-check]
+    if: >-
+      always() && needs.guard.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch') ||
+       (needs.web-check.result == 'success' && needs.backend-check.result == 'success' &&
+        needs.contracts-check.result == 'success' && needs.e2e-check.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Rollback executes trusted main workflow code, never the old version's scripts.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require deployment configuration
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+        run: |
+          test "$ENABLED" = true || { echo 'Enable after the initial source-alignment PR is reviewed.'; exit 1; }
+          test -n "$ROLE" && test -n "$TOKEN"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global vercel@65.15.0
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: "659355919826"
+      - name: Deploy or restore a selected release
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TELEMETRY_DISABLED: "1"
+          ROLLBACK_RELEASE: ${{ inputs.release }}
+        run: python .github/scripts/production_release.py
+      - name: Save release record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            manifest.json
+            frontend-deployment.json
+            frontend-before.json
+            deployment-result.json
+            target-release.json
+          retention-days: 90
+          if-no-files-found: ignore

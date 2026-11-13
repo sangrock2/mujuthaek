@@ -11,11 +11,16 @@ import {
   type ApiSupportSearch,
 } from "@/features/business/api";
 import { toListing, type SearchResponse } from "@/features/homes/search";
-import { api } from "@/lib/api/client";
-import { USE_MOCKS } from "@/lib/api/config";
-import { endpoints } from "@/lib/api/endpoints";
-import { routes } from "@/lib/routes";
-import { searchData, type SearchBadge, type SearchResult, type SearchType } from "@/mocks/search";
+import { api } from "@/shared/lib/api/client";
+import { USE_MOCKS } from "@/shared/lib/api/config";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import { routes } from "@/shared/lib/routes";
+import {
+  searchData,
+  type SearchBadge,
+  type SearchResult,
+  type SearchType,
+} from "@/features/search/mocks/search";
 
 /** 지역(동네) 검색은 아직 API가 없어 목업에서만 보여요 */
 export const searchTypes: SearchType[] = USE_MOCKS ? ["공고", "혜택", "지역"] : ["공고", "혜택"];

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { AdminGuard } from "@/components/admin/AdminGuard";
-import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminGuard } from "@/features/admin/components/AdminGuard";
+import { AdminShell } from "@/features/admin/components/AdminShell";
 
 export const metadata: Metadata = { title: "관리자 | 무주택자들" };
 

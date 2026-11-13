@@ -1,5 +1,5 @@
 #!/bin/bash
-# collector 실제 DB 테스트용 데이터베이스 (services/collector/tests/test_storage_postgres.py). 테스트가 테이블을 비워요.
+# collector 실제 DB 테스트용 데이터베이스 (services/collector/tests/storage/test_storage_postgres.py). 테스트가 테이블을 비워요.
 # 새 볼륨이면 처음 뜰 때 자동으로 돌고, 이미 있는 볼륨에는 make migrate-collector-test가 다시 불러요. 여러 번 돌려도 괜찮아요.
 set -euo pipefail
 

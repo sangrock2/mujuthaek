@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { useConditions } from "@/features/conditions/store";
-import { track } from "@/lib/analytics";
-import type { Notice } from "@/mocks/notice";
+import { track } from "@/shared/lib/analytics";
+import type { Notice } from "@/features/notice/mocks/notice";
 
 /** 방문 통계에 붙이는 공고 정보: 기관과 시·도만(개인 정보 없음). 공고 종류는 판정 화면 종류(kind)로 */
 export function noticeParams(n: Notice): Record<string, string> {

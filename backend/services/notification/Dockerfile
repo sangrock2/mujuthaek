@@ -4,7 +4,7 @@ FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY services/notification services/notification
 WORKDIR /src/services/notification
-RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon bootJar -x test \
+RUN --mount=type=cache,target=/root/.gradle bash ./gradlew --no-daemon bootJar -x test \
  && find build/libs -name '*.jar' ! -name '*-plain.jar' -exec cp {} /src/app.jar \;
 
 FROM eclipse-temurin:25-jre

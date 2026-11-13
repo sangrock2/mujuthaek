@@ -7,9 +7,13 @@ import { inputHrefOf } from "@/features/conditions/needs";
 import { useConditions } from "@/features/conditions/store";
 import { useCriteria } from "@/features/eligibility/criteria";
 import { formatWon } from "@/features/notice/format";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
-import type { Benefit, BenefitCategory, BenefitEligibility } from "@/mocks/benefits";
+import { api } from "@/shared/lib/api/client";
+import { endpoints } from "@/shared/lib/api/endpoints";
+import type {
+  Benefit,
+  BenefitCategory,
+  BenefitEligibility,
+} from "@/features/benefits/mocks/benefits";
 
 type ApiOverall = "ELIGIBLE" | "NEEDS_INPUT" | "INELIGIBLE";
 type ApiApplyStatus = "UPCOMING" | "APPLYING" | "CLOSED" | "ALWAYS";
