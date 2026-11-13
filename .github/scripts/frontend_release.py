@@ -56,7 +56,8 @@ def candidate(cwd=None):
 
 def restore_candidate():
     data = json.loads(Path('target-release.json').read_text())
-    commit = data.get('commit')
+    # A snapshot may have inherited its frontend from an earlier source commit.
+    commit = (data.get('frontend') or {}).get('commit', data.get('commit'))
     if commit and re.fullmatch('[0-9a-f]{40}', commit):
         subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'origin/main'], check=True)
         with tempfile.TemporaryDirectory() as directory:
