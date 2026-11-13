@@ -44,10 +44,12 @@ class Host:
         self.bucket = self.values['S3_BUCKET']
         if self.bucket != 'mujuthaek-personal-659355919826-raw':
             raise RuntimeError('Unexpected bucket')
-        self.credentials = self.runtime / 'aws.env'
-        self.credentials.write_text(''.join(f'{key}={self.values[key]}\n' for key in
-                                            ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION')))
-        self.credentials.chmod(0o600)
+        self.credentials = BASE / 'release-host.env'
+        if not self.credentials.is_file():
+            raise RuntimeError('Separate host release credentials are required')
+        info = self.credentials.stat()
+        if info.st_uid != 0 or info.st_mode & 0o077:
+            raise RuntimeError('Host release credentials must be root-owned and mode 600')
 
     def aws(self, *args):
         return subprocess.run(['docker', 'run', '--rm', '--env-file', str(self.credentials),

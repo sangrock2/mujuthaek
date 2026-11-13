@@ -1,10 +1,8 @@
-"""Install the polling release service and register the existing images as the first rollback point."""
-import gzip
+"""Install the polling service; restore missing local state only from a verified archived baseline."""
 import importlib.util
 import json
 import os
 import subprocess
-import hashlib
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -16,32 +14,19 @@ spec.loader.exec_module(module)
 host = module.Host()
 current = host.runtime / 'current.json'
 if not current.exists():
-    release = '20261113-1'
-    archive = host.runtime / 'images.tar.gz'
-    tags = [f'mujuthaek-personal-{s}:{release}' for s in module.SERVICES]
-    with archive.open('wb') as output:
-        save = subprocess.Popen(['docker', 'save', *tags], stdout=subprocess.PIPE)
-        zipped = subprocess.run(['gzip', '-c'], stdin=save.stdout, stdout=output)
-        save.stdout.close()
-        if save.wait() or zipped.returncode:
-            raise RuntimeError('Cannot archive initial images')
-    images = {s: {'tag': tag, 'id': subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', tag],
-              check=True, capture_output=True, text=True).stdout.strip()} for s, tag in zip(module.SERVICES, tags)}
-    with archive.open('rb') as source:
-        checksum = hashlib.file_digest(source, 'sha256').hexdigest()
-    data = module.manifest({'release': release, 'commit': None, 'images': images, 'archive_sha256': checksum,
-                           'frontend': {'id': 'dpl_6NSfrXQhmjKTLFiT2u2qskEJqQRb',
-                                        'url': 'https://mujuthaek-123tduo8i-mujuthaek.vercel.app'}})
-    (host.runtime / 'manifest.json').write_text(json.dumps(data))
-    host.upload('images.tar.gz', f'releases/{release}/images.tar.gz')
-    host.upload('manifest.json', f'releases/{release}/manifest.json')
-    state = {'release': release, 'previous': None, 'schema': host.schema(), 'commit': None}
+    # The polling identity cannot publish images or issue deployment requests.
+    # Restore only an already archived baseline whose running images/schema match.
+    data = module.manifest(json.loads(host.download('releases/20261113-1/manifest.json', 'initial-manifest.json').read_text()))
+    state = json.loads(host.download('states/20261113-1.json', 'initial-state.json').read_text())
+    if state['schema'] != host.schema():
+        raise RuntimeError('Archived baseline schema differs; choose a recovery release explicitly')
+    for service, image in data['images'].items():
+        container = host.compose('ps', '-q', service).stdout.strip()
+        actual = subprocess.run(['docker', 'inspect', '--format', '{{.Image}}', container],
+                                check=True, capture_output=True, text=True).stdout.strip()
+        if actual != image['id']:
+            raise RuntimeError('Running image differs from archived baseline; stop for operator review')
     current.write_text(json.dumps(state))
-    (host.runtime / 'state.json').write_text(json.dumps(state))
-    host.upload('state.json', f'states/{release}.json')
-    (host.runtime / 'desired.json').write_text(json.dumps({'request': 'initial-registration', 'mode': 'deploy', 'release': release}))
-    host.upload('desired.json', 'desired.json')
-    (host.runtime / 'last-request').write_text('initial-registration')
 service = f'''[Unit]
 Description=Mujuthaek release requests from private S3
 After=docker.service network-online.target

@@ -10,7 +10,7 @@ PR Direction은 pull_request_target 이벤트에서 PR 메타데이터만 검사
 
 프론트는 Vercel 후보 빌드를 먼저 만들고, 백엔드는 GitHub runner에서 linux/amd64 이미지를 빌드한다. 운영 4GB 서버에서 이미지를 빌드하지 않는다. 이미지 두 개(api, notification)와 SHA256·이미지 ID·Git SHA·Vercel 버전을 비공개 S3 deployments/releases/<release>/에 기록한다. 릴리스 ID는 <Git SHA>-<GitHub run ID>-<실행 회차>다.
 
-AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 deployments/에만 읽기·쓰기 권한이 있다. 장기 AWS 키나 운영 SSH 키를 GitHub에 등록하지 않는다. Lightsail은 systemd 타이머로 1분마다 요청을 읽어 체크섬 검증·백업·컨테이너 교체·상태 검사를 수행한다. 이미지에는 앱 비밀값을 넣지 않고 서버 기존 .env를 사용한다.
+AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 deployments/에만 읽기·쓰기 권한이 있다. 장기 AWS 키나 운영 SSH 키를 GitHub에 등록하지 않는다. Lightsail은 systemd 타이머로 1분마다 요청을 읽어 체크섬 검증·백업·컨테이너 교체·상태 검사를 수행한다. 이미지에는 앱 비밀값을 넣지 않고 서버 기존 .env를 사용한다. 수신기는 root 전용 release-host.env를 따로 사용한다. GitHub는 이미지·요청만 쓰고, 수신기는 상태·결과만 쓴다. 앱 S3 키는 deployments/ 쓰기를 명시적으로 거절한다.
 
 백엔드 적용 성공 후 Vercel 후보를 공개 주소로 승격하고 공개 API를 확인한다. 배포는 순차 실행하며 진행 중인 배포를 자동 취소하지 않는다. api·notification 교체 중 짧은 응답 중단이 있을 수 있으며 두 플랫폼의 원자적 동시 전환이나 무중단을 보장하는 구성은 아니다.
 
