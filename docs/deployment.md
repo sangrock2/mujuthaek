@@ -8,7 +8,7 @@ PR Direction은 pull_request_target 이벤트에서 PR 메타데이터만 검사
 
 ## 운영 배포
 
-프론트는 Vercel 후보 빌드를 먼저 만들고, 백엔드는 GitHub runner에서 linux/amd64 이미지를 빌드한다. 운영 4GB 서버에서 이미지를 빌드하지 않는다. 이미지 두 개(api, notification)와 SHA256·이미지 ID·Git SHA·Vercel 버전을 비공개 S3 deployments/releases/<release>/에 기록한다. 릴리스 ID는 <Git SHA>-<GitHub run ID>-<실행 회차>다.
+변경이 있는 프론트는 Vercel 후보 빌드를 만들고, 변경이 있는 백엔드는 GitHub runner에서 linux/amd64 이미지를 빌드한다. 운영 4GB 서버에서 이미지를 빌드하지 않는다. 변경된 이미지와 전체 서비스의 이미지 ID·태그·Git SHA·프론트 소스 SHA·Vercel 버전을 비공개 S3 deployments/releases/<release>/에 기록한다. 릴리스 ID는 <Git SHA>-<GitHub run ID>-<실행 회차>다.
 
 AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 deployments/에만 읽기·쓰기 권한이 있다. 장기 AWS 키나 운영 SSH 키를 GitHub에 등록하지 않는다. Lightsail은 systemd 타이머로 1분마다 요청을 읽어 체크섬 검증·백업·컨테이너 교체·상태 검사를 수행한다. 이미지에는 앱 비밀값을 넣지 않고 서버 기존 .env를 사용한다. 수신기는 root 전용 release-host.env를 따로 사용한다. GitHub는 이미지·요청만 쓰고, 수신기는 상태·결과만 쓴다. 앱 S3 키는 deployments/ 쓰기를 명시적으로 거절한다.
 
@@ -16,10 +16,31 @@ AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 
 
 필수 GitHub 설정:
 
-- Secret: VERCEL_TOKEN — mujuthaek 팀 범위의 배포 토큰, 만료 시 교체
+- Secret: VERCEL_TOKEN — 사용자 조회와 mujuthaek 팀 배포가 가능한 Full Account 토큰, 만료 시 교체
 - Variable: AWS_DEPLOY_ROLE_ARN — main 전용 역할
 - Variable: PRODUCTION_DEPLOY_ENABLED=true — 초기 소스 정렬과 검증 완료 뒤 활성화
 - frontend/vercel.json의 git.deploymentEnabled=false로 Vercel Git 자동 배포를 비활성으로 두어 검사를 거치는 Actions 배포와 중복되지 않게 한다.
+
+## 변경 경로별 선택 배포
+
+배포 계획은 main의 직전 커밋이 아니라 S3 deployments/releases/current.json에 기록된 마지막 전체 성공 릴리스와 비교한다. 실패한 배포의 변경이나 문서 커밋 사이에 끼어 있는 변경도 다음 배포에서 누락하지 않는다. 서버의 states/current.json과 전체 성공 릴리스가 다르면 이전 적용 결과가 불확실한 상태이므로 새 배포를 차단하고 먼저 정합성을 확인한다.
+
+| 변경 경로 | 배포 대상 |
+| --- | --- |
+| frontend/ 및 .vercelignore | 프론트 |
+| backend/services/api/ | API |
+| backend/services/notification/ | 알림 |
+| backend/contracts/ | API·알림 |
+| backend/services/extraction/data/legal-dong-codes/ | API |
+| backend/.dockerignore, 미분류 backend/libs/ | API·알림 |
+| 배포 스크립트·Production 워크플로·서버 배포 수신기 | 전체 경로 검증을 위해 프론트·API·알림 |
+| docs/, Markdown 문서, 서비스 테스트만 변경 | 배포 생략 |
+
+수집·추출 실행 코드와 Python 공통 라이브러리, 인프라 설정은 현재 자동 앱 배포 대상이 아니므로 별도 적용한다. 서버 배포 프로토콜 수정은 검증 후 install_release.py로 설치해야 하며, 클라이언트는 서버 프로토콜 버전을 검사한다. 알 수 없는 공통 경로는 변경 누락을 피하기 위해 전체 배포한다.
+
+형식 2의 manifest는 바뀌지 않은 서비스의 이미지 태그와 프론트 소스 SHA를 이전 릴리스에서 이어받아 전체 실행 상태를 표현한다. 프론트만 변경하면 백엔드 이미지 빌드·DB 백업·컨테이너 교체를 실행하지 않고 서버의 릴리스 상태 기록만 갱신한다. API만 변경하면 알림 컨테이너는 유지한다. 문서만 변경하면 Production의 계획 단계 이후 검사·배포 작업을 생략하며 PR CI는 계속 수행한다.
+
+백엔드는 롤백 시 현재와 대상 manifest의 서비스별 태그·이미지 ID를 비교해 다른 컨테이너만 교체한다. 로컬에 이미지가 없으면 태그에 기록된 원본 릴리스의 아카이브에서 검증 후 불러온다. 프론트는 전체 릴리스의 커밋이 아닌 frontend.commit을 사용하며, 동일한 프론트 소스이면 Vercel 배포도 생략한다. 전체 성공 포인터는 서버 적용·필요한 프론트 전환·공개 API 검사까지 통과한 뒤에만 갱신한다.
 
 ## 과거 버전으로 복구
 

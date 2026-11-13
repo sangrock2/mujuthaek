@@ -21,15 +21,28 @@ def release_id(value):
 
 def manifest(value):
     release_id(value['release'])
+    if value.get('format', 1) not in (1, 2):
+        raise ValueError('Unsupported release format')
     if set(value['images']) != set(SERVICES):
         raise ValueError('Only api and notification can be deployed')
     for service, image in value['images'].items():
-        if image['tag'] != f"mujuthaek-personal-{service}:{value['release']}":
+        prefix = f'mujuthaek-personal-{service}:'
+        if not image['tag'].startswith(prefix):
             raise ValueError('Unexpected image repository/tag')
+        release_id(image['tag'][len(prefix):])
+        if value.get('format', 1) == 1 and image['tag'] != prefix + value['release']:
+            raise ValueError('Unexpected legacy image tag')
         if not re.fullmatch(r'sha256:[0-9a-f]{64}', image['id']):
             raise ValueError('Image ID must be immutable')
-    if not re.fullmatch(r'[0-9a-f]{64}', value['archive_sha256']):
+    services = value.get('archive_services', list(SERVICES))
+    if len(services) != len(set(services)) or not set(services) <= set(SERVICES):
+        raise ValueError('Unexpected archive services')
+    if services and not re.fullmatch(r'[0-9a-f]{64}', value['archive_sha256'] or ''):
         raise ValueError('Invalid archive checksum')
+    if value.get('format', 1) == 2:
+        for service in services:
+            if value['images'][service]['tag'] != f"mujuthaek-personal-{service}:{value['release']}":
+                raise ValueError('Archived image must belong to this release')
     return value
 
 
@@ -96,56 +109,107 @@ class Host:
             time.sleep(3)
         raise RuntimeError('Application health check failed')
 
-    def select(self, release):
+    def select(self, release, images=None, services=None):
+        services = list(SERVICES if services is None else services)
+        images = images or {s: {'tag': f'mujuthaek-personal-{s}:{release}'} for s in SERVICES}
         path = BASE / 'versions.env'
         text = path.read_text()
         text = '\n'.join(line for line in text.splitlines()
                          if not line.startswith(('API_RELEASE=', 'NOTIFICATION_RELEASE=')))
-        path.write_text(text + f'\nAPI_RELEASE={release}\nNOTIFICATION_RELEASE={release}\n')
+        for service in SERVICES:
+            text += f"\n{service.upper()}_RELEASE={images[service]['tag'].split(':', 1)[1]}"
+        path.write_text(text + '\n')
         self.compose('config', '--quiet')
-        self.compose('up', '-d', '--no-deps', '--no-build', '--pull', 'never', *SERVICES)
+        self.compose('up', '-d', '--no-deps', '--no-build', '--pull', 'never', *services)
         self.healthy()
         self.compose('exec', '-T', 'nginx', 'nginx', '-t')
         self.compose('exec', '-T', 'nginx', 'nginx', '-s', 'reload')
+
+    def load_archive(self, data, name):
+        archive = self.download(f"releases/{data['release']}/images.tar.gz", name)
+        with archive.open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        if digest != data['archive_sha256']:
+            raise ValueError('Archive checksum mismatch')
+        subprocess.run(['docker', 'load', '-i', str(archive)], check=True, capture_output=True)
+
+    def ensure_images(self, data, services):
+        loaded = set()
+        for service in services:
+            image = data['images'][service]
+            result = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image['tag']],
+                                    capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip() == image['id']:
+                continue
+            origin = release_id(image['tag'].split(':', 1)[1])
+            if origin not in loaded:
+                source = manifest(json.loads(self.download(f'releases/{origin}/manifest.json', f'origin-{origin}.json').read_text()))
+                if source['release'] != origin or source['images'][service] != image:
+                    raise ValueError('Image origin mismatch')
+                if service not in source.get('archive_services', list(SERVICES)):
+                    raise ValueError('Image missing from origin archive')
+                self.load_archive(source, f'images-{origin}.tar.gz')
+                loaded.add(origin)
+            actual = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image['tag']],
+                                    check=True, capture_output=True, text=True).stdout.strip()
+            if actual != image['id']:
+                raise ValueError(f'{service} image digest mismatch')
 
     def apply(self, request):
         target = release_id(request['release'])
         old = self.current()
         if old['release'] == target:
             return old
+        if request.get('expected_base') and old['release'] != request['expected_base']:
+            raise RuntimeError('Current release differs from the planned base; reconcile before retrying')
         data = manifest(json.loads(self.download(f'releases/{target}/manifest.json', 'candidate.json').read_text()))
         if data['release'] != target:
             raise ValueError('Manifest identity mismatch')
         schema = self.schema()
-        if request['mode'] == 'rollback':
+        previous_images = old.get('images')
+        if data.get('format') == 2 and not previous_images:
+            previous = manifest(json.loads(self.download(f"releases/{old['release']}/manifest.json", 'previous.json').read_text()))
+            if previous['release'] != old['release']:
+                raise ValueError('Previous manifest identity mismatch')
+            previous_images = previous['images']
+        services = [s for s in SERVICES if not previous_images or previous_images[s] != data['images'][s]]
+        if request['mode'] == 'rollback' and services:
             saved = json.loads(self.download(f'states/{target}.json', 'target-state.json').read_text())
             if saved['schema'] != schema:
                 raise RuntimeError('DB schema differs: application-only rollback requires review')
-        archive = self.download(f'releases/{target}/images.tar.gz', 'images.tar.gz')
-        with archive.open('rb') as source:
-            digest = hashlib.file_digest(source, 'sha256').hexdigest()
-        if digest != data['archive_sha256']:
-            raise ValueError('Archive checksum mismatch')
-        subprocess.run(['docker', 'load', '-i', str(archive)], check=True, capture_output=True)
-        for service, image in data['images'].items():
-            actual = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image['tag']],
-                                    check=True, capture_output=True, text=True).stdout.strip()
-            if actual != image['id']:
-                raise ValueError(f'{service} image digest mismatch')
-        # A backup failure aborts before changing running applications.
-        subprocess.run(['bash', str(BASE / 'backup.sh')], cwd=BASE, check=True, capture_output=True)
+        if services:
+            if data.get('format') == 2 or previous_images:
+                self.ensure_images(data, services)
+            else:
+                self.load_archive(data, 'images.tar.gz')
+                for service, image in data['images'].items():
+                    actual = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image['tag']],
+                                            check=True, capture_output=True, text=True).stdout.strip()
+                    if actual != image['id']:
+                        raise ValueError(f'{service} image digest mismatch')
+            # A backup failure aborts before changing running applications.
+            subprocess.run(['bash', str(BASE / 'backup.sh')], cwd=BASE, check=True, capture_output=True)
         try:
-            self.select(target)
+            if services:
+                if previous_images:
+                    self.select(target, data['images'], services)
+                else:
+                    self.select(target)
         except Exception:
             if self.schema() != schema:
                 raise RuntimeError('Deployment failed after DB migration; automatic app rollback blocked')
-            self.select(old['release'])
+            if previous_images:
+                self.select(old['release'], previous_images, services)
+            else:
+                self.select(old['release'])
             raise
-        state = {'release': target, 'previous': old['release'], 'schema': self.schema(),
-                 'commit': data.get('commit'), 'applied_at': int(time.time())}
+        state = {'protocol': 2, 'release': target, 'previous': old['release'], 'schema': self.schema(),
+                 'commit': data.get('commit'), 'images': data['images'], 'changed_services': services,
+                 'applied_at': int(time.time())}
         (self.runtime / 'current.json').write_text(json.dumps(state))
         (self.runtime / 'state.json').write_text(json.dumps(state))
         self.upload('state.json', f'states/{target}.json')
+        self.upload('state.json', 'states/current.json')
         return state
 
     def poll(self):

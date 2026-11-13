@@ -33,26 +33,55 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python .github/scripts/production_guard.py
-  web-check:
+  plan:
     needs: guard
-    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: "659355919826"
+      - name: Select changed runtime components
+        id: plan
+        env:
+          ROLLBACK_RELEASE: ${{ inputs.release }}
+        run: python .github/scripts/deployment_plan.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment-plan.json
+          retention-days: 90
+  web-check:
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/web.yml
   backend-check:
-    needs: guard
-    if: github.event_name == 'push'
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/ci.yml
   contracts-check:
-    needs: guard
-    if: github.event_name == 'push'
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/contracts.yml
   e2e-check:
-    needs: guard
-    if: github.event_name == 'push'
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/e2e.yml
   deploy:
-    needs: [guard, web-check, backend-check, contracts-check, e2e-check]
+    needs: [guard, plan, web-check, backend-check, contracts-check, e2e-check]
     if: >-
-      always() && needs.guard.result == 'success' &&
+      always() && needs.guard.result == 'success' && needs.plan.result == 'success' &&
+      needs.plan.outputs.deploy == 'true' &&
       ((github.event_name == 'workflow_dispatch') ||
        (needs.web-check.result == 'success' && needs.backend-check.result == 'success' &&
         needs.contracts-check.result == 'success' && needs.e2e-check.result == 'success'))
@@ -101,5 +130,7 @@ jobs:
             frontend-before.json
             deployment-result.json
             target-release.json
+            deployment-plan.json
+            production-current.json
           retention-days: 90
           if-no-files-found: ignore

@@ -27,6 +27,22 @@ if not current.exists():
         if actual != image['id']:
             raise RuntimeError('Running image differs from archived baseline; stop for operator review')
     current.write_text(json.dumps(state))
+# Upgrade metadata only after checking the running containers against their archive.
+state = host.current()
+release = module.release_id(state['release'])
+data = module.manifest(json.loads(host.download(f'releases/{release}/manifest.json', 'installed-manifest.json').read_text()))
+if data['release'] != release or state['schema'] != host.schema():
+    raise RuntimeError('Current archived release/schema differs; reconcile before upgrading')
+for service, image in data['images'].items():
+    container = host.compose('ps', '-q', service).stdout.strip()
+    actual = subprocess.run(['docker', 'inspect', '--format', '{{.Image}}', container],
+                            check=True, capture_output=True, text=True).stdout.strip()
+    if actual != image['id']:
+        raise RuntimeError('Running container differs from current release; stop before upgrading')
+state.update(protocol=2, images=data['images'])
+current.write_text(json.dumps(state))
+(host.runtime / 'state.json').write_text(json.dumps(state))
+host.upload('state.json', 'states/current.json')
 service = f'''[Unit]
 Description=Mujuthaek release requests from private S3
 After=docker.service network-online.target

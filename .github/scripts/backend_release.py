@@ -35,27 +35,34 @@ def put(key, source, immutable=False):
     aws(*args)
 
 
-def publish(release, commit):
+def publish(release, commit, base=None, services=None, frontend=None):
     identity(release)
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('Commit must be a full SHA')
-    images = {}
-    for service in ('api', 'notification'):
+    services = list(('api', 'notification') if services is None else services)
+    if not set(services) <= {'api', 'notification'}:
+        raise ValueError('Unknown image service')
+    images = dict(base['images']) if base else {}
+    for service in services:
         tag = f'mujuthaek-personal-{service}:{release}'
         digest = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', tag],
                                 check=True, capture_output=True, text=True).stdout.strip()
         images[service] = {'tag': tag, 'id': digest}
-    with Path('images.tar.gz').open('rb') as source:
-        digest = hashlib.file_digest(source, 'sha256').hexdigest()
-    data = {'release': release, 'commit': commit, 'images': images, 'archive_sha256': digest}
-    if Path('frontend-deployment.json').exists():
-        data['frontend'] = json.loads(Path('frontend-deployment.json').read_text())
+    digest = None
+    if services:
+        with Path('images.tar.gz').open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+    data = {'format': 2, 'release': release, 'commit': commit, 'images': images,
+            'archive_sha256': digest, 'archive_services': services,
+            'base_release': base['release'] if base else None, 'frontend': frontend}
     Path('manifest.json').write_text(json.dumps(data))
-    put(f'releases/{release}/images.tar.gz', 'images.tar.gz', immutable=True)
+    if services:
+        put(f'releases/{release}/images.tar.gz', 'images.tar.gz', immutable=True)
     put(f'releases/{release}/manifest.json', 'manifest.json', immutable=True)
+    return data
 
 
-def request(release, mode, request_id):
+def request(release, mode, request_id, expected_base=None):
     identity(release)
     identity(request_id)
     if mode not in ('deploy', 'rollback'):
@@ -63,7 +70,8 @@ def request(release, mode, request_id):
     data = get(f'releases/{release}/manifest.json', 'target-release.json')
     if data['release'] != release:
         raise ValueError('Manifest mismatch')
-    Path('desired.json').write_text(json.dumps({'release': release, 'mode': mode, 'request': request_id}))
+    Path('desired.json').write_text(json.dumps({'release': release, 'mode': mode, 'request': request_id,
+                                              'expected_base': expected_base}))
     put('desired.json', 'desired.json')
     for _ in range(156):
         try:
