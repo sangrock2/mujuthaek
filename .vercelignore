@@ -11,3 +11,5 @@ docs
 **/*.pem
 **/*.key
 **/*.log
+
+.vercel
