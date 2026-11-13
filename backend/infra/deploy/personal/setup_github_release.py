@@ -5,6 +5,13 @@ from aws_personal import AWS
 
 aws = AWS('mujuthaek', '659355919826')
 aws.verify(require_credits=False)
+oidc = json.loads(subprocess.run(['gh', 'api', 'repos/sangrock2/mujuthaek/actions/oidc/customization/sub'],
+                                  check=True, capture_output=True, text=True).stdout)
+if not oidc.get('use_default'):
+    raise RuntimeError('Inspect custom OIDC claims before configuring trust')
+prefix = oidc.get('sub_claim_prefix', 'repo:sangrock2/mujuthaek')
+if oidc.get('use_immutable_subject') and prefix != 'repo:sangrock2@59195181/mujuthaek@1445740935':
+    raise RuntimeError('Unexpected immutable repository identity')
 provider = 'arn:aws:iam::659355919826:oidc-provider/token.actions.githubusercontent.com'
 providers = aws.call('iam', 'list-open-id-connect-providers')['OpenIDConnectProviderList']
 if not any(p['Arn'] == provider for p in providers):
@@ -13,7 +20,7 @@ if not any(p['Arn'] == provider for p in providers):
 trust = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow', 'Principal': {'Federated': provider},
          'Action': 'sts:AssumeRoleWithWebIdentity', 'Condition': {'StringEquals': {
              'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-             'token.actions.githubusercontent.com:sub': 'repo:sangrock2/mujuthaek:ref:refs/heads/main'}}}]}
+             'token.actions.githubusercontent.com:sub': prefix + ':ref:refs/heads/main'}}}]}
 role = 'mujuthaek-github-release'
 roles = aws.call('iam', 'list-roles')['Roles']
 if any(r['RoleName'] == role for r in roles):

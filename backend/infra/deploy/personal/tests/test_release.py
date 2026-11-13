@@ -18,6 +18,7 @@ def load(name, path):
 
 host = load('release_host', Path(__file__).resolve().parents[1] / 'release_host.py')
 guard = load('pr_direction', ROOT / '.github/scripts/pr_direction.py')
+frontend = load('frontend_release', ROOT / '.github/scripts/frontend_release.py')
 
 
 def manifest(release='release-123'):
@@ -27,6 +28,24 @@ def manifest(release='release-123'):
 
 
 class ReleaseSafety(unittest.TestCase):
+    def test_vercel_cli_errors_redact_credentials(self):
+        with patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-vercel-secret'}):
+            failed = SimpleNamespace(returncode=1, stdout='', stderr='Rejected synthetic-vercel-secret')
+            with patch.object(frontend.subprocess, 'run', return_value=failed):
+                with self.assertRaises(RuntimeError) as error:
+                    frontend.vercel('deploy')
+                self.assertNotIn('synthetic-vercel-secret', str(error.exception))
+                self.assertIn('[REDACTED]', str(error.exception))
+
+    def test_vercel_candidate_is_bound_to_existing_team_and_project(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-token'}):
+            with patch.object(frontend, 'vercel', return_value={'deployment': {'id': 'dpl_example', 'url': 'https://example.vercel.app', 'readyState': 'READY'}}) as command:
+                with patch.object(frontend.Path, 'write_text') as write:
+                    frontend.candidate(cwd=directory)
+                    self.assertIn(frontend.PROJECT, write.call_args_list[0].args[0])
+                    self.assertIn(frontend.TEAM, write.call_args_list[0].args[0])
+                command.assert_called_once_with('deploy', '--prod', '--skip-domain', cwd=directory)
+
     def test_exact_repository_dev_to_main_only(self):
         for base, head, repo, expected in [
             ('main', 'dev', 'sangrock2/mujuthaek', True),
