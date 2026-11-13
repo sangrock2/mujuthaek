@@ -65,13 +65,13 @@ def request(release, mode, request_id):
         raise ValueError('Manifest mismatch')
     Path('desired.json').write_text(json.dumps({'release': release, 'mode': mode, 'request': request_id}))
     put('desired.json', 'desired.json')
-    for _ in range(120):
+    for _ in range(156):
         try:
             result = get(f'results/{request_id}.json', 'deployment-result.json')
         except subprocess.CalledProcessError:
             time.sleep(10)
             continue
-        if result.get('request') != request_id or not result.get('ok'):
+        if result.get('request') != request_id or result.get('release') != release or not result.get('ok'):
             raise RuntimeError(f'Deployment failed: {result.get("message", "check server journal")}')
         print(json.dumps(result))
         return

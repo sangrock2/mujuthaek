@@ -18,6 +18,10 @@ def smoke():
         with urllib.request.urlopen('https://mujuthaek.vercel.app' + path, timeout=30) as response:
             if response.status != status:
                 raise RuntimeError('Public smoke check failed')
+            if path.startswith('/api/'):
+                if 'application/json' not in response.headers.get('Content-Type', ''):
+                    raise RuntimeError('API returned an HTML page instead of JSON')
+                json.load(response)
 
 
 def main():
@@ -31,7 +35,7 @@ def main():
         run('frontend_release.py', 'restore-candidate')
         run('backend_release.py', 'rollback', old, '--request', request)
     else:
-        release = os.environ['GITHUB_SHA'] + '-' + os.environ['GITHUB_RUN_ID']
+        release = os.environ['GITHUB_SHA'] + '-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
         run('frontend_release.py', 'candidate')
         for service in ('api', 'notification'):
             subprocess.run(['docker', 'build', '--platform', 'linux/amd64', '-f',
@@ -49,6 +53,11 @@ def main():
     try:
         run('frontend_release.py', 'promote')
         smoke()
+        result = json.loads(Path('deployment-result.json').read_text())
+        summary = os.environ.get('GITHUB_STEP_SUMMARY')
+        if summary:
+            with open(summary, 'a', encoding='utf-8') as output:
+                output.write(f"Release: `{result['release']}`\n\nPrevious: `{result.get('previous')}`\n\nFrontend: https://mujuthaek.vercel.app\n")
     except Exception:
         run('frontend_release.py', 'restore-before')
         # A migration/schema mismatch is deliberately refused by the host.

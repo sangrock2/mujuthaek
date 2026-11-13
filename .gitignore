@@ -3,3 +3,8 @@
 *.iml
 .vscode/
 .DS_Store
+
+# Python helper caches and private operations review notes
+__pycache__/
+*.py[cod]
+docs/reviews/

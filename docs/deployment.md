@@ -8,7 +8,7 @@ PR Direction은 pull_request_target 이벤트에서 PR 메타데이터만 검사
 
 ## 운영 배포
 
-프론트는 Vercel 후보 빌드를 먼저 만들고, 백엔드는 GitHub runner에서 linux/amd64 이미지를 빌드한다. 운영 4GB 서버에서 이미지를 빌드하지 않는다. 이미지 두 개(api, notification)와 SHA256·이미지 ID·Git SHA·Vercel 버전을 비공개 S3 deployments/releases/<release>/에 기록한다. 릴리스 ID는 <Git SHA>-<GitHub run ID>다.
+프론트는 Vercel 후보 빌드를 먼저 만들고, 백엔드는 GitHub runner에서 linux/amd64 이미지를 빌드한다. 운영 4GB 서버에서 이미지를 빌드하지 않는다. 이미지 두 개(api, notification)와 SHA256·이미지 ID·Git SHA·Vercel 버전을 비공개 S3 deployments/releases/<release>/에 기록한다. 릴리스 ID는 <Git SHA>-<GitHub run ID>-<실행 회차>다.
 
 AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 deployments/에만 읽기·쓰기 권한이 있다. 장기 AWS 키나 운영 SSH 키를 GitHub에 등록하지 않는다. Lightsail은 systemd 타이머로 1분마다 요청을 읽어 체크섬 검증·백업·컨테이너 교체·상태 검사를 수행한다. 이미지에는 앱 비밀값을 넣지 않고 서버 기존 .env를 사용한다.
 
@@ -19,7 +19,7 @@ AWS 인증은 개인 저장소 main에 한정한 OIDC 역할을 사용하며 S3 
 - Secret: VERCEL_TOKEN — mujuthaek 팀 범위의 배포 토큰, 만료 시 교체
 - Variable: AWS_DEPLOY_ROLE_ARN — main 전용 역할
 - Variable: PRODUCTION_DEPLOY_ENABLED=true — 초기 소스 정렬과 검증 완료 뒤 활성화
-- Vercel Git 자동 배포는 비활성으로 두어 검사를 거치는 Actions 배포와 중복되지 않게 한다.
+- frontend/vercel.json의 git.deploymentEnabled=false로 Vercel Git 자동 배포를 비활성으로 두어 검사를 거치는 Actions 배포와 중복되지 않게 한다.
 
 ## 과거 버전으로 복구
 
