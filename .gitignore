@@ -8,3 +8,6 @@
 __pycache__/
 *.py[cod]
 docs/reviews/
+
+# Root-level Vercel CLI project link
+.vercel/

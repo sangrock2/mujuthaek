@@ -10,15 +10,20 @@ import urllib.request
 from pathlib import Path
 
 PROJECT = 'prj_TgaOO5IH8i8ETBXwM5bv2n7gtkj8'
-TEAM = 'mujuthaek'
+TEAM = 'team_BpOTTz4f6CcMVITAdEzieKXr'
 
 
 def vercel(*args, cwd=None):
-    # The token is read by Vercel from the environment, not printed or embedded in artifacts.
-    result = subprocess.run(['vercel', *args, '--scope', TEAM, '--yes', '--json', '--token', os.environ['VERCEL_TOKEN']], cwd=cwd,
-                            capture_output=True, text=True)
+    environment = dict(os.environ, VERCEL_ORG_ID=TEAM, VERCEL_PROJECT_ID=PROJECT)
+    result = subprocess.run(['vercel', *args, '--scope', TEAM, '--yes', '--json', '--token', environment['VERCEL_TOKEN']], cwd=cwd,
+                            capture_output=True, text=True, env=environment)
     if result.returncode:
-        raise RuntimeError('Vercel operation failed; check token scope and deployment permissions')
+        detail = (result.stderr or result.stdout)[-1800:]
+        for name in ('VERCEL_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'):
+            secret = environment.get(name)
+            if secret:
+                detail = detail.replace(secret, '[REDACTED]')
+        raise RuntimeError('Vercel operation failed: ' + detail.strip())
     return json.loads(result.stdout)
 
 
@@ -39,7 +44,10 @@ def restore_before():
 
 
 def candidate(cwd=None):
-    data = vercel('deploy', '--project', PROJECT, '--prod', '--skip-domain', cwd=cwd)
+    link = Path(cwd or Path.cwd()) / '.vercel'
+    link.mkdir(exist_ok=True)
+    (link / 'project.json').write_text(json.dumps({'projectId': PROJECT, 'orgId': TEAM, 'projectName': 'mujuthaek'}))
+    data = vercel('deploy', '--prod', '--skip-domain', cwd=cwd)
     deployment = data.get('deployment', data)
     if deployment.get('readyState') != 'READY':
         raise RuntimeError('Vercel build is not ready')
