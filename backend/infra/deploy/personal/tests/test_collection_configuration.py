@@ -3,6 +3,7 @@ import unittest
 import tempfile
 import subprocess
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,8 +14,19 @@ spec.loader.exec_module(collection)
 
 VALUES = {name: ('sk-example-personal-only' if name == 'OPENAI_API_KEY' else 'example-key%2Bvalue==') for name in collection.KEYS}
 
+publication_spec = importlib.util.spec_from_file_location('set_collection_publication', Path(__file__).resolve().parents[1] / 'set_collection_publication.py')
+publication = importlib.util.module_from_spec(publication_spec)
+with patch.dict(sys.modules, {'configure_collection': collection}):
+    publication_spec.loader.exec_module(publication)
+
 
 class CollectionConfiguration(unittest.TestCase):
+    def test_automatic_publication_requires_real_sample_review_before_reading_secrets(self):
+        with patch.object(Path, 'read_text', side_effect=AssertionError('must not read secrets')):
+            for mode in ('verified', 'legacy', 'invalid'):
+                with self.assertRaises(ValueError):
+                    publication.switch(mode)
+
     def test_blank_values_cannot_consume_following_comment_or_next_key(self):
         text = '\n'.join(f'{name}={value}' for name, value in VALUES.items())
         self.assertEqual(collection.credentials(text), VALUES)
