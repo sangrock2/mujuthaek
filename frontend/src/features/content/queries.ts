@@ -4,6 +4,7 @@ import { mockQuery } from "@/features/mock-query";
 import { announcements, faq, statesPreview, type FaqData } from "@/features/content/mocks/content";
 import { privacy, terms } from "@/features/content/mocks/content-legal";
 import { LEGAL_CONTACT } from "@/features/content/legal/documents";
+import { legalAnnouncements } from "@/features/content/legal/announcements";
 
 export const contentKeys = {
   announcements: ["content", "announcements"] as const,
@@ -14,7 +15,9 @@ export const contentKeys = {
 };
 
 export function useAnnouncements() {
-  return useQuery(mockQuery(contentKeys.announcements, USE_MOCKS ? announcements : []));
+  return useQuery(
+    mockQuery(contentKeys.announcements, USE_MOCKS ? announcements : legalAnnouncements),
+  );
 }
 
 const liveFaq: FaqData = {

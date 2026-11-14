@@ -31,6 +31,7 @@ export const routes = {
   faq: "/faq",
   terms: "/terms",
   privacy: "/privacy",
+  legal: "/legal",
   install: "/install",
   /** 「무주택자들은 어떻게 만들었나요」 소개 */
   howItWorks: "/how-it-works",

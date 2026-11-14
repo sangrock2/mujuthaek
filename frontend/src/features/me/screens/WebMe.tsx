@@ -42,6 +42,7 @@ const supportLinks = [
   { label: "무주택자들은 어떻게 만들었나요", href: routes.howItWorks },
   { label: "이용약관", href: routes.terms },
   { label: "개인정보처리방침", href: routes.privacy, strong: true },
+  { label: "약관·정책 이력", href: routes.legal },
 ];
 
 const grayButton =
