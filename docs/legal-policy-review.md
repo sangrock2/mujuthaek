@@ -1,0 +1,39 @@
+# 운영 법적 문서 작성 근거 및 점검
+
+2026-11-14 최초 작성. 본문은 frontend/src/features/content/legal/documents.ts에 두며 /privacy, /terms에서 로그인·JavaScript 없이 공개한다. 운영자 요청에 따라 서비스 명칭은 무주택자들, 문의는 towo2ssss@gmail.com, 무료·만 14세 이상을 기준으로 작성했고 개인 실명은 포함하지 않았다.
+
+## 확인한 실제 처리
+
+- 카카오·Google 로그인: SocialProfiles가 제공자 식별자와 nickname/name만 선택해 저장한다. profile_nickname/profile 범위이며 소셜 이메일·비밀번호 수집을 주장하지 않는다.
+- 계정·준비함·채팅·신고·선택 연락처·알림: 실제 서비스의 계정 연계 DB와 탈퇴 이벤트 처리에 맞춰 기술한다.
+- 조건: 기본 조건은 기기 저장 선택 시 localStorage 유효기간 30일, 정밀 조건은 sessionStorage/화면 메모리다. TTL 정리는 다음 조회 시 이루어지므로 30일째 물리 소거한다고 쓰지 않는다. 대출 요청에는 정확한 날짜·금액이 전송될 수 있어 ‘아무것도 서버로 보내지 않음’이라고 쓰지 않는다.
+- 인증: access token 기본 30분, refresh cookie 기본 14일, 서버에는 refresh hash, 탈퇴 재인증 티켓 기본 10분이다.
+- API 통계 DB: 원본 IP 14일 후 제거, 전체 요청 로그 90일 후 일일 정리. RequestLogFilter의 본문·query·회원 ID 미기록은 통계 DB 범위이며 프록시·진단 로그 전체에 확대해 단정하지 않는다.
+- notification: 알림함 및 완료된 발송·이벤트 기록 90일 정리, PENDING 및 탈퇴 처리의 예외를 설명한다.
+- 현재 Vercel production에는 API_ORIGIN만 있고 GA·지도·VAPID 공개 키는 없다. 함수 기본 리전은 iad1임을 값 공개 없이 확인했다. notification 메일·푸시 provider는 log다. 아직 켜지지 않은 외부 기능을 이미 쓰는 수탁자로 열거하지 않는다.
+- AWS DB·S3는 서울 리전이다. Vercel 호스팅·중계에는 국외 처리가 있으므로 ‘국내에서만 처리’라고 쓰지 않는다. Gmail 문의는 선택한 경우의 외부 메일 처리와 구분한다.
+- S3 backups/에는 30일 만료가 있으나 로컬 runtime/backups는 자동 만료하지 않는다. 모든 백업이 30일 뒤 삭제된다고 쓰지 않는다.
+
+## 운영자가 계속 확인해야 하는 항목
+
+1. 개인정보 보호법 제30조·시행령의 개인정보 보호책임자/담당 부서 및 연락처 표시 요건. 공개 본문에는 요청대로 실명 대신 ‘개인정보 보호업무 및 관련 고충 접수 창구: 무주택자들’과 이메일을 넣었다. 실명 미표기가 요건을 충족한다는 법적 보증은 하지 않는다.
+2. Vercel의 현재 하위처리자·실제 국가·보관·약정과 Gmail 문의 처리의 국외 처리 근거를 운영자가 확인해야 한다. 현재 함수 리전과 사업자 소재지는 확인했지만 모든 글로벌 CDN·지원 경로를 특정 국가 하나로 단정하지 않았다. 방침 공개가 별도 동의가 필요한 처리를 대체한다고 쓰지 않는다.
+3. 로컬 백업·진단 로그는 목적과 보관 필요성을 정기 검토하고 삭제 요청에 포함한다. 기간을 고정하려면 실제 정리 작업도 함께 적용해야 하며 이 변경으로 기존 DB·백업을 삭제하지 않는다.
+4. 본문 게시와 가입 동의 증빙은 별개다. 현재 로그인 화면은 약관 동의 안내와 개인정보 처리 고지를 구분하며, 별도 동의가 필요한 정보 처리에 대한 동의 기록 기능까지 이번 문서 공개로 구현됐다고 보지 않는다.
+5. 만 14세 이상은 이용 정책이며 본인확인·연령인증 기능을 구현했다고 주장하지 않는다. 아동 정보를 알게 된 경우의 처리와 가족 정보의 최소 입력 원칙을 안내한다.
+6. 서비스·수탁자·국외 처리·선택 분석·유료화 등이 바뀌면 버전·시행일·고지·필요한 동의를 갱신한다. 과거 버전이 없는 최초 문서에 가짜 이력·변경 예고를 넣지 않는다.
+
+## 공식 참고 자료
+
+- 개인정보보호위원회 2026 개인정보 처리방침 작성지침: https://www.privacy.go.kr/front/bbs/bbsView.do?bbsNo=BBSMSTR_000000000049&bbscttNo=20885
+- 개인정보 보호법 제30조: https://www.law.go.kr/법령/개인정보보호법/제30조
+- 개인정보 보호법 제28조의8: https://www.law.go.kr/법령/개인정보보호법/제28조의8
+- 개인정보 보호법 제31조: https://www.law.go.kr/법령/개인정보보호법/제31조
+- 약관의 규제에 관한 법률 제7조: https://www.law.go.kr/법령/약관의규제에관한법률/제7조
+- Vercel Privacy Notice: https://vercel.com/legal/privacy-notice
+- Vercel runtime log retention: https://vercel.com/docs/logs/runtime
+- Vercel subprocessors: https://vercel.com/legal/sub-processors
+- Google 개인정보처리방침: https://policies.google.com/privacy?hl=ko
+- Google OAuth 앱 홈페이지 안내: https://support.google.com/cloud/answer/13807376?hl=en
+
+문서 원문은 위 자료를 복제하지 않고 확인한 서비스 처리와 이용자 권리를 중심으로 새로 작성했다. 법률 전문가 검토나 Google 검증 통과를 보증하는 문구는 넣지 않는다.
