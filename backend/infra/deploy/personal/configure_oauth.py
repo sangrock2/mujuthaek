@@ -76,7 +76,7 @@ def apply(values):
     settings = dict(line.split('=', 1) for line in original.splitlines() if line and not line.startswith('#'))
     if settings.get('S3_BUCKET') != 'mujuthaek-personal-659355919826-raw':
         raise RuntimeError('Unexpected personal deployment')
-    if settings.get('OAUTH_REDIRECT_BASE_URL') != 'https://mujuthaek.vercel.app':
+    if settings.get('OAUTH_REDIRECT_BASE_URL') not in {'https://mujuthaek.vercel.app', 'https://mujuthaek.store'}:
         raise RuntimeError('Unexpected OAuth callback origin')
     pending = private_file(merge(original, values))
     changed = False
