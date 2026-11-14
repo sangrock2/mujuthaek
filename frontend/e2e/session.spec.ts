@@ -21,7 +21,11 @@ test("인증·refresh 회전·계정 분리·타인 수정 방지", async ({ pag
     page.getByRole("heading", { name: "E2E 청년 주거 신청 공고", exact: true }),
   ).toBeVisible();
   await page.goto("/me");
-  await page.getByRole("button", { name: "로그아웃", exact: true }).click();
+  // 로그아웃 응답의 쿠키 삭제가 다음 테스트 계정의 쿠키를 지우지 않도록 완료 후 이동을 기다려요.
+  await Promise.all([
+    page.waitForURL("/"),
+    page.getByRole("button", { name: "로그아웃", exact: true }).click(),
+  ]);
   await session(page, "u2");
   const secondAuth = await bearer(page);
   expect(
