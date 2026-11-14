@@ -2,6 +2,7 @@ package kr.mujuthaek.notification.delivery.email;
 
 import java.time.Duration;
 import kr.mujuthaek.notification.delivery.DeliveryException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkClientException;
@@ -32,12 +33,16 @@ class SesEmailSender implements EmailSender, AutoCloseable {
 
   private final SesV2Client ses;
   private final String from;
+  private final String feedbackAddress;
   private final long intervalNanos;
   private long nextSendAt = System.nanoTime();
 
-  SesEmailSender(MailProperties properties) {
+  SesEmailSender(
+      MailProperties properties,
+      @Value("${notification.mail.feedback-address:}") String feedbackAddress) {
     this.ses = SesV2Client.builder().region(Region.of(properties.ses().region())).build();
     this.from = properties.from();
+    this.feedbackAddress = feedbackAddress;
     this.intervalNanos =
         Duration.ofSeconds(1).toNanos() / Math.max(1, properties.ses().maxPerSecond());
   }
@@ -45,7 +50,22 @@ class SesEmailSender implements EmailSender, AutoCloseable {
   @Override
   public String send(EmailMessage message) throws DeliveryException {
     throttle();
-    SendEmailRequest request =
+    SendEmailRequest request = request(message);
+    try {
+      return ses.sendEmail(request).messageId();
+    } catch (MessageRejectedException | MailFromDomainNotVerifiedException e) {
+      throw new DeliveryException("SES_" + code(e), true, e);
+    } catch (AccountSuspendedException | SendingPausedException e) {
+      throw new DeliveryException("SES_" + code(e), false, e);
+    } catch (SesV2Exception e) {
+      throw new DeliveryException("SES_" + code(e), false, e);
+    } catch (SdkClientException e) {
+      throw new DeliveryException("SES_CLIENT", false, e);
+    }
+  }
+
+  SendEmailRequest request(EmailMessage message) {
+    var request =
         SendEmailRequest.builder()
             .fromEmailAddress(from)
             .destination(Destination.builder().toAddresses(message.to()).build())
@@ -56,19 +76,11 @@ class SesEmailSender implements EmailSender, AutoCloseable {
                             .subject(text(message.subject()))
                             .body(Body.builder().text(text(message.text())).build())
                             .build())
-                    .build())
-            .build();
-    try {
-      return ses.sendEmail(request).messageId();
-    } catch (MessageRejectedException | MailFromDomainNotVerifiedException e) {
-      throw new DeliveryException("SES_" + code(e), true, e);
-    } catch (AccountSuspendedException | SendingPausedException e) {
-      throw new DeliveryException("SES_" + code(e), false, e); // 계정 문제: 풀리면 다시 보내요
-    } catch (SesV2Exception e) {
-      throw new DeliveryException("SES_" + code(e), false, e);
-    } catch (SdkClientException e) {
-      throw new DeliveryException("SES_CLIENT", false, e); // 네트워크·자격 증명
+                    .build());
+    if (!feedbackAddress.isBlank()) {
+      request.feedbackForwardingEmailAddress(feedbackAddress).replyToAddresses(feedbackAddress);
     }
+    return request.build();
   }
 
   private synchronized void throttle() {
