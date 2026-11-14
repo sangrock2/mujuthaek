@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { Logo } from "@/shared/brand/Logo";
 import { LEGAL_CONTACT, type LegalDocument } from "@/features/content/legal/documents";
+import { LegalHelp } from "./LegalHelp";
 
 /** Public legal text is rendered on the server, including when JavaScript is disabled. */
-export function PublishedLegalDocument({ document }: { document: LegalDocument }) {
+export function PublishedLegalDocument({
+  document,
+  archived = false,
+}: {
+  document: LegalDocument;
+  archived?: boolean;
+}) {
   const [year, month, day] = document.effectiveDate.split("-").map(Number);
   return (
     <div className="bg-bg text-text flex min-h-screen flex-col">
@@ -20,6 +27,9 @@ export function PublishedLegalDocument({ document }: { document: LegalDocument }
             aria-label="이용 안내"
             className="flex flex-wrap gap-x-[20px] gap-y-[10px] text-[14px]"
           >
+            <Link href="/legal" className="text-text-sub underline-offset-4 hover:underline">
+              약관·정책 이력
+            </Link>
             <Link
               href="/terms"
               aria-current={document.path === "/terms" ? "page" : undefined}
@@ -58,6 +68,26 @@ export function PublishedLegalDocument({ document }: { document: LegalDocument }
             {document.description}
           </p>
         </div>
+
+        <div className="border-line bg-surface mb-[24px] rounded-sm border border-solid p-[16px] text-[14px] leading-[1.8]">
+          {archived
+            ? "버전별로 보존한 전문입니다. 현재 적용 문서는 각 문서의 기본 주소에서 확인할 수 있습니다."
+            : "현재 적용 중인 문서입니다. 공고일·시행일과 버전별 전문은 이력에서 확인할 수 있습니다."}{" "}
+          <Link href="/legal" className="text-brand-strong underline underline-offset-4">
+            약관·정책 이력 보기
+          </Link>
+          {archived && (
+            <>
+              {" "}
+              ·{" "}
+              <Link href={document.path} className="text-brand-strong underline underline-offset-4">
+                현재 적용 문서 보기
+              </Link>
+            </>
+          )}
+        </div>
+
+        {!archived && <LegalHelp privacy={document.path === "/privacy"} />}
 
         <aside
           aria-label="주요 내용"
