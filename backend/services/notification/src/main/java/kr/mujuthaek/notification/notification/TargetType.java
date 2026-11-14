@@ -5,5 +5,6 @@ public enum TargetType {
   NOTICE, // notices
   BENEFIT, // benefits
   STARTUP_SUPPORT, // notice.policy_judgments (창업지원 사업)
-  SPACE_RECRUITMENT // notice.policy_judgments (사업공간 모집)
+  SPACE_RECRUITMENT, // notice.policy_judgments (사업공간 모집)
+  REPORT // 일반 문의·제보 답변
 }

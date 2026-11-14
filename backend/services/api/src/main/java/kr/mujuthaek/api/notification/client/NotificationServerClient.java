@@ -20,7 +20,8 @@ import tools.jackson.databind.JsonNode;
  * 못하면 빈 값이라 화면은 알림함 지표만 보여 줘요. 토큰·주소는 로그에 남기지 않아요.
  */
 @Component
-public class NotificationServerClient {
+public class NotificationServerClient
+    implements kr.mujuthaek.api.user.service.EmailVerificationSender {
 
   private static final Logger log = LoggerFactory.getLogger(NotificationServerClient.class);
 
@@ -51,6 +52,15 @@ public class NotificationServerClient {
       log.warn("알림 서버 발송 통계를 받지 못했어요 ({})", e.getClass().getSimpleName());
       return Optional.empty();
     }
+  }
+
+  /** 인증 링크는 주소·토큰과 함께 로그에 남기지 않아요. */
+  public void sendEmailVerification(String address, String token) {
+    http.post()
+        .uri("/internal/email-verification")
+        .body(java.util.Map.of("email", address, "token", token))
+        .retrieve()
+        .toBodilessEntity();
   }
 
   private static RestClient.Builder defaultBuilder(Properties properties) {

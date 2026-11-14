@@ -17,10 +17,12 @@ class EmailChannel implements NotificationChannel {
 
   private final EmailSender sender;
   private final MailProperties properties;
+  private final EmailConsentClient consent;
 
-  EmailChannel(EmailSender sender, MailProperties properties) {
+  EmailChannel(EmailSender sender, MailProperties properties, EmailConsentClient consent) {
     this.sender = sender;
     this.properties = properties;
+    this.consent = consent;
   }
 
   @Override
@@ -41,7 +43,28 @@ class EmailChannel implements NotificationChannel {
   @Override
   public String send(UUID userId, String address, List<OutgoingNotification> notifications)
       throws DeliveryException {
-    return sender.send(new EmailMessage(address, subject(notifications), text(notifications)));
+    String unsubscribe = "";
+    if ("ses".equals(properties.provider())) {
+      var allowed = new java.util.ArrayList<OutgoingNotification>();
+      for (OutgoingNotification n : notifications) {
+        var result = consent.check(userId, address, n.type().name());
+        if (result.allowed()) {
+          allowed.add(n);
+          unsubscribe = result.unsubscribeToken();
+        }
+      }
+      if (allowed.isEmpty()) throw new DeliveryException("EMAIL_CONSENT_WITHDRAWN", true);
+      notifications = allowed;
+    }
+    String body = text(notifications);
+    if (!unsubscribe.isBlank())
+      body +=
+          "\n이메일 수신 해제: "
+              + properties.webBaseUrl()
+              + "/email/unsubscribe#token="
+              + unsubscribe
+              + "\n";
+    return sender.send(new EmailMessage(address, subject(notifications), body));
   }
 
   private static String subject(List<OutgoingNotification> notifications) {

@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import kr.mujuthaek.api.notice.service.NoticeQueryService;
+import kr.mujuthaek.api.user.service.EmailNotificationService;
 import kr.mujuthaek.api.user.service.NotificationPreference;
 import kr.mujuthaek.api.user.service.UserNotificationQueryService;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -16,7 +17,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
 
 /**
- * 알림 받을 회원을 user 모듈 조회 메서드로 찾아요 (관심 조건·관심 공고·알림 설정). 이메일은 아직 받지 않아서 넣지 않고(운영 채널은 웹 푸시), 웹 푸시 기기는
+ * 알림 받을 회원을 user 모듈 조회 메서드로 찾아요 (관심 조건·관심 공고·알림 설정). 이메일은 인증·별도 동의·종류별 수신 설정을 모두 확인하며, 웹 푸시 기기는
  * {@link NotificationRequests}가 붙여요.
  *
  * <p>설정 파일의 테스트 회원(app.notification.test-recipients)은 모든 알림에 덧붙여요. 기본값은 비어 있고 로컬 확인(e2e)에서만 채워요.
@@ -27,12 +28,17 @@ class UserRecipientFinder implements RecipientFinder {
   private final UserNotificationQueryService users;
   private final NoticeQueryService notices;
   private final Properties properties;
+  private final EmailNotificationService emails;
 
   UserRecipientFinder(
-      UserNotificationQueryService users, NoticeQueryService notices, Properties properties) {
+      UserNotificationQueryService users,
+      NoticeQueryService notices,
+      Properties properties,
+      EmailNotificationService emails) {
     this.users = users;
     this.notices = notices;
     this.properties = properties;
+    this.emails = emails;
   }
 
   @Override
@@ -55,8 +61,10 @@ class UserRecipientFinder implements RecipientFinder {
   public List<Recipient> forFavorite(String targetType, UUID targetId, String type) {
     List<UUID> audience = new ArrayList<>(users.favoriteAudience(targetType, targetId));
     if (NoticeNotificationService.TARGET.equals(targetType)) {
+      if (type.startsWith("DEADLINE_")) audience.addAll(emails.preparing(targetId));
       for (UUID merged : notices.mergedFrom(targetId)) {
         audience.addAll(users.favoriteAudience(targetType, merged));
+        if (type.startsWith("DEADLINE_")) audience.addAll(emails.preparing(merged));
       }
     }
     return recipients(audience, type);
@@ -66,17 +74,29 @@ class UserRecipientFinder implements RecipientFinder {
   public Recipient forReporter(UUID userId) {
     NotificationPreference p =
         users.preferences(List.of(userId)).getOrDefault(userId, NotificationPreference.DEFAULT);
-    return new Recipient(userId, null, p.quietEnabled(), p.enabled("REPORT_ANSWERED"));
+    var email = emails.recipients(List.of(userId)).get(userId);
+    return new Recipient(
+        userId,
+        email != null && email.allows("REPORT_ANSWERED") ? email.email() : null,
+        p.quietEnabled(),
+        p.enabled("REPORT_ANSWERED"));
   }
 
   private List<Recipient> recipients(List<UUID> audience, String type) {
     Map<UUID, NotificationPreference> prefs = users.preferences(audience);
+    var addresses = emails.recipients(audience);
     List<Recipient> out = new ArrayList<>();
     Set<UUID> seen = new HashSet<>();
     for (UUID id : audience) {
       NotificationPreference p = prefs.getOrDefault(id, NotificationPreference.DEFAULT);
       if (seen.add(id)) {
-        out.add(new Recipient(id, null, p.quietEnabled(), p.enabled(type)));
+        var email = addresses.get(id);
+        out.add(
+            new Recipient(
+                id,
+                email != null && email.allows(type) && p.enabled(type) ? email.email() : null,
+                p.quietEnabled(),
+                p.enabled(type)));
       }
     }
     for (TestRecipient t : properties.testRecipients()) {
