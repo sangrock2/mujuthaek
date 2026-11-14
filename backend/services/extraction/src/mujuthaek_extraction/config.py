@@ -107,6 +107,7 @@ class Settings:
     # 주거·이주 혜택(BENEFIT) 정제를 켤지 (EXTRACTION_BENEFIT_ENABLED). 2026-10-25 추가. 켜면 쌓인 정책(로컬 온통청년만 3천여 건)이
     # 유료 AI를 타므로 배포 때 사람이 켭니다. 꺼져 있으면 이전처럼 BENEFIT 이벤트를 받고 넘깁니다
     benefit_enabled: bool = False
+    serial_events: bool = False  # 작은 운영 서버에서는 공고·정책·재시도를 한 건씩 처리해요
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -162,6 +163,7 @@ class Settings:
             parallel_calls=max(1, int(os.getenv("EXTRACTION_PARALLEL_CALLS", "4"))),
             parallel_stagger_seconds=max(0.0, float(os.getenv("EXTRACTION_PARALLEL_STAGGER_SECONDS", "1.5"))),
             benefit_enabled=os.getenv("EXTRACTION_BENEFIT_ENABLED", "false").lower() == "true",
+            serial_events=os.getenv("EXTRACTION_SERIAL_EVENTS", "false").lower() == "true",
         )
 
     def export_tracing(self) -> list[str]:

@@ -35,6 +35,8 @@ def main() -> None:
     commands.add_parser("relay")
     commands.add_parser("review-api")
     commands.add_parser("declare")
+    release_command = commands.add_parser("release-publications")
+    release_command.add_argument("--limit", type=int, default=100)
     replay_command = commands.add_parser("replay-dlq")
     replay_command.add_argument("--queue", choices=["notice", "policy"], default="policy")
     replay_command.add_argument("--limit", type=int, default=100)
@@ -75,6 +77,12 @@ def main() -> None:
         print(f"발행 {outbox.relay_once(conn, channel)}건")
         connection.close()
         conn.close()
+    elif args.command == "release-publications":
+        from mujuthaek_extraction.publication_gate import PublicationGate
+
+        with db.connect(settings.db_url) as conn:
+            conn.autocommit = True
+            print(f"보류본 발행 대기 전환 {PublicationGate().release(conn, limit=args.limit)}건")
     elif args.command == "review-api":
         from mujuthaek_extraction.review_api import ReviewService, serve
 

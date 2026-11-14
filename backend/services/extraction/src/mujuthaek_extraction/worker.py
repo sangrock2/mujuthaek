@@ -23,7 +23,7 @@ import logging
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from typing import Any
 
@@ -273,6 +273,7 @@ class Processor:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._processing_lock = threading.RLock()
         self.models = ModelFactory(settings)
         if settings.local_files_dir:  # S3 키가 정해지기 전 시험용 PDF 폴더
             self.reader = LocalDirSourceReader(settings.local_files_dir)
@@ -317,6 +318,13 @@ class Processor:
             return Outcome("FAILED", cost_usd=spent, error=f"처리 중 오류: {type(error).__name__}: {str(error)[:300]}")
 
     def handle(self, store: JobStore, raw_event: dict[str, Any]) -> str | None:
+        with self.processing_slot():
+            return self._handle_serialized(store, raw_event)
+
+    def processing_slot(self):
+        return self._processing_lock if self.settings.serial_events else nullcontext()
+
+    def _handle_serialized(self, store: JobStore, raw_event: dict[str, Any]) -> str | None:
         """처리하고 저장합니다. 이미 끝난 이벤트면 None."""
         event_id = raw_event.get("eventId")
         if not isinstance(event_id, str):
@@ -664,7 +672,8 @@ def consume(settings: Settings, processor: Processor, health: Health | None = No
             raw_event = json.loads(body)
             if not isinstance(raw_event, dict):
                 raise ValueError("이벤트가 객체가 아닙니다.")
-            decision = judge_message(settings, processor, raw_event, retries, why)
+            with processor.processing_slot():
+                decision = judge_message(settings, processor, raw_event, retries, why)
         except Exception as error:
             log.exception("판정 틀을 만들지 못했습니다. .dlq로 보냅니다")
             decision = "dlq"

@@ -37,6 +37,9 @@ class Settings:
     intake_space: int = 10  # 사업공간 모집
     intake_policy: int = 500  # 지원 정책 (혜택·창업 지원, 출처 합쳐서)
 
+    active_only: bool = False  # 게시일이 오래돼도 모집 중·예정·상시모집이면 포함해요
+    policy_hourly: bool = False  # 정책 출처도 평일 09~19시 매시간 확인해요
+
     @property
     def intake_limits(self) -> dict[str, int]:
         return {
@@ -63,6 +66,8 @@ class Settings:
             since_days=int(os.getenv("COLLECTOR_SINCE_DAYS", "365")),
             detail_limit=int(os.getenv("COLLECTOR_DETAIL_LIMIT", "20")),
             parallel_sources=max(1, int(os.getenv("COLLECTOR_PARALLEL_SOURCES", "4"))),
+            active_only=os.getenv("COLLECTOR_ACTIVE_ONLY", "false").lower() == "true",
+            policy_hourly=os.getenv("COLLECTOR_POLICY_HOURLY", "false").lower() == "true",
             intake_housing_lh=int(os.getenv("COLLECTOR_INTAKE_HOUSING_LH", "10")),
             intake_housing_other=int(os.getenv("COLLECTOR_INTAKE_HOUSING_OTHER", "10")),
             intake_space=int(os.getenv("COLLECTOR_INTAKE_SPACE", "10")),

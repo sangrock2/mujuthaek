@@ -70,7 +70,9 @@ def decide(conn: Any, limits: dict[str, int]) -> list[Decision]:
     decisions = []
     for group in GROUPS:
         table, day, where = _TABLES[group]
-        limit = max(0, limits.get(group, DEFAULT_LIMITS[group]))
+        limit = limits.get(group, DEFAULT_LIMITS[group])
+        if limit < -1:
+            raise ValueError("처음 수집 개수는 -1(전체) 또는 0 이상의 정수여야 합니다")
         with conn.transaction():
             # 같은 묶음을 두 곳에서 동시에 고르지 않게 (수집기가 뜰 때·매일 고르기)
             conn.execute("select pg_advisory_xact_lock(hashtext('intake:' || %s))", (group,))
@@ -79,18 +81,19 @@ def decide(conn: Any, limits: dict[str, int]) -> list[Decision]:
             held = conn.execute(f"select count(*) from {table} where status = %s and {where}", (HELD,)).fetchone()[0]
             if not held:
                 continue
+            limit_sql = " limit %s" if limit >= 0 else ""
             kept_days = conn.execute(
                 f"update {table} set status = %s, updated_at = now() where id in ("
-                f"select id from {table} where status = %s and {where} order by {day} desc nulls last, created_at desc limit %s) "
+                f"select id from {table} where status = %s and {where} order by {day} desc nulls last, created_at desc{limit_sql}) "
                 f"returning {day}",
-                (PENDING, HELD, limit),
+                (PENDING, HELD, limit) if limit >= 0 else (PENDING, HELD),
             ).fetchall()
-            ignored = conn.execute(
+            ignored = 0 if limit == -1 else conn.execute(
                 f"update {table} set status = %s, last_error = %s, updated_at = now() where status = %s and {where}",
                 (IGNORED, IGNORED_REASON, HELD),
             ).rowcount
             days = [d for (d,) in kept_days if d]
-            cutoff = min(days) if days else None
+            cutoff = min(days) if days and limit >= 0 else None
             conn.execute(
                 "insert into intake_decisions (group_code, limit_count, kept, ignored, cutoff_on) values (%s, %s, %s, %s, %s)",
                 (group, limit, len(kept_days), ignored, cutoff),
@@ -122,7 +125,7 @@ def summary(conn: Any) -> list[str]:
     for group in GROUPS:
         if group in rows:
             limit, kept, ignored, cutoff, at = rows[group]
-            if not limit and not kept and not ignored:
+            if limit == -1 or (not limit and not kept and not ignored):
                 lines.append(f"{group:14} 제한 없음 (이미 데이터가 있던 DB)")
             else:
                 lines.append(f"{group:14} 골랐음 {at:%m-%d %H:%M}  남김 {kept}/{limit}  안 씀 {ignored}  기준일 {cutoff or '-'}")

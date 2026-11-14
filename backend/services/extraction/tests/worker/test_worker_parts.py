@@ -344,7 +344,7 @@ def bare_processor(run):
 
     processor = Processor.__new__(Processor)
     processor._running, processor._running_lock = {}, threading.Lock()
-    processor.settings = SimpleNamespace(db_url=None, model_mode="recorded", notice_budget_usd=0.5)  # 비용 장부 없음
+    processor.settings = SimpleNamespace(db_url=None, model_mode="recorded", notice_budget_usd=0.5, serial_events=False)  # 비용 장부 없음
     processor.run = lambda raw_event, store=None, ledger=None: run(raw_event)
     return processor
 

@@ -137,3 +137,24 @@ def test_decide_keeps_latest_per_group_and_ignores_the_rest():
     finally:
         conn.execute("truncate intake_decisions")
         store.close()
+
+
+@pytest.mark.skipif(not DB_URL, reason="COLLECTOR_TEST_DB_URL이 없어요")
+def test_unlimited_intake_keeps_all_dates_without_a_cutoff():
+    store = PostgresStore(DB_URL)
+    conn = store.conn
+    try:
+        conn.execute("truncate intake_decisions, outbox, raw_units, raw_texts, raw_files, raw_post_versions, raw_posts")
+        for number, posted in enumerate([date(2020, 1, 1), date(2026, 11, 14), None]):
+            conn.execute(
+                "insert into raw_posts (id, source_code, board_key, post_key, kind, title, posted_on, list_item, status) "
+                "values (gen_random_uuid(), 'lh', 'b', %s, 'NOTICE', '모집', %s, '{}', 'HELD')", (f'all-{number}', posted),
+            )
+        decisions = intake.decide(conn, {"HOUSING_LH": -1})
+        chosen = next(d for d in decisions if d.group == "HOUSING_LH")
+        assert (chosen.kept, chosen.ignored, chosen.cutoff_on) == (3, 0, None)
+        assert conn.execute("select count(*) from raw_posts where source_code = 'lh' and status = 'PENDING'").fetchone()[0] == 3
+        assert intake.open_status(store, "HOUSING_LH", date(1990, 1, 1)) == "PENDING"
+    finally:
+        conn.execute("truncate intake_decisions")
+        store.close()

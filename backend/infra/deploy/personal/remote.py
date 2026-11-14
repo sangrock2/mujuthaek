@@ -2,6 +2,8 @@
 import argparse
 import json
 import subprocess
+import re
+import shlex
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -24,12 +26,19 @@ def run(action, value):
     target = f"{endpoint['user']}@{endpoint['host']}"
     if action == "exec":
         return subprocess.run(["ssh", *options, target, value]).returncode
+    if action == "upload-private":
+        source = Path(value)
+        if source.is_symlink() or not source.is_file() or not re.fullmatch(r'[.A-Za-z0-9_-]+', source.name):
+            raise ValueError("Private upload requires a regular file with a safe name")
+        command = 'umask 077; set -C; cat > ' + shlex.quote('/home/ubuntu/' + source.name)
+        with source.open('rb') as stream:
+            return subprocess.run(["ssh", *options, target, command], stdin=stream).returncode
     return subprocess.run(["scp", *options, value, f"{target}:/home/ubuntu/{Path(value).name}"]).returncode
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["exec", "upload"])
+    parser.add_argument("action", choices=["exec", "upload", "upload-private"])
     parser.add_argument("value")
     args = parser.parse_args()
     raise SystemExit(run(args.action, args.value))

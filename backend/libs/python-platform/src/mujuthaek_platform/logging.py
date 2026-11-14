@@ -9,10 +9,43 @@
 
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
+from urllib.parse import quote, quote_plus, unquote
 
 _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime", "taskName"}
+_SECRET_NAMES = (
+    "OPENAI_API_KEY",
+    "LH_API_KEY",
+    "DATA_GO_KR_SERVICE_KEY",
+    "YOUTHCENTER_API_KEY",
+    "BIZINFO_API_KEY",
+    "COLLECTOR_ADMIN_TOKEN",
+    "EXTRACTION_REVIEW_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "DB_URL",
+    "RABBITMQ_URL",
+)
+
+
+def redact_secrets(text: str) -> str:
+    for name in _SECRET_NAMES:
+        secret = os.getenv(name) or ""
+        if len(secret) < 8:
+            continue
+        decoded = unquote(secret)
+        for value in {
+            secret,
+            decoded,
+            quote(secret, safe=""),
+            quote_plus(secret),
+            quote(decoded, safe=""),
+            quote_plus(decoded),
+        }:
+            text = text.replace(value, "[REDACTED]")
+    return text
 
 
 class JsonFormatter(logging.Formatter):
@@ -32,7 +65,7 @@ class JsonFormatter(logging.Formatter):
         data.update({k: v for k, v in vars(record).items() if k not in _STANDARD and not k.startswith("_")})
         if record.exc_info:
             data["exception"] = self.formatException(record.exc_info)
-        return json.dumps(data, ensure_ascii=False, default=str)
+        return redact_secrets(json.dumps(data, ensure_ascii=False, default=str))
 
 
 def setup(service: str, level: int | str = logging.INFO) -> None:

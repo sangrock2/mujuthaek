@@ -71,7 +71,7 @@ def run_source(
     log.info("수집 시작", extra={"source": source.code, "recheck": recheck})
     try:
         if recheck:
-            count = store.requeue_open_posts(source.code, today, settings.since_days)
+            count = store.requeue_open_posts(source.code, today, -1 if settings.active_only else settings.since_days)
             log.info("정정 확인 대상", extra={"source": source.code, "count": count})
         for board in source.boards:
             run_board(ctx, board, recheck=recheck)
@@ -92,7 +92,7 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
     source, store, settings = ctx.source, ctx.store, ctx.settings
     state = store.board_state(source.code, board.key)
     queued_before = store.queued_posts(source.code, board.key, 1)
-    cutoff = ctx.today - timedelta(days=settings.since_days)
+    cutoff = date.min if settings.active_only else ctx.today - timedelta(days=settings.since_days)
     first_page_hash: str | None = None
 
     for page in range(1, settings.max_pages + 1):
@@ -142,9 +142,20 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
     store.save_board_state(source.code, board.key, state)
 
 
+def active_notice(item: ListItem, today: date) -> bool:
+    """목록에서 종료를 확인한 공고만 제외해요. 날짜 미정·상시모집은 게시일로 버리지 않아요."""
+    status = (item.list_status or "").replace(" ", "")
+    if status in {"마감", "종료", "취소", "철회", "접수마감", "모집마감", "모집종료", "공고종료", "공고취소"}:
+        return False
+    return item.deadline_on is None or item.deadline_on >= today
+
+
 def register(ctx: Context, item: ListItem, cutoff: date) -> None:
     """목록에서 처음 본 글을 분류해서 저장해요. 열 글은 PENDING(처음 수집을 고르기 전이면 HELD), 안 열 글은 SKIPPED."""
     source, store = ctx.source, ctx.store
+    if ctx.settings.active_only and not active_notice(item, ctx.today):
+        # 다시 모집을 열면 다음 회차에 등록할 수 있도록 종료 글은 초기 적재하지 않아요.
+        return
     kind = source.pre_classify(item) or cls.classify(item.title)
     status, parent, reason = SKIPPED, None, None
     if item.posted_on and item.posted_on < cutoff:
@@ -286,7 +297,8 @@ def process_post(ctx: Context, post: PostRow) -> bool:
 
     saved: list[tuple[SavedFile, bytes | None]] = []  # (DB에 저장할 정보, S3에 올릴 원본. 이어 쓴 이전 첨부는 None)
     notice_name, notice_text = None, None
-    keep_until = stored_until(post.title, post.deadline_on, post.posted_on, ctx.today)
+    retention_day = ctx.today if ctx.settings.active_only and post.deadline_on is None else post.posted_on
+    keep_until = stored_until(post.title, post.deadline_on, retention_day, ctx.today)
     # 첨부 일시 오류면 마지막 시도 전까지 다음에 다시 받아요(FileUnavailable). 마지막 시도엔 이전 버전의 같은 첨부(주소, 없으면 이름이 같은 것)를
     # 이어 쓰고, 이전 것이 없으면 그 파일 없이 저장해요. 이전 버전이 있는 글을 그 파일 없이 저장하면 몇 시간 장애에도 열린 공고가 모두 공고문 없는
     # 버전이 되어 추출이 다시 돌아요. 본문이 그대로면 해시도 그대로라 새 버전이 되지 않아요

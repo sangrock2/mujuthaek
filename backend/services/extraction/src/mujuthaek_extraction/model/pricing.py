@@ -21,21 +21,33 @@ class Price:
     cache_write: float
     output: float  # 추론 토큰 포함
     checked: str
+    long_context_tokens: int | None = None
 
     def usd(self, input_tokens: int, cached: int, writes: int, output_tokens: int) -> float:
         """사용량 → 비용. input_tokens는 캐시 읽기(cached)·캐시 쓰기(writes)를 포함한 전체 입력입니다(V1 응답·V2 채팅 답이 같이 씀)."""
         plain = max(input_tokens - cached - writes, 0)
-        return (plain * self.input + cached * self.cached_input + writes * self.cache_write + output_tokens * self.output) / 1_000_000
+        input_factor, output_factor = (2.0, 1.5) if self.long_context_tokens is not None and input_tokens > self.long_context_tokens else (1.0, 1.0)
+        return (
+            (plain * self.input + cached * self.cached_input + writes * self.cache_write) * input_factor + output_tokens * self.output * output_factor
+        ) / 1_000_000
 
     def worst_usd(self, chars: int, max_output_tokens: int) -> float:
         """보내기 전 최악 비용: 입력 글자 수를 모두 캐시 쓰기 토큰으로(한국어는 대개 토큰 수 ≤ 글자 수), 출력 한도를 모두 씀."""
-        return (chars * self.cache_write + max_output_tokens * self.output) / 1_000_000
+        input_factor, output_factor = (2.0, 1.5) if self.long_context_tokens is not None and chars > self.long_context_tokens else (1.0, 1.0)
+        return (chars * self.cache_write * input_factor + max_output_tokens * self.output * output_factor) / 1_000_000
 
 
 IMAGE_TOKENS = 3_000  # 그림 한 장의 입력 토큰 상한 추정(쪽 그림 120dpi 기준, 실제보다 넉넉하게)
 PRICES = {
-    # 아카이브 실험 기록(lh_extraction_test/*/usage.json, 2026-10-14)에서 확인한 표준 단문 요율
-    "gpt-6-luna": Price(input=0.10, cached_input=0.01, cache_write=0.125, output=0.50, checked="2026-10-14 developers.openai.com/api/docs/models/gpt-6-luna"),
+    # 공식 모델 문서(2026-11-14): 272K 초과는 전체 입력·캐시 2배, 출력 1.5배예요.
+    "gpt-6-luna": Price(
+        input=0.10,
+        cached_input=0.01,
+        cache_write=0.125,
+        output=0.50,
+        checked="2026-11-14 developers.openai.com/api/docs/models/gpt-6-luna",
+        long_context_tokens=272_000,
+    ),
 }
 
 
