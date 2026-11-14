@@ -145,15 +145,15 @@ export function StepDots({
 export function LegalNote() {
   return (
     <span className="text-text-tertiary text-center text-[13px] leading-[1.6]">
-      처음 로그인하면{" "}
+      계속하면{" "}
       <Link href={routes.terms} className="text-text-sub hover:text-text-sub font-semibold">
         이용약관
       </Link>
-      과{" "}
+      에 동의합니다. 아래{" "}
       <Link href={routes.privacy} className="text-text hover:text-text font-bold">
         개인정보처리방침
       </Link>
-      에 동의를 받아요
+      에서 개인정보 처리 내용을 확인해 주세요.
     </span>
   );
 }
