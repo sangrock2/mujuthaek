@@ -111,6 +111,7 @@ services:
       NOTIFICATION_PUSH_PROVIDER: log
   migrate-collector:
     image: flyway/flyway:11.14
+    command: [migrate]
     profiles: [workers]
     mem_limit: 384m
     logging: *log
@@ -119,10 +120,13 @@ services:
       FLYWAY_USER: collector_app
       FLYWAY_PASSWORD: ${COLLECTOR_DB_PASSWORD}
       FLYWAY_CONNECT_RETRIES: "10"
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+      FLYWAY_BASELINE_VERSION: "0"
     volumes:
       - ../../../services/collector/migrations:/flyway/sql:ro
   migrate-extraction:
     image: flyway/flyway:11.14
+    command: [migrate]
     profiles: [workers]
     mem_limit: 384m
     logging: *log
@@ -131,6 +135,8 @@ services:
       FLYWAY_USER: extraction_app
       FLYWAY_PASSWORD: ${EXTRACTION_DB_PASSWORD}
       FLYWAY_CONNECT_RETRIES: "10"
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+      FLYWAY_BASELINE_VERSION: "0"
     volumes:
       - ../../../services/extraction/migrations:/flyway/sql:ro
   collector:

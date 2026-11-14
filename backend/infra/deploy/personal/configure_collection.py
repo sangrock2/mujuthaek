@@ -52,6 +52,13 @@ def compose(env, *args):
                           check=True, capture_output=True, text=True)
 
 
+def verify_schema(env, database, tables):
+    query = 'select ' + ' and '.join(f"to_regclass('public.{table}') is not null" for table in tables)
+    result = compose(env, 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', database, '-Atc', query)
+    if result.stdout.strip() != 't':
+        raise RuntimeError('Worker database schema is incomplete; workers were not started')
+
+
 def apply(values, release):
     if not re.fullmatch(r'[0-9a-f]{40}', release):
         raise ValueError('Worker release must be a full commit ID')
@@ -82,6 +89,8 @@ def apply(values, release):
         subprocess.run(['bash', str(BASE / 'backup.sh')], cwd=BASE, check=True, capture_output=True, text=True)
         for name in ('migrate-collector', 'migrate-extraction'):
             compose(original_path, 'run', '--rm', '--no-deps', name)
+        verify_schema(original_path, 'collector', ('flyway_schema_history', 'raw_posts', 'raw_policies', 'outbox'))
+        verify_schema(original_path, 'extraction', ('flyway_schema_history', 'extraction_jobs', 'publication_holds', 'outbox'))
         compose(original_path, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'extraction')
         for _ in range(40):
             ids = compose(original_path, 'ps', '-q', 'extraction').stdout.strip()
