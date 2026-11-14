@@ -40,6 +40,7 @@ notification:
     provider: ${NOTIFICATION_MAIL_PROVIDER:log}     # log: 보내지 않고 로그만, ses: AWS SES로 보내기 (키는 AWS_PROFILE에서)
     from: ${NOTIFICATION_MAIL_FROM:noreply@localhost}  # SES에서 인증한 보내는 주소
     feedback-address: ${NOTIFICATION_MAIL_FEEDBACK_ADDRESS:}  # 반송·스팸 신고 수신 및 답장 주소
+      consent-api-url: ${NOTIFICATION_MAIL_CONSENT_API_URL:http://localhost:8080}
     web-base-url: ${NOTIFICATION_WEB_BASE_URL:http://localhost:5173}
     ses:
       region: ${AWS_REGION:ap-northeast-2}

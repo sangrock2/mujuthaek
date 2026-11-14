@@ -11,7 +11,7 @@ from pathlib import Path
 BASE = Path('/opt/mujuthaek-source/backend/infra/deploy/personal')
 INPUT = Path('/home/ubuntu/.env.collection')
 KEYS = ('OPENAI_API_KEY', 'LH_API_KEY', 'DATA_GO_KR_SERVICE_KEY', 'YOUTHCENTER_API_KEY', 'BIZINFO_API_KEY')
-SETTINGS = {'EXTRACTION_MONTHLY_BUDGET_USD': '10', 'EXTRACTION_DAILY_BUDGET_USD': '1',
+SETTINGS = {'EXTRACTION_MONTHLY_BUDGET_USD': '50', 'EXTRACTION_DAILY_BUDGET_USD': '5',
             'EXTRACTION_PUBLICATION_MODE': 'manual'}
 
 
@@ -77,7 +77,7 @@ def apply(values, release):
             raise RuntimeError('Collector credential forwarding failed')
         if services['extraction']['environment'].get('OPENAI_API_KEY') != values['OPENAI_API_KEY']:
             raise RuntimeError('Extraction credential forwarding failed')
-        if str(services['extraction']['environment'].get('EXTRACTION_MONTHLY_BUDGET_USD')) != '10':
+        if str(services['extraction']['environment'].get('EXTRACTION_MONTHLY_BUDGET_USD')) != SETTINGS['EXTRACTION_MONTHLY_BUDGET_USD']:
             raise RuntimeError('Monthly budget was not bound')
         if services['extraction']['environment'].get('EXTRACTION_PUBLICATION_MODE') != 'manual':
             raise RuntimeError('Initial review gate is not enabled')
@@ -143,10 +143,10 @@ def main():
             subprocess.run(['docker', 'load', '-i', str(archive)], check=True, capture_output=True)
             apply(values, args.release)
             (BASE / 'runtime/worker-current.json').write_text(json.dumps({'commit': args.release, 'archive_sha256': checksum,
-                                                                       'publication_mode': 'manual', 'monthly_budget_usd': 10}))
+                                                                       'publication_mode': 'manual', 'monthly_budget_usd': 50}))
     finally:
         INPUT.unlink(missing_ok=True)
-    print(json.dumps({'ok': True, 'workers': ['collector', 'extraction'], 'monthly_budget_usd': 10,
+    print(json.dumps({'ok': True, 'workers': ['collector', 'extraction'], 'monthly_budget_usd': 50,
                       'publication_mode': 'manual', 'core_services_restarted': False, 'credential_values_printed': False}))
 
 

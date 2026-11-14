@@ -53,6 +53,8 @@ public enum ErrorCode {
   PREPARATION_TASK_NOT_FOUND(HttpStatus.NOT_FOUND, "할 일을 찾을 수 없어요"),
   PREPARATION_TASK_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "공고 하나에 할 일은 30개까지 추가할 수 있어요"),
   EMAIL_ALREADY_USED(HttpStatus.CONFLICT, "이미 다른 계정에서 쓰고 있는 이메일이에요"),
+  EMAIL_VERIFICATION_INVALID(HttpStatus.BAD_REQUEST, "인증 링크가 만료됐거나 이미 사용됐어요. 다시 요청해 주세요"),
+  EMAIL_DELIVERY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "인증 메일을 보내지 못했어요. 잠시 뒤 다시 요청해 주세요"),
   ACCOUNT_SUSPENDED(HttpStatus.FORBIDDEN, "이용이 정지된 계정이에요"),
 
   // notification

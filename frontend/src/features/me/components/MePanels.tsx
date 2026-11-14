@@ -3,6 +3,7 @@ import { PreparationButton } from "@/features/preparations/PreparationButton";
 
 // 내 정보(웹 탭 · 모바일 화면)가 같이 쓰는 칸: 관심 공고 · 알림 설정 · 제보하기
 import { useState } from "react";
+import { EmailNotifications } from "./EmailNotifications";
 import Link from "next/link";
 import { Heart } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -230,6 +231,7 @@ export function NotificationSettingsPanel() {
             이 브라우저 · 앱 알림 {push.enabled ? "켜짐" : "꺼짐"}
           </button>
         </div>
+        <EmailNotifications />
         {push.error && (
           <span role="alert" className="text-danger-text text-[14px]">
             {push.error}

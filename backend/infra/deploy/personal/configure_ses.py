@@ -13,6 +13,28 @@ INPUT = Path('/home/ubuntu/.env.ses')
 KEYS = ('NOTIFICATION_AWS_ACCESS_KEY_ID', 'NOTIFICATION_AWS_SECRET_ACCESS_KEY')
 
 
+def notification_environment(source):
+    """Image releases do not replace the host manifest; bind only this service's SES settings."""
+    match = re.search(r'(?ms)^  notification:\n(.*?)(?=^  [a-zA-Z][\w-]*:\n|\Z)', source)
+    if not match or '    environment:\n' not in match[0]:
+        raise RuntimeError('Notification service environment was not found')
+    values = {
+        'NOTIFICATION_MAIL_PROVIDER': '${NOTIFICATION_MAIL_PROVIDER:-log}',
+        'NOTIFICATION_MAIL_FROM': '${NOTIFICATION_MAIL_FROM:-noreply@mujuthaek.store}',
+        'NOTIFICATION_MAIL_FEEDBACK_ADDRESS': '${NOTIFICATION_MAIL_FEEDBACK_ADDRESS:-contact@mujuthaek.store}',
+        'NOTIFICATION_MAIL_CONSENT_API_URL': 'http://api:8080',
+        'AWS_REGION': 'ap-northeast-2',
+        'AWS_ACCESS_KEY_ID': '${NOTIFICATION_AWS_ACCESS_KEY_ID:-}',
+        'AWS_SECRET_ACCESS_KEY': '${NOTIFICATION_AWS_SECRET_ACCESS_KEY:-}',
+    }
+    section = match[0]
+    for key in values:
+        section = re.sub(r'(?m)^      ' + re.escape(key) + r':[^\n]*\n', '', section)
+    entries = ''.join(f'      {key}: {value}\n' for key, value in values.items())
+    section = section.replace('    environment:\n', '    environment:\n' + entries, 1)
+    return source[:match.start()] + section + source[match.end():]
+
+
 def credentials(text):
     values = dict(line.split('=', 1) for line in text.splitlines() if line and not line.startswith('#'))
     if set(values) != {*KEYS, 'NOTIFICATION_MAIL_PROVIDER'} or values['NOTIFICATION_MAIL_PROVIDER'] not in {'log', 'ses'}:
@@ -53,8 +75,11 @@ def main():
             if settings.get('S3_BUCKET') != 'mujuthaek-personal-659355919826-raw':
                 raise RuntimeError('Wrong personal environment')
             pending = private_file(merge(original, updates))
+            manifest = BASE / 'compose.prod.yml'
+            old_manifest = manifest.read_text()
             changed = False
             try:
+                os.replace(private_file(notification_environment(old_manifest)), manifest)
                 config = json.loads(compose(pending, 'config', '--format', 'json').stdout)['services']['notification']['environment']
                 expected = {'AWS_ACCESS_KEY_ID': updates[KEYS[0]], 'AWS_SECRET_ACCESS_KEY': updates[KEYS[1]],
                             'NOTIFICATION_MAIL_PROVIDER': updates['NOTIFICATION_MAIL_PROVIDER']}
@@ -64,6 +89,7 @@ def main():
                 changed = True
                 restart(env)
             except Exception:
+                os.replace(private_file(old_manifest), manifest)
                 if changed:
                     os.replace(private_file(original), env)
                     restart(env)
