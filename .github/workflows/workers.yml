@@ -1,0 +1,94 @@
+name: Worker images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-images
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: worker-test-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      COLLECTOR_TEST_DB_URL: postgresql://postgres:worker-test-only@127.0.0.1:5432/collector_test
+      EXTRACTION_TEST_DB_URL: postgresql://postgres:worker-test-only@127.0.0.1:5432/extraction_test
+    steps:
+      - name: Require personal main branch
+        env:
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: test "$REF" = refs/heads/main && test "$REPOSITORY" = sangrock2/mujuthaek
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - run: uv sync --frozen
+        working-directory: backend/services/collector
+      - run: uv sync --frozen
+        working-directory: backend/services/extraction
+      - name: Prepare isolated worker test databases
+        run: |
+          backend/services/collector/.venv/bin/python - <<'PY'
+          from pathlib import Path
+          import psycopg
+          with psycopg.connect('postgresql://postgres:worker-test-only@127.0.0.1:5432/postgres', autocommit=True) as conn:
+              conn.execute('create database collector_test')
+              conn.execute('create database extraction_test')
+          with psycopg.connect('postgresql://postgres:worker-test-only@127.0.0.1:5432/collector_test', autocommit=True) as conn:
+              for path in sorted(Path('backend/services/collector/migrations').glob('V*.sql')):
+                  conn.execute(path.read_text())
+          PY
+      - name: Collector database and offline regression tests
+        run: uv run --frozen pytest -q
+        working-directory: backend/services/collector
+      - name: Extraction publication and database regression tests
+        run: uv run --frozen pytest -q
+        working-directory: backend/services/extraction
+      - name: Build pinned worker images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          docker build -f backend/services/collector/Dockerfile -t "mujuthaek-personal-collector:$SHA" backend
+          docker build -f backend/services/extraction/Dockerfile -t "mujuthaek-personal-extraction:$SHA" backend
+          docker save "mujuthaek-personal-collector:$SHA" "mujuthaek-personal-extraction:$SHA" | gzip > worker-images.tar.gz
+          sha256sum worker-images.tar.gz > worker-images.sha256
+          printf '%s\n' "$SHA" > worker-commit.txt
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: "659355919826"
+      - name: Store private worker image archive
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          aws s3 cp worker-images.tar.gz "s3://mujuthaek-personal-659355919826-raw/deployments/releases/workers/$SHA/worker-images.tar.gz" --sse AES256 --only-show-errors
+          aws s3 cp worker-images.sha256 "s3://mujuthaek-personal-659355919826-raw/deployments/releases/workers/$SHA/worker-images.sha256" --sse AES256 --only-show-errors
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-image-record-${{ github.sha }}
+          path: |
+            worker-images.sha256
+            worker-commit.txt
+          retention-days: 7

@@ -390,7 +390,8 @@ def run_scheduler(settings: Settings) -> None:
     pool = ThreadPoolExecutor(max_workers=settings.parallel_sources, thread_name_prefix="collect")
     # 운영 서버가 켜져 있는 낮 시간에 맞춰요 (09~18시, 11/7부터 10~19시)
     scheduler.add_job(collect_all, "cron", day_of_week="mon-fri", hour="9-19", minute=5, args=[settings], kwargs={"pool": pool}, id="collect", **common)
-    scheduler.add_job(collect_policies, "cron", hour=11, minute=0, args=[settings], id="policies", **common)
+    policy_schedule = {"day_of_week": "mon-fri", "hour": "9-19", "minute": 10} if settings.policy_hourly else {"hour": 11, "minute": 0}
+    scheduler.add_job(collect_policies, "cron", **policy_schedule, args=[settings], id="policies", **common)
     scheduler.add_job(collect_all, "cron", hour=11, minute=30, args=[settings], kwargs={"recheck": True, "pool": pool}, id="recheck", **common)
     scheduler.add_job(cleanup, "cron", hour=11, minute=50, args=[settings], id="cleanup", **common)
     scheduler.add_job(decide_intake, "cron", hour=12, minute=30, args=[settings], id="intake", **common)

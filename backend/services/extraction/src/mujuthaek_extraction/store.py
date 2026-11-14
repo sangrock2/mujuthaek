@@ -32,6 +32,7 @@ from mujuthaek_extraction import extraction_stats
 from mujuthaek_extraction.cost_alert import monthly_costs
 from mujuthaek_extraction.intake.adapter import PDF_TEXT_DOCUMENT_ID, TEXT_LED_NAME
 from mujuthaek_extraction.pipeline import Outcome
+from mujuthaek_extraction.publication_gate import PublicationGate
 from mujuthaek_extraction.verify.verifier import DROPPED_VALUE_CODES
 from mujuthaek_platform import outbox
 from mujuthaek_platform.ids import uuid7
@@ -296,6 +297,7 @@ class JobStore:
     def __init__(self, conn):
         conn.autocommit = True  # 묶음 쓰기는 with conn.transaction()으로만 합니다 (읽기가 트랜잭션을 열어 두지 않게)
         self.conn = conn
+        self.publication_gate = PublicationGate()
 
     def already_processed(self, event_id: str) -> bool:
         return self.conn.execute("select 1 from processed_events where event_id = %s", (event_id,)).fetchone() is not None
@@ -309,6 +311,9 @@ class JobStore:
         raw_post_id = _uuid_or_none(payload.get("rawPostId"))
         raw_version = payload.get("version") if isinstance(payload.get("version"), int) else None
         status, event, error = outcome.status, outcome.event, outcome.error
+        publication_held = event is not None and not self.publication_gate.allows(event)
+        if publication_held:
+            status, error = "IN_REVIEW", self.publication_gate.reason
         corrected_post = _corrected_post(payload)
         with self.conn.transaction(), self.conn.cursor() as cur:
             _lock_notice(cur, raw_post_id, corrected_post)
@@ -340,21 +345,22 @@ class JobStore:
                     Jsonb(outcome.pdf_pages),
                     Jsonb(outcome.candidate) if outcome.candidate is not None else None,
                     Jsonb(raw_event),
-                    event["eventId"] if event else None,
+                    event["eventId"] if event and not publication_held else None,
                     error,
                     Jsonb(outcome.usage),
                 ),
             )
             if event:
-                outbox.add(cur, event)
+                self.publication_gate.enqueue(cur, event, job_id=job_id)
             if run_id:
                 cur.execute("update extraction_spend set job_id = %s where run_id = %s", (job_id, run_id))
             if status in REVIEW_STATUSES:
-                cur.execute("insert into review_queue (job_id, reasons) values (%s, %s)", (job_id, Jsonb(outcome.review_reasons)))
+                reasons = [*outcome.review_reasons, *([self.publication_gate.reason] if publication_held else [])]
+                cur.execute("insert into review_queue (job_id, reasons) values (%s, %s)", (job_id, Jsonb(reasons)))
             elif status in (PARTIAL, COMPLETED) and (held := _held_reasons(outcome.candidate) + _dropped_reasons(outcome.candidate)):
                 # 보류 항목, 또는 버리거나 바꾼 값이 있으면 공개는 유지하고 사람이 확인하게 검수 대기열에 넣습니다(2026-10-26 공통 검사)
                 cur.execute("insert into review_queue (job_id, reasons) values (%s, %s)", (job_id, Jsonb(held)))
-            if event:  # 이 버전을 발행함: 옛 버전·정정 전 공고의 대기 검수는 대체됨
+            if event and not publication_held:  # 실제로 발행한 결과만 이전 검수를 대체해요
                 _supersede_pending(cur, job_id, raw_post_id, raw_version, corrected_post)
         return job_id
 
@@ -369,7 +375,7 @@ class JobStore:
         with self.conn.transaction(), self.conn.cursor() as cur:
             if not _claim_judgment(cur, raw_event):
                 return False
-            outbox.add(cur, event)
+            self.publication_gate.enqueue(cur, event)
         return True
 
     # ---- 혜택 정제 결과·검수 (2026-10-25, migrations/V202610251700__extraction_benefit_results_reviews.sql) ----
@@ -381,14 +387,21 @@ class JobStore:
             if not _claim_judgment(cur, raw_event):
                 return False
             _lock_notice(cur, payload["rawPolicyId"])
-            outbox.add(cur, event)
+            published = self.publication_gate.enqueue(cur, event)
             result_id = _insert_benefit_result(cur, event, "EXTRACTED", raw_event.get("payload"))
             if _refresh_reported_review(cur, result_id, payload):
                 pass  # 제보로 연 검수는 대체하지 않고 새 결과로 갱신해 제보와의 연결을 지켜요
-            elif payload["quality"]["needsReview"] or _duplicate_benefit(cur, payload):
+            elif not published or payload["quality"]["needsReview"] or _duplicate_benefit(cur, payload):
                 # 중복 의심이면 확인 필요 사유에 더해 검수에 올려요(검수 없이 나갈 결과도 올림)
                 duplicate = [DUPLICATE_SUSPECTED] if _duplicate_benefit(cur, payload) else []
-                _open_benefit_review(cur, result_id, payload, [*payload["quality"]["reviewReasons"], *duplicate], None, None)
+                _open_benefit_review(
+                    cur,
+                    result_id,
+                    payload,
+                    [*payload["quality"]["reviewReasons"], *duplicate, *([self.publication_gate.reason] if not published else [])],
+                    None,
+                    None,
+                )
             else:  # 새 결과가 검수 없이 나갔으면 같은 정책의 앞선 대기 건은 쓸모가 없음
                 cur.execute(
                     "update benefit_reviews set status = 'SUPERSEDED', decided_at = now() where raw_policy_id = %s and status = 'PENDING'",

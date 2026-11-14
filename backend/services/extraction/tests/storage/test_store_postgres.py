@@ -56,6 +56,23 @@ def test_completed_job_writes_outbox_and_processed_event_together(store):
     assert (status, payload) == ("COMPLETED", "AUTO_PASSED") and job_id
 
 
+def test_initial_review_holds_result_and_verified_release_is_idempotent(store):
+    from mujuthaek_extraction.publication_gate import PublicationGate
+
+    store.publication_gate = PublicationGate("manual")
+    event = raw_event()
+    outcome = run(event, NoticeModels(RecordedModel(answers()), None))
+    job_id = store.save(event, outcome)
+    assert count(store, "select count(*) from outbox") == 0
+    assert count(store, "select count(*) from publication_holds where released_at is null") == 1
+    assert store.review(job_id)["reviewStatus"] == "PENDING"
+    assert store.already_processed(event["eventId"])
+    assert PublicationGate("verified").release(store.conn) == 1
+    assert PublicationGate("verified").release(store.conn) == 0
+    assert count(store, "select count(*) from outbox") == 1
+    assert store.conn.execute("select status, completed_event_id is not null from extraction_jobs where id = %s", (job_id,)).fetchone() == ("COMPLETED", True)
+
+
 def test_failed_job_is_not_marked_processed_and_can_be_retried(store):
     event = raw_event()
     store.save(event, Outcome("FAILED", error="모델 연결 실패"))
