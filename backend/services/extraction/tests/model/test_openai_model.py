@@ -182,7 +182,8 @@ def test_cost_and_budget_guard():
     usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "input_tokens_details": {"cached_tokens": 500_000, "cache_write_tokens": 100_000}}
     payload = response_payload("{}", usage=usage)
     response = OpenAIResponsesModel(FAKE_KEY, opener=FakeHTTP(payload)).complete(request_for())
-    expected = (400_000 * 0.10 + 500_000 * 0.01 + 100_000 * 0.125 + 1_000_000 * 0.50) / 1_000_000
+    # 272K 초과 요청은 전체 입력·캐시 2배, 출력 1.5배 요율을 적용해요.
+    expected = ((400_000 * 0.10 + 500_000 * 0.01 + 100_000 * 0.125) * 2 + 1_000_000 * 0.50 * 1.5) / 1_000_000
     assert cost_usd("gpt-6-luna", response) == pytest.approx(expected)
 
     budget = Budget("gpt-6-luna", limit_usd=0.05)

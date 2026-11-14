@@ -109,10 +109,34 @@ services:
       NOTIFICATION_WEB_BASE_URL: ${FRONTEND_URL:-${PUBLIC_ORIGIN}}
       NOTIFICATION_MAIL_PROVIDER: log
       NOTIFICATION_PUSH_PROVIDER: log
+  migrate-collector:
+    image: flyway/flyway:11.14
+    profiles: [workers]
+    mem_limit: 384m
+    logging: *log
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/collector
+      FLYWAY_USER: collector_app
+      FLYWAY_PASSWORD: ${COLLECTOR_DB_PASSWORD}
+      FLYWAY_CONNECT_RETRIES: "10"
+    volumes:
+      - ../../../services/collector/migrations:/flyway/sql:ro
+  migrate-extraction:
+    image: flyway/flyway:11.14
+    profiles: [workers]
+    mem_limit: 384m
+    logging: *log
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/extraction
+      FLYWAY_USER: extraction_app
+      FLYWAY_PASSWORD: ${EXTRACTION_DB_PASSWORD}
+      FLYWAY_CONNECT_RETRIES: "10"
+    volumes:
+      - ../../../services/extraction/migrations:/flyway/sql:ro
   collector:
     <<: *app
     profiles: [workers]
-    image: mujuthaek-personal-collector:${RELEASE}
+    image: mujuthaek-personal-collector:${COLLECTOR_RELEASE:-${RELEASE}}
     build: {context: ../../.., dockerfile: services/collector/Dockerfile}
     mem_limit: 384m
     environment:
@@ -121,15 +145,25 @@ services:
       DB_URL: postgresql://collector_app:${COLLECTOR_DB_PASSWORD}@postgres:5432/collector
       RABBITMQ_URL: amqp://mujuthaek:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       COLLECTOR_ADMIN_TOKEN: ${COLLECTOR_ADMIN_TOKEN}
+      LH_API_KEY: ${LH_API_KEY:-}
+      DATA_GO_KR_SERVICE_KEY: ${DATA_GO_KR_SERVICE_KEY:-}
+      YOUTHCENTER_API_KEY: ${YOUTHCENTER_API_KEY:-}
+      BIZINFO_API_KEY: ${BIZINFO_API_KEY:-}
+      COLLECTOR_USER_AGENT: "MujuthaekBot/0.1 (+https://github.com/sangrock2/mujuthaek)"
+      COLLECTOR_ACTIVE_ONLY: "true"
+      COLLECTOR_POLICY_HOURLY: "true"
+      COLLECTOR_MAX_PAGES: "250"
+      COLLECTOR_DETAIL_LIMIT: "5"
+      POLICY_DETAIL_LIMIT: "5"
       COLLECTOR_PARALLEL_SOURCES: "1"
-      COLLECTOR_INTAKE_HOUSING_LH: "1"
-      COLLECTOR_INTAKE_HOUSING_OTHER: "1"
-      COLLECTOR_INTAKE_SPACE: "1"
-      COLLECTOR_INTAKE_POLICY: "1"
+      COLLECTOR_INTAKE_HOUSING_LH: "-1"
+      COLLECTOR_INTAKE_HOUSING_OTHER: "-1"
+      COLLECTOR_INTAKE_SPACE: "-1"
+      COLLECTOR_INTAKE_POLICY: "-1"
   extraction:
     <<: *app
     profiles: [workers]
-    image: mujuthaek-personal-extraction:${RELEASE}
+    image: mujuthaek-personal-extraction:${EXTRACTION_RELEASE:-${RELEASE}}
     build: {context: ../../.., dockerfile: services/extraction/Dockerfile}
     mem_limit: 1536m
     environment:
@@ -138,9 +172,15 @@ services:
       DB_URL: postgresql://extraction_app:${EXTRACTION_DB_PASSWORD}@postgres:5432/extraction
       RABBITMQ_URL: amqp://mujuthaek:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       EXTRACTION_REVIEW_TOKEN: ${EXTRACTION_REVIEW_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EXTRACTION_PUBLICATION_MODE: ${EXTRACTION_PUBLICATION_MODE:-manual}
+      EXTRACTION_BENEFIT_ENABLED: "true"
+      EXTRACTION_SERIAL_EVENTS: "true"
+      LANGSMITH_TRACING: "false"
       EXTRACTION_PARALLEL_CALLS: "1"
-      EXTRACTION_DAILY_BUDGET_USD: "0"
-      EXTRACTION_MONTHLY_BUDGET_USD: "0"
+      EXTRACTION_NOTICE_BUDGET_USD: "0.5"
+      EXTRACTION_DAILY_BUDGET_USD: ${EXTRACTION_DAILY_BUDGET_USD:-0}
+      EXTRACTION_MONTHLY_BUDGET_USD: ${EXTRACTION_MONTHLY_BUDGET_USD:-0}
   frontend:
     restart: unless-stopped
     image: mujuthaek-personal-frontend:${RELEASE}

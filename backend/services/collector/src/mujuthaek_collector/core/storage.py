@@ -261,7 +261,7 @@ class PostgresStore:
             "and (status = 'DONE' or (status = 'FAILED' and attempts >= %s)) "
             "and kind in ('NOTICE', 'CORRECTION') and (deadline_on is null or deadline_on >= %s) "
             "and (posted_on is null or posted_on >= %s)",
-            (source_code, MAX_ATTEMPTS, today, today - timedelta(days=min(since_days, 90))),
+            (source_code, MAX_ATTEMPTS, today, date.min if since_days < 0 else today - timedelta(days=min(since_days, 90))),
         )
         return cursor.rowcount
 

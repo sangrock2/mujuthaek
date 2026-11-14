@@ -14,6 +14,8 @@
 
 import re
 
+from bs4 import BeautifulSoup
+
 from mujuthaek_collector.core import classify as cls
 from mujuthaek_collector.core.files import FileRef
 from mujuthaek_collector.core.html import abs_url, parse_date, soup, table_grid, text_of
@@ -44,6 +46,11 @@ DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 STATUS = re.compile(r"접수|공고|마감|예정|진행")
 
 
+def page_soup(body: str):
+    # GH는 SSO 문서 뒤에 공고 HTML을 붙여 보내요. lxml은 첫 문서만 읽어 목록·상세가 사라져요.
+    return BeautifulSoup(body, "html.parser") if body.lower().count("<!doctype") > 1 else soup(body)
+
+
 class ApplyCenterSource(Source):
     def __init__(self, site: str):
         config = SITES[site]
@@ -58,7 +65,7 @@ class ApplyCenterSource(Source):
         return f"{self.base}{folder}/selectPbancDetailView.do?pbancNo={pbanc_no}"
 
     def parse_list(self, board: Board, body: str, page_url: str) -> list[ListItem]:
-        doc = soup(body)
+        doc = page_soup(body)
         if doc.find("tbody") is None:
             raise ParseError(f"{self.name} 목록 표(tbody)를 찾지 못했어요")
         items, seen = [], set()
@@ -101,7 +108,7 @@ class ApplyCenterSource(Source):
         return None
 
     def parse_detail(self, item: ListItem, body: str) -> Detail:
-        doc = soup(body)
+        doc = page_soup(body)
         info: dict[str, str] = {}
         districts: list[dict[str, str]] = []
         office: dict[str, str] = {}
