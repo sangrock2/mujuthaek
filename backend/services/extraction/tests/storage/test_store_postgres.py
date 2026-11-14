@@ -113,6 +113,31 @@ def test_partial_job_is_published_and_also_listed_for_optional_review(store):
     assert listed["reasons"] == ["EVIDENCE_SCATTERED", "EXCEPTION_SUSPECTED"]
 
 
+@pytest.mark.parametrize("mode", ["manual", "verified"])
+def test_partial_publication_keeps_held_fields_out_of_schedule_and_keeps_review(store, mode):
+    from mujuthaek_extraction.publication_gate import PublicationGate
+    from mujuthaek_extraction.publish import completed_payload
+    from tests.worker.test_worker_parts import partial_item
+
+    item, held_schedule = partial_item()
+    original = run(item["rawEvent"], NoticeModels(RecordedModel(answers()), None))
+    event = {**original.event, "payload": completed_payload(item["candidate"])}
+    assert event["payload"]["reviewStatus"] == "PARTIALLY_PASSED"
+    assert event["payload"]["schedule"] is None
+    assert all(window["scheduleId"] != held_schedule for window in event["payload"].get("applicationWindows", []))
+    store.publication_gate = PublicationGate(mode)
+    job_id = store.save(item["rawEvent"], Outcome("PARTIAL", event=event, candidate=item["candidate"]))
+    if mode == "manual":
+        assert count(store, "select count(*) from outbox") == 0
+        assert PublicationGate("verified").release(store.conn) == 1
+        assert PublicationGate("verified").release(store.conn) == 0
+    assert count(store, "select count(*) from outbox") == 1
+    assert store.conn.execute("select status, completed_event_id is not null from extraction_jobs where id = %s", (job_id,)).fetchone() == ("PARTIAL", True)
+    assert store.review(job_id)["reviewStatus"] == "PENDING"
+    [payload] = store.conn.execute("select payload->'payload' from outbox").fetchone()
+    assert payload == event["payload"]
+
+
 def test_claim_is_exclusive_until_released_or_expired(store):
     post = "01929a3e-0000-7000-8000-000000000001"
     assert store.claim(post, 1, "a", 300)

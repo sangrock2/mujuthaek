@@ -16,8 +16,8 @@ def test_initial_review_blocks_all_automatic_notices(status):
 
 
 @pytest.mark.parametrize("status", ["AUTO_PASSED", "PARTIALLY_PASSED", "IN_REVIEW", "APPROVED"])
-def test_verified_mode_rejects_partial_and_unverified_results(status):
-    assert PublicationGate("verified").allows(notice(status)) == (status in {"AUTO_PASSED", "APPROVED"})
+def test_verified_mode_publishes_partial_results_but_blocks_whole_notice_review(status):
+    assert PublicationGate("verified").allows(notice(status)) == (status in {"AUTO_PASSED", "PARTIALLY_PASSED", "APPROVED"})
 
 
 def test_benefit_requires_verification_or_explicit_human_review():
@@ -51,13 +51,18 @@ def test_release_only_sends_verified_records_and_updates_the_exact_job(monkeypat
     publish = Mock()
     monkeypatch.setattr("mujuthaek_extraction.publication_gate.outbox.add", publish)
     cur = Mock()
-    cur.execute.return_value.fetchall.return_value = [("event-1", notice("AUTO_PASSED"), "job-1"), ("event-2", notice("PARTIALLY_PASSED"), "job-2")]
+    cur.execute.return_value.fetchall.return_value = [
+        ("event-1", notice("AUTO_PASSED"), "job-1"),
+        ("event-2", notice("PARTIALLY_PASSED"), "job-2"),
+        ("event-3", notice("IN_REVIEW"), "job-3"),
+    ]
     conn = Mock()
     conn.transaction.return_value = nullcontext()
     conn.cursor.return_value = nullcontext(cur)
-    assert PublicationGate("verified").release(conn) == 1
-    publish.assert_called_once_with(cur, notice("AUTO_PASSED"))
+    assert PublicationGate("verified").release(conn) == 2
+    assert [call.args[1] for call in publish.call_args_list] == [notice("AUTO_PASSED"), notice("PARTIALLY_PASSED")]
     updates = [(args[0], args[1]) for args, _ in cur.execute.call_args_list if args[0].startswith("update ")]
-    assert len(updates) == 2 and updates[-1][1] == ("event-1", "job-1")
+    assert len(updates) == 4 and updates[1][1] == ("COMPLETED", "event-1", "job-1")
+    assert updates[-1][1] == ("PARTIAL", "event-2", "job-2")
     with pytest.raises(ValueError):
         PublicationGate("manual").release(conn)

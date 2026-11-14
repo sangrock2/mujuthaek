@@ -1,4 +1,4 @@
-"""초기 표본 확인 전 발행을 보류하고, 확인 뒤 자동 검증 통과 건만 내보내요."""
+"""초기 표본 확인 뒤 검증된 결과를 발행해요. 부분 통과는 보류 항목을 제외한 기존 게시 흐름을 유지해요."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from mujuthaek_platform import outbox
 
 MODES = {"legacy", "manual", "verified"}
 INITIAL_REVIEW = "운영 초기 표본 확인 전 공개 보류"
-VERIFICATION_REVIEW = "자동 검증을 모두 통과하지 않아 공개 보류"
+VERIFICATION_REVIEW = "공고 전체 검수가 필요해 공개 보류"
 
 
 class PublicationGate:
@@ -26,7 +26,7 @@ class PublicationGate:
         payload = event.get("payload") or {}
         if event.get("eventType") == "extraction.completed":
             status = payload.get("reviewStatus")
-            return status == "APPROVED" or (self.mode == "verified" and status == "AUTO_PASSED")
+            return status == "APPROVED" or (self.mode == "verified" and status in {"AUTO_PASSED", "PARTIALLY_PASSED"})
         if event.get("eventType") == "policy.extracted":
             quality = payload.get("quality") or {}
             return quality.get("reviewed") is True or (self.mode == "verified" and quality.get("needsReview") is False)
@@ -56,7 +56,7 @@ class PublicationGate:
         with conn.transaction(), conn.cursor() as cur:
             rows = cur.execute(
                 "select event_id, envelope, job_id from publication_holds where released_at is null and ("
-                "(event_type = 'extraction.completed' and envelope->'payload'->>'reviewStatus' in ('AUTO_PASSED', 'APPROVED')) or "
+                "(event_type = 'extraction.completed' and envelope->'payload'->>'reviewStatus' in ('AUTO_PASSED', 'PARTIALLY_PASSED', 'APPROVED')) or "
                 "(event_type = 'policy.extracted' and (envelope->'payload'->'quality'->>'reviewed' = 'true' or "
                 "envelope->'payload'->'quality'->>'needsReview' = 'false'))) "
                 "order by created_at, event_id limit %s for update skip locked",
@@ -71,8 +71,8 @@ class PublicationGate:
                 cur.execute("update publication_holds set released_at = now() where event_id = %s", (event_id,))
                 if job_id is not None:
                     cur.execute(
-                        "update extraction_jobs set status = 'COMPLETED', completed_event_id = %s where id = %s and status = 'IN_REVIEW'",
-                        (event_id, job_id),
+                        "update extraction_jobs set status = %s, completed_event_id = %s where id = %s and status = 'IN_REVIEW'",
+                        ("PARTIAL" if event["payload"]["reviewStatus"] == "PARTIALLY_PASSED" else "COMPLETED", event_id, job_id),
                     )
                 sent += 1
         return sent
