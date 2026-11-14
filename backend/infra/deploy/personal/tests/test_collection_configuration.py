@@ -21,6 +21,11 @@ with patch.dict(sys.modules, {'configure_collection': collection}):
 
 
 class CollectionConfiguration(unittest.TestCase):
+    def test_successful_migration_process_without_tables_cannot_start_workers(self):
+        with patch.object(collection, 'compose', return_value=SimpleNamespace(stdout='f\n')):
+            with self.assertRaisesRegex(RuntimeError, 'schema is incomplete'):
+                collection.verify_schema(Path('unused'), 'collector', ('raw_posts', 'outbox'))
+
     def test_automatic_publication_requires_real_sample_review_before_reading_secrets(self):
         with patch.object(Path, 'read_text', side_effect=AssertionError('must not read secrets')):
             for mode in ('verified', 'legacy', 'invalid'):
