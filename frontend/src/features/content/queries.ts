@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { mockQuery } from "@/features/mock-query";
 import { announcements, faq, statesPreview, type FaqData } from "@/features/content/mocks/content";
 import { privacy, terms } from "@/features/content/mocks/content-legal";
+import { LEGAL_CONTACT } from "@/features/content/legal/documents";
 
 export const contentKeys = {
   announcements: ["content", "announcements"] as const,
@@ -18,7 +19,7 @@ export function useAnnouncements() {
 
 const liveFaq: FaqData = {
   initiallyOpen: ["f1"],
-  contact: { email: "", hours: "" },
+  contact: { email: LEGAL_CONTACT, hours: "이메일 접수 · 확인 후 회신" },
   web: [
     {
       id: "f1",
@@ -39,7 +40,7 @@ const liveFaq: FaqData = {
       category: "계정·개인정보",
       question: "로그인은 바로 사용할 수 있나요?",
       answer:
-        "간편 로그인 연결을 준비하고 있어요. 현재는 로그인 없이 조건 입력과 공개 공고 조회를 이용해 주세요.",
+        "카카오·Google 계정으로 로그인할 수 있어요. 로그인하면 관심 공고와 신청 준비함을 계정에 저장할 수 있고, 공개 공고 조회와 조건 확인은 로그인 없이도 이용할 수 있어요.",
     },
     {
       id: "f4",
