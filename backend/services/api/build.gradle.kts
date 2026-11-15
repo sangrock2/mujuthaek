@@ -49,7 +49,7 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-rabbitmq") // 아웃박스 발송 테스트
-    testImplementation("org.springframework.modulith:spring-modulith-starter-test:2.0.0")
+    testImplementation("org.springframework.modulith:spring-modulith-starter-test:2.1.2")
     testImplementation("org.springframework.modulith:spring-modulith-docs:2.0.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
