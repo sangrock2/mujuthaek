@@ -1,0 +1,46 @@
+name: Operations monitor
+on:
+  schedule:
+    - cron: '15 0 * * *'
+  workflow_dispatch:
+    inputs:
+      send_report:
+        description: Send a private snapshot to the owner's configured email
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: operations-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_OPERATIONS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: ${{ secrets.AWS_OPERATIONS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+      - name: Check privately and notify owner on changes
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          OPERATIONS_CONFIG: ${{ secrets.OPERATIONS_CONFIG }}
+          SEND_REPORT: ${{ inputs.send_report }}
+        shell: bash
+        run: |
+          args=()
+          if [ "$SEND_REPORT" = true ]; then args+=(--send-report); fi
+          python backend/infra/deploy/personal/operations_monitor.py "${args[@]}"
