@@ -9,7 +9,7 @@ test("저장된 할 일의 HTML·이벤트 코드를 실행하지 않고 글자�
   await session(page, "u1");
   const auth = await bearer(page);
   const created = await page.request.put(
-    `${apiOrigin}/api/users/me/preparations/notice/${fixture.noticeId}`,
+    `${apiOrigin}/api/users/me/preparations/notices/${fixture.noticeId}`,
     { headers: auth },
   );
   expect(created.status()).toBe(201);
