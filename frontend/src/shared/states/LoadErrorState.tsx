@@ -3,7 +3,6 @@
 import { reportHref } from "@/features/me/tabs";
 import Link from "next/link";
 import { CircleAlert, RefreshCw, TriangleAlert } from "lucide-react";
-import { SERVICE_HOURS } from "@/shared/lib/api/availability";
 
 type LoadErrorProps = {
   title?: string;
@@ -44,8 +43,6 @@ export function WebLoadErrorState({
       <h2 className="tracking-h1 m-0 text-[26px] font-extrabold">{title}</h2>
       <span className="text-text-sub max-w-[520px] text-[16px] leading-[1.6]">
         잠시 후 다시 시도해 주세요. 계속 안 되면 알려주시면 바로 확인할게요.
-        <br />
-        서비스 운영 시간: {SERVICE_HOURS}
       </span>
       <div className="flex flex-wrap justify-center gap-[8px]">
         <button
@@ -84,11 +81,7 @@ export function MLoadErrorState({
         <TriangleAlert size={32} aria-hidden />
       </span>
       <h2 className="m-0 text-[20px] font-extrabold">{title}</h2>
-      <span className="text-text-sub text-[15px] leading-[1.6]">
-        잠시 후 다시 시도해 주세요.
-        <br />
-        서비스 운영 시간: {SERVICE_HOURS}
-      </span>
+      <span className="text-text-sub text-[15px] leading-[1.6]">잠시 후 다시 시도해 주세요.</span>
       <button
         type="button"
         onClick={onRetry}

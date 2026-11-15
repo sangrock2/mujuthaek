@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { secureApiOrigin } from "./src/shared/lib/api/origin";
+import { browserApiOrigin, secureApiOrigin } from "./src/shared/lib/api/origin";
 
 /**
  * 백엔드 주소 (서버 전용, Vercel 환경별 HTTPS origin). 있으면 브라우저는 이 사이트 주소만 부르고
@@ -9,7 +9,7 @@ import { secureApiOrigin } from "./src/shared/lib/api/origin";
 const hosted = process.env.VERCEL === "1";
 const API_ORIGIN = secureApiOrigin(process.env.API_ORIGIN, hosted);
 const CANONICAL_WEB_ORIGIN = secureApiOrigin(process.env.CANONICAL_WEB_ORIGIN, hosted);
-secureApiOrigin(process.env.NEXT_PUBLIC_API_BASE_URL, hosted);
+browserApiOrigin(process.env.NEXT_PUBLIC_API_BASE_URL, API_ORIGIN, hosted);
 secureApiOrigin(process.env.TRAFFIC_INGEST_URL, hosted);
 
 const nextConfig: NextConfig = {
