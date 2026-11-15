@@ -20,7 +20,11 @@ class UserRecipientFinderTest {
   private final UserNotificationQueryService users = mock(UserNotificationQueryService.class);
   private final NoticeQueryService notices = mock(NoticeQueryService.class);
   private final UserRecipientFinder finder =
-      new UserRecipientFinder(users, notices, new UserRecipientFinder.Properties(List.of()));
+      new UserRecipientFinder(
+          users,
+          notices,
+          new UserRecipientFinder.Properties(List.of()),
+          mock(kr.mujuthaek.api.user.service.EmailNotificationService.class));
 
   @Test
   void favoritesOfNoticesMergedIntoTheNoticeAreRecipientsToo() {

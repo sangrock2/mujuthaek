@@ -47,7 +47,7 @@ class CollectionConfiguration(unittest.TestCase):
         merged = collection.merge(original, {**VALUES, **collection.SETTINGS})
         self.assertIn('KAKAO_CLIENT_SECRET=existing-oauth', merged)
         self.assertEqual(merged.count('EXTRACTION_MONTHLY_BUDGET_USD='), 1)
-        self.assertIn('EXTRACTION_MONTHLY_BUDGET_USD=10', merged)
+        self.assertIn('EXTRACTION_MONTHLY_BUDGET_USD=50', merged)
         self.assertIn('EXTRACTION_PUBLICATION_MODE=manual', merged)
 
     def test_migration_failure_stops_only_workers_and_restores_previous_settings(self):
@@ -58,7 +58,7 @@ class CollectionConfiguration(unittest.TestCase):
             config = {'services': {
                 'collector': {'image': 'collector:test', 'environment': {k: v for k, v in VALUES.items() if k != 'OPENAI_API_KEY'}},
                 'extraction': {'image': 'extraction:test', 'environment': {'OPENAI_API_KEY': VALUES['OPENAI_API_KEY'],
-                               'EXTRACTION_MONTHLY_BUDGET_USD': '10', 'EXTRACTION_PUBLICATION_MODE': 'manual'}}}}
+                               'EXTRACTION_MONTHLY_BUDGET_USD': '50', 'EXTRACTION_PUBLICATION_MODE': 'manual'}}}}
             count = 0
 
             def private_file(text):
