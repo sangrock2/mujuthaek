@@ -123,6 +123,28 @@ class NoticeSearchApiTest {
   }
 
   @Test
+  void sqlOperatorsAndWildcardsStayLiteralSearchData() throws Exception {
+    UUID id = noticeForAges(19, 39, "2026-10-30");
+    title(id, "외부 공격 입력 확인용 공고");
+    for (String keyword : List.of("' OR true --", "'; SELECT 1 --", "%", "_", "\\")) {
+      ObjectNode request = (ObjectNode) NoticeFixtures.JSON.readTree(body(""));
+      ((ObjectNode) request.path("filters")).put("keyword", keyword);
+      mvc.perform(
+              post("/api/v1/notices/search")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(request.toString()))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.items.length()").value(0));
+    }
+    mvc.perform(
+            post("/api/v1/notices/search")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].id").value(id.toString()));
+  }
+
+  @Test
   void craftedPositionCursorIs400Not500() throws Exception {
     noticeForAges(19, 39, "2026-10-30");
     String cursor =

@@ -6,7 +6,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import kr.mujuthaek.api.chat.event.ChatEvent;
+import kr.mujuthaek.api.common.exception.CustomException;
+import kr.mujuthaek.api.common.exception.ErrorCode;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -24,25 +27,45 @@ public class ChatSseHub {
   static final long TIMEOUT_MS = Duration.ofMinutes(30).toMillis();
 
   private final Map<UUID, Set<SseEmitter>> rooms = new ConcurrentHashMap<>();
+  private final int maxConnections;
+  private final int maxRoomConnections;
+  private int totalConnections;
+
+  public ChatSseHub() {
+    this(128, 32);
+  }
+
+  ChatSseHub(int maxConnections, int maxRoomConnections) {
+    this.maxConnections = maxConnections;
+    this.maxRoomConnections = maxRoomConnections;
+  }
 
   /** 방에 연결을 하나 붙여요. 붙자마자 주석 한 줄을 보내 프록시·브라우저가 연결을 바로 열게 해요. */
   public SseEmitter subscribe(UUID noticeId) {
     SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
-    rooms.compute(
-        noticeId,
-        (id, room) -> {
-          Set<SseEmitter> joined = room == null ? ConcurrentHashMap.newKeySet() : room;
-          joined.add(emitter);
-          return joined;
-        });
+    synchronized (rooms) {
+      Set<SseEmitter> joined = rooms.get(noticeId);
+      if (totalConnections >= maxConnections
+          || (joined != null && joined.size() >= maxRoomConnections)) {
+        throw new CustomException(ErrorCode.RATE_LIMITED);
+      }
+      rooms.computeIfAbsent(noticeId, id -> ConcurrentHashMap.newKeySet()).add(emitter);
+      totalConnections++;
+    }
+    AtomicBoolean left = new AtomicBoolean();
     Runnable leave =
-        () ->
+        () -> {
+          if (!left.compareAndSet(false, true)) return;
+          synchronized (rooms) {
             rooms.computeIfPresent(
                 noticeId,
                 (id, room) -> {
                   room.remove(emitter);
                   return room.isEmpty() ? null : room;
                 });
+            totalConnections--;
+          }
+        };
     emitter.onCompletion(leave);
     // 타임아웃이면 정상으로 닫아요. 그냥 두면 스프링이 타임아웃 오류(503)로 끝내 「처리하지 못한 오류」 알림이 가요.
     // 브라우저 EventSource는 끝난 연결에 다시 붙고, Last-Event-ID로 놓친 메시지부터 받아요
@@ -54,7 +77,8 @@ public class ChatSseHub {
     emitter.onError(error -> leave.run());
     try {
       emitter.send(SseEmitter.event().comment("connected"));
-    } catch (IOException e) {
+    } catch (IOException | IllegalStateException e) {
+      leave.run();
       emitter.completeWithError(e);
     }
     return emitter;

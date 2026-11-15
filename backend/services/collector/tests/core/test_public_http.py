@@ -96,6 +96,15 @@ def test_dns_private_mixed_and_empty_answers_are_blocked(addresses):
     assert network.hosts == []
 
 
+@pytest.mark.parametrize("host", ["2130706433", "0x7f000001", "0177.0.0.1", "127.1", "metadata.example"])
+def test_noncanonical_or_named_private_target_never_connects(host):
+    network = RecordingBackend()
+    transport = PublicHTTPTransport(network_backend=PublicNetworkBackend(network, lambda *args, **kwargs: [answer("127.0.0.1")]))
+    with httpx.Client(transport=transport, trust_env=False) as client, pytest.raises((BlockedError, httpx.InvalidURL)):
+        client.get(f"http://{host}/not-sent")
+    assert network.hosts == []
+
+
 def test_connection_uses_checked_numeric_ip_and_preserves_tls_name_and_host():
     network = RecordingBackend()
     resolutions = []

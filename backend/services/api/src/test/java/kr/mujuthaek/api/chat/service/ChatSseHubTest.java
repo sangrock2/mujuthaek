@@ -2,13 +2,18 @@ package kr.mujuthaek.api.chat.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 import kr.mujuthaek.api.chat.event.ChatEvent;
+import kr.mujuthaek.api.common.exception.CustomException;
+import kr.mujuthaek.api.common.exception.ErrorCode;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockAsyncContext;
 import org.springframework.test.web.servlet.MockMvc;
@@ -23,6 +28,46 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 class ChatSseHubTest {
 
   private final ChatSseHub hub = new ChatSseHub();
+
+  @Test
+  void roomAndGlobalBudgetsRejectBeforeAddingAnotherConnection() {
+    var limited = new ChatSseHub(3, 2);
+    UUID room = UUID.randomUUID();
+    limited.subscribe(room);
+    limited.subscribe(room);
+    assertThatThrownBy(() -> limited.subscribe(room))
+        .isInstanceOfSatisfying(
+            CustomException.class,
+            error -> assertThat(error.errorCode()).isEqualTo(ErrorCode.RATE_LIMITED));
+    limited.subscribe(UUID.randomUUID());
+    assertThatThrownBy(() -> limited.subscribe(UUID.randomUUID()))
+        .isInstanceOf(CustomException.class);
+    assertThat(limited.connections(room)).isEqualTo(2);
+  }
+
+  @Test
+  void concurrentConnectionsCannotOverrunTheGlobalBudget() throws Exception {
+    var limited = new ChatSseHub(8, 8);
+    try (var pool = Executors.newFixedThreadPool(8)) {
+      var tasks =
+          IntStream.range(0, 64)
+              .<java.util.concurrent.Callable<Boolean>>mapToObj(
+                  i ->
+                      () -> {
+                        try {
+                          limited.subscribe(UUID.randomUUID());
+                          return true;
+                        } catch (CustomException error) {
+                          assertThat(error.errorCode()).isEqualTo(ErrorCode.RATE_LIMITED);
+                          return false;
+                        }
+                      })
+              .toList();
+      int joined = 0;
+      for (var result : pool.invokeAll(tasks)) if (result.get()) joined++;
+      assertThat(joined).isEqualTo(8);
+    }
+  }
 
   @Test
   void subscribeJoinsTheRoom() {
@@ -54,12 +99,15 @@ class ChatSseHubTest {
   @Test
   void timedOutConnectionClosesNormallyInsteadOfATimeoutError() throws Exception {
     UUID room = UUID.randomUUID();
-    MockMvc mvc = MockMvcBuilders.standaloneSetup(new StreamController(hub)).build();
+    var limited = new ChatSseHub(1, 1);
+    MockMvc mvc = MockMvcBuilders.standaloneSetup(new StreamController(limited)).build();
     MvcResult stream =
         mvc.perform(get("/rooms/{id}/stream", room))
             .andExpect(request().asyncStarted())
             .andReturn();
-    assertThat(hub.connections(room)).isEqualTo(1);
+    assertThat(limited.connections(room)).isEqualTo(1);
+    assertThatThrownBy(() -> limited.subscribe(UUID.randomUUID()))
+        .isInstanceOf(CustomException.class);
 
     // 서블릿 컨테이너가 비동기 타임아웃을 알리는 것처럼
     MockAsyncContext async = (MockAsyncContext) stream.getRequest().getAsyncContext();
@@ -69,7 +117,12 @@ class ChatSseHubTest {
 
     // 정상으로 닫히면 결과가 비어 있어요 (그냥 두면 AsyncRequestTimeoutException이 결과가 돼요)
     assertThat(stream.getAsyncResult()).isNull();
-    assertThat(hub.connections(room)).isZero();
+    assertThat(limited.connections(room)).isZero();
+    // 타임아웃·완료가 겹쳐도 예산을 두 번 돌려주지 않고, 다음 연결 하나만 허용해요.
+    for (AsyncListener listener : async.getListeners()) listener.onComplete(new AsyncEvent(async));
+    limited.subscribe(UUID.randomUUID());
+    assertThatThrownBy(() -> limited.subscribe(UUID.randomUUID()))
+        .isInstanceOf(CustomException.class);
   }
 
   @RestController
