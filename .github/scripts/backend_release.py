@@ -71,12 +71,39 @@ def request(release, mode, request_id, expected_base=None):
     if data['release'] != release:
         raise ValueError('Manifest mismatch')
     Path('desired.json').write_text(json.dumps({'release': release, 'mode': mode, 'request': request_id,
-                                              'expected_base': expected_base}))
+                                              'expected_base': expected_base, 'progress_protocol': 1}))
     put('desired.json', 'desired.json')
-    for _ in range(156):
+    started = time.monotonic()
+    deadline = started + 38 * 60
+    reported = started - 30
+    previous_phase = None
+    failures = 0
+    print('Waiting for the deployment host to acknowledge the release request', flush=True)
+    while time.monotonic() < deadline:
         try:
             result = get(f'results/{request_id}.json', 'deployment-result.json')
-        except subprocess.CalledProcessError:
+            failures = 0
+        except subprocess.CalledProcessError as error:
+            missing = any(code in (error.stderr or '') for code in ('404', 'NoSuchKey', 'Not Found'))
+            failures = 0 if missing else failures + 1
+            if failures >= 3:
+                raise TimeoutError('Cannot read deployment result; inspect server status before retrying') from None
+            now = time.monotonic()
+            if now - reported >= 30:
+                print(f'Host acknowledgement pending ({int(now - started)}s elapsed)', flush=True)
+                reported = now
+            time.sleep(10)
+            continue
+        if result.get('request') != request_id:
+            raise RuntimeError('Deployment result request mismatch')
+        if result.get('status') == 'running':
+            if result.get('release') != release:
+                raise RuntimeError('Deployment progress release mismatch')
+            phase = result.get('phase', 'working')
+            now = time.monotonic()
+            if phase != previous_phase or now - reported >= 30:
+                print(f'Host phase: {phase} ({int(now - started)}s elapsed)', flush=True)
+                previous_phase, reported = phase, now
             time.sleep(10)
             continue
         if result.get('request') != request_id or result.get('release') != release or not result.get('ok'):

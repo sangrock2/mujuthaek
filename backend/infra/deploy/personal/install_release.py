@@ -53,7 +53,7 @@ Type=oneshot
 WorkingDirectory={BASE}
 ExecStart=/usr/bin/python3 {BASE}/release_host.py
 UMask=0077
-TimeoutStartSec=25min
+TimeoutStartSec=35min
 '''
 timer = '''[Unit]
 Description=Check Mujuthaek release request every minute

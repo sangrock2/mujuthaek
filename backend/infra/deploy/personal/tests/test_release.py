@@ -2,6 +2,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -73,6 +74,7 @@ class ReleaseSafety(unittest.TestCase):
     def fake(self, directory):
         obj = host.Host.__new__(host.Host)
         obj.runtime = Path(directory)
+        obj.worker_cpu_budget = nullcontext
         obj.current = lambda: {'release': 'release-old'}
         obj.schema = lambda: 'schema-a'
         obj.download = lambda key, name: obj.runtime / name
