@@ -3,6 +3,7 @@ import json
 import secrets
 from pathlib import Path
 from aws_personal import AWS, INSTANCE, RUNTIME, REGION, STATIC_IP_NAME
+from storage_security import tls_policy, runtime_boundary
 
 
 def main():
@@ -42,6 +43,13 @@ def main():
              "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true")
     aws.call("s3api", "put-bucket-encryption", "--bucket", bucket, "--server-side-encryption-configuration",
              json.dumps({"Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}))
+    try:
+        existing = json.loads(aws.call("s3api", "get-bucket-policy", "--bucket", bucket)["Policy"])
+    except RuntimeError as error:
+        if 'NoSuchBucketPolicy' not in str(error):
+            raise
+        existing = None
+    aws.call('s3api', 'put-bucket-policy', '--bucket', bucket, '--policy', json.dumps(tls_policy(bucket, existing)))
     RUNTIME.mkdir(exist_ok=True)
     env_file = RUNTIME / ".env"
     if env_file.exists():
@@ -52,6 +60,7 @@ def main():
         {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": f"arn:aws:s3:::{bucket}"},
         {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"], "Resource": f"arn:aws:s3:::{bucket}/*"},
     ]}
+    policy['Statement'].extend(runtime_boundary(bucket)['Statement'])
     aws.call("iam", "put-user-policy", "--user-name", username, "--policy-name", "PersonalBucketOnly", "--policy-document", json.dumps(policy))
     key = aws.call("iam", "create-access-key", "--user-name", username)["AccessKey"]
     values = {k: secrets.token_hex(32) for k in (

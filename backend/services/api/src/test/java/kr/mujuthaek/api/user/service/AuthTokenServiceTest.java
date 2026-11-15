@@ -73,6 +73,8 @@ class AuthTokenServiceTest {
             Instant.now());
     org.mockito.Mockito.when(repo.findByTokenHash(AuthTokenService.hash("raw")))
         .thenReturn(java.util.Optional.of(saved));
+    org.mockito.Mockito.when(repo.findUserIdByTokenHash(AuthTokenService.hash("raw")))
+        .thenReturn(java.util.Optional.of(user.userId()));
     org.mockito.Mockito.when(
             repo.markRotated(
                 org.mockito.ArgumentMatchers.eq(AuthTokenService.hash("raw")),

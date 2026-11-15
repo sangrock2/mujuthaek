@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: gradle
+    directories:
+      - /backend/services/api
+      - /backend/services/notification
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: uv
+    directories:
+      - /backend/services/collector
+      - /backend/services/extraction
+      - /backend/libs/python-platform
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

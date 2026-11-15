@@ -1,0 +1,43 @@
+name: Security regression proof
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - backend/services/api/src/main/java/kr/mujuthaek/api/user/**
+      - backend/services/api/src/test/java/kr/mujuthaek/api/user/security/SecurityIntegrationTest.java
+      - backend/infra/security/**
+      - .github/workflows/security-proof.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: security-proof-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  logout:
+    name: Historical logout reproduction and patched verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOTIFICATION_MAIL_PROVIDER: log
+      NOTIFICATION_PUSH_PROVIDER: log
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          cache-read-only: true
+      - name: Reproduce only in isolated Testcontainers databases
+        run: python3 backend/infra/security/verify_logout_regression.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: logout-security-proof
+          path: backend/services/api/build/reports/security/
+          retention-days: 30

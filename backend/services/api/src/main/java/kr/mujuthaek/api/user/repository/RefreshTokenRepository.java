@@ -12,6 +12,14 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
 
   Optional<RefreshToken> findByTokenHash(String tokenHash);
 
+  /** 잠금 전에 엔티티를 읽지 않아 회전 시각이 영속성 컨텍스트에 오래 남지 않게 해요. */
+  @Query("select t.userId from RefreshToken t where t.tokenHash = :tokenHash")
+  Optional<UUID> findUserIdByTokenHash(String tokenHash);
+
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
+  @Query("delete from RefreshToken t where t.userId = :userId and t.familyId = :familyId")
+  int deleteFamily(UUID userId, UUID familyId);
+
   @Modifying
   @Query("delete from RefreshToken t where t.tokenHash = :tokenHash")
   int deleteByTokenHash(String tokenHash);
