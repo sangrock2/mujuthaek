@@ -1,0 +1,5 @@
+dba2a80db064e025f3db76852a3bc361306b83be:services/api/src/test/java/kr/mujuthaek/api/traffic/ga/TrafficServiceTest.java:private-key:174
+4dace2bc1b1171eedb41b9317b4ed6c0bbd72d97:services/api/src/test/java/kr/mujuthaek/api/traffic/ga/GaDataClientTest.java:private-key:38
+4dace2bc1b1171eedb41b9317b4ed6c0bbd72d97:services/api/src/test/java/kr/mujuthaek/api/traffic/ga/TrafficServiceTest.java:private-key:68
+48b68b7cd77d61b204cfdf16a006923e8a174569:services/notification/src/test/java/kr/mujuthaek/notification/delivery/push/WebPushCryptoTest.java:generic-api-key:27
+6fdb25a21700b2224b03385bd0b176165c4d763d:contracts/tests/test_notice_contracts.py:generic-api-key:449

@@ -55,7 +55,7 @@ class Selection(unittest.TestCase):
             (['backend/contracts/events/notice.v1.json'], ['api', 'notification']),
             (['backend/services/extraction/data/legal-dong-codes/codes.csv'], ['api']),
             (['backend/.dockerignore'], ['api', 'notification']),
-            (['README.md', 'docs/deployment.md', 'frontend/README.md'], []),
+            (['README.md', 'docs/deployment.md', 'frontend/README.md', '.gitleaksignore'], []),
             (['backend/services/api/src/test/java/Test.java', '.github/workflows/checks.yml'], []),
             (['backend/services/collector/src/main.py', 'backend/libs/python-platform/pyproject.toml'], []),
             (['backend/infra/deploy/personal/operations_monitor.py', '.github/workflows/operations.yml'], []),

@@ -211,6 +211,57 @@ class PreparationIntegrationTest {
   }
 
   @Test
+  void anotherMemberCannotMutateOrDeletePersonalTasksOverHttp() throws Exception {
+    var preparation = service.create(user.userId(), noticeId).preparation();
+    var owned =
+        service.addTask(user.userId(), preparation.id(), "내 비공개 할 일", null, preparation.revision());
+    var task = owned.tasks().getFirst();
+    var other =
+        login.login(new SocialProfile(SocialProvider.KAKAO, "security-other-member", "다른 회원"));
+    String token = "Bearer " + tokens.issue(other).accessToken();
+    String base = "/api/users/me/preparations/";
+    String path = base + owned.id() + "/tasks/" + task.id();
+    var change =
+        json.createObjectNode()
+            .put("title", "다른 회원의 변경")
+            .put("done", true)
+            .put("expectedRevision", owned.revision());
+    mvc.perform(get("/api/users/me/preparations").header("Authorization", token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items").isEmpty());
+    mvc.perform(
+            put(path)
+                .header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(change.toString()))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            delete(path)
+                .param("expectedRevision", Long.toString(owned.revision()))
+                .header("Authorization", token))
+        .andExpect(status().isNotFound());
+    // 준비함 삭제는 없는 항목·남의 항목 모두 204로 무시해요. 아래에서 원본이 그대로인지 확인해요.
+    mvc.perform(delete(base + owned.id()).header("Authorization", token))
+        .andExpect(status().isNoContent());
+    mvc.perform(delete(base + UUID.randomUUID()).header("Authorization", token))
+        .andExpect(status().isNoContent());
+    // 준비함 ID만 내 것으로 바꾸고 다른 사람의 task ID를 섞어도 권한을 얻지 못해요.
+    var theirs = service.create(other.userId(), noticeId).preparation();
+    change.put("expectedRevision", theirs.revision());
+    mvc.perform(
+            put(base + theirs.id() + "/tasks/" + task.id())
+                .header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(change.toString()))
+        .andExpect(status().isNotFound());
+    var unchanged = service.get(user.userId(), owned.id());
+    assertThat(unchanged.revision()).isEqualTo(owned.revision());
+    assertThat(unchanged.tasks()).hasSize(1);
+    assertThat(unchanged.tasks().getFirst().title()).isEqualTo("내 비공개 할 일");
+    assertThat(unchanged.tasks().getFirst().done()).isFalse();
+  }
+
+  @Test
   void concurrentCreationAndDocumentWritesAreSerialized() throws Exception {
     try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
       var futures =
