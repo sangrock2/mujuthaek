@@ -112,6 +112,7 @@ services:
       NOTIFICATION_MAIL_PROVIDER: ${NOTIFICATION_MAIL_PROVIDER:-log}
       NOTIFICATION_MAIL_FROM: ${NOTIFICATION_MAIL_FROM:-noreply@mujuthaek.store}
       NOTIFICATION_MAIL_FEEDBACK_ADDRESS: ${NOTIFICATION_MAIL_FEEDBACK_ADDRESS:-contact@mujuthaek.store}
+      NOTIFICATION_MAIL_CONSENT_API_URL: http://api:8080
       AWS_REGION: ap-northeast-2
       AWS_ACCESS_KEY_ID: ${NOTIFICATION_AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${NOTIFICATION_AWS_SECRET_ACCESS_KEY:-}
@@ -151,7 +152,7 @@ services:
     profiles: [workers]
     image: mujuthaek-personal-collector:${COLLECTOR_RELEASE:-${RELEASE}}
     build: {context: ../../.., dockerfile: services/collector/Dockerfile}
-    mem_limit: 384m
+    mem_limit: 768m
     environment:
       <<: *aws
       SERVICE_NAME: collector

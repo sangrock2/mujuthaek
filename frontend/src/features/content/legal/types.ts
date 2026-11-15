@@ -18,4 +18,4 @@ export type LegalDocument = {
 };
 
 export const LEGAL_CONTACT = "towo2ssss@gmail.com";
-export const LEGAL_ORIGIN = "https://mujuthaek.vercel.app";
+export const LEGAL_ORIGIN = "https://mujuthaek.store";

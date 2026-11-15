@@ -2,6 +2,26 @@ import type { Announcement } from "@/features/content/mocks/content";
 
 export const legalAnnouncements: Announcement[] = [
   {
+    id: "email-notifications-20261115",
+    category: "안내",
+    pinned: true,
+    date: "2026.11.15",
+    title: "이메일 알림의 인증·수신 동의·해제를 안내합니다",
+    body: [
+      "직접 등록한 이메일을 인증하고 별도로 수신에 동의한 경우에만 선택한 공고·마감·답변 알림을 보내요. 기존 계정 연락용 이메일 동의로는 공고 알림을 보내지 않아요.",
+      "개인정보처리방침 v1.1에 처리 항목과 보관·삭제 및 수신 해제 방법을 추가했어요. v1.0 전문은 정책 이력에서 그대로 확인할 수 있어요.",
+    ],
+    points: [
+      "주소 인증과 수신 동의 분리",
+      "알림 설정·메일 링크에서 수신 해제",
+      "기존 개인정보처리방침 전문 보존",
+    ],
+    mobileBody: [
+      "이메일 인증과 별도 동의 후에만 알림이 켜져요. 알림 설정이나 메일 링크에서 언제든 해제할 수 있어요.",
+    ],
+    cta: { label: "개인정보처리방침 보기", href: "/privacy" },
+  },
+  {
     id: "legal-reading-guide-20261114",
     category: "안내",
     pinned: true,

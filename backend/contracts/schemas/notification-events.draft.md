@@ -74,7 +74,7 @@ PWA ──HTTP──▶ api
 | --- | --- | --- | --- |
 | `type` | enum | ✅ | `NEW_NOTICE` 새 주거·사업공간 공고 · `NEW_SUPPORT` 새 지원 정책·창업지원 · `DEADLINE_D3`·`DEADLINE_D1` 관심 공고 마감 · `CORRECTED` 관심 공고 정정 · `FOLLOW_UP` 관심 공고 후속 안내 · `REPORT_ANSWERED` 회원 제보에 관리자가 답함. 알림 서버는 묶음 여부(NEW_*만 묶음)에만 써요 |
 | `dedupKey` | string | ✅ | 같은 알림인지 가리는 열쇠 (회원 ID 빼고). 아래 표. 알림 서버는 `{userId}:{dedupKey}`·채널마다 한 번만 보내요 |
-| `target.type` | `NOTICE` \| `BENEFIT` \| `STARTUP_SUPPORT` \| `SPACE_RECRUITMENT` | ✅ | ID가 들어 있는 api 테이블 (`notices` / `benefits` / 창업지원 사업·사업공간 모집은 `notice.policy_judgments`, ID = rawPolicyId). 추적용이에요 |
+| `target.type` | `NOTICE` \| `BENEFIT` \| `STARTUP_SUPPORT` \| `SPACE_RECRUITMENT` \| `REPORT` | ✅ | ID가 들어 있는 api 테이블 (`notices` / `benefits` / 창업지원 사업·사업공간 모집은 `notice.policy_judgments`, ID = rawPolicyId). 추적용이에요 |
 | `target.id` | uuid | ✅ | 그 테이블의 ID |
 | `title` | string | ✅ | api가 만든 알림 제목. 메일 제목·알림함과 같아요 (3장 문구 예) |
 | `body` | string | ✅ | api가 만든 알림 본문 |
@@ -265,3 +265,12 @@ SES 반송(없는 주소)·스팸 신고를 SNS로 받으면 알림 서버가 �
 1. `BenefitUpdated` 내부 이벤트와 정책 정정 알림 항목 (benefit 저장을 만들 때)
 2. 후속 안내 글 제목·ID를 notice 모듈 조회 메서드로 받을 수 있는지 (notice 담당 확인)
 3. `email.bounced`와 알림 서버 아웃박스 (배포 전)
+
+## 선택 이메일 알림 (2026-11-15)
+
+- 연락용 이메일과 분리한 `account.notification_emails`에 주소 인증·종류별 수신 동의를 저장합니다. 기존 회원은 모두 꺼짐입니다.
+- 인증 링크는 15분·1회 사용, 요청한 회원에게만 유효합니다. 원문 토큰 대신 SHA-256 해시를 보관합니다. 요청은 회원별 1분 간격·한국 날짜당 5회입니다.
+- `NEW_NOTICE`·`NEW_SUPPORT`, `DEADLINE_D3`·`DEADLINE_D1`, `REPORT_ANSWERED`만 선택 이메일 대상으로 둡니다. 정정·후속 알림은 이메일로 보내지 않습니다.
+- 일반 문의·제보 답변은 `REPORT` 대상과 제보 ID를 사용하며 답변 원문은 메일에 넣지 않습니다.
+- 마감 대상은 기존 관심 회원과 신청 준비함에서 PREPARING인 회원을 합칩니다.
+- SES 발송 직전 내부 API에서 주소·인증·현재 동의를 재확인합니다. 확인 실패 시 발송하지 않고 재시도하며, 철회된 주소는 발송하지 않습니다. 메일의 서명된 링크로 로그인 없이 수신 해제할 수 있습니다.

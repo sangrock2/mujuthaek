@@ -92,9 +92,10 @@ public class ReportAnsweredNotificationService {
     return switch (event) {
       case NoticeReportAnswered e -> notice("NOTICE", e.noticeId(), e.targetTitle(), "");
       case AreaReportAnswered e -> notice("AREA", e.noticeId(), e.targetTitle(), "생활권 ");
-      // 일반 제보는 가리킬 대상이 없어요: 알림함에만 남기고 누르면 내 정보의 제보 탭으로
+      // 일반 제보도 문의 자체를 대상으로 삼아 이메일로 답변 도착을 알려요.
       case GeneralReportAnswered e ->
-          Optional.of(new Target("GENERAL", null, null, null, "", ScreenPaths.MY_REPORTS));
+          Optional.of(
+              new Target("GENERAL", "REPORT", e.reportId(), null, "", ScreenPaths.MY_REPORTS));
       case BenefitReportAnswered e ->
           benefits
               .findSummaryByRawPolicyId(e.policyId())
