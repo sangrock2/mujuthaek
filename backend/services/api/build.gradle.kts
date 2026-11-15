@@ -31,7 +31,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-amqp")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus") // 성능 테스트 지표 (/actuator/prometheus, 서버 안에서만)
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1") // API 문서(스웨거) /swagger-ui.html. 로컬·개발 서버만 켜요
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.2.0") // API 문서(스웨거) /swagger-ui.html. 로컬·개발 서버만 켜요
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-client") // 소셜 로그인 (카카오·네이버·구글)
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server") // JWT 발급·검증 (Nimbus)
     implementation("org.flywaydb:flyway-database-postgresql")
