@@ -32,7 +32,7 @@ public class RefreshToken {
   @Column(nullable = false)
   private Instant createdAt;
 
-  /** 로그인 연장으로 새 값으로 바꾼 시각. 바꾼 뒤 잠깐은 같은 값도 받아 줘요(AuthTokenService.ROTATED_GRACE). */
+  /** 로그인 연장으로 사용한 시각. 같은 값이 다시 오면 계보 전체를 폐기해요. */
   private Instant rotatedAt;
 
   protected RefreshToken() {}

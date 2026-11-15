@@ -10,6 +10,8 @@ from mujuthaek_collector.core.documents.hwp import hwp_to_html, hwp_to_plain_tex
 from mujuthaek_collector.core.html import body_text, soup
 
 MIN_CHARS = 200  # 이보다 글자가 적으면 읽기 실패로 봐요 (스캔본 PDF 등)
+MAX_HWPX_BYTES = 50 * 1024 * 1024  # 다운로드 크기와 별도로 압축을 푼 XML의 합을 제한해요
+MAX_HWPX_ENTRIES = 2048
 
 
 def _table_lines(rows: list[list[str | None]]) -> str:
@@ -33,8 +35,19 @@ def pdf_text(path: Path) -> tuple[str | None, str]:
 
 def hwpx_text(path: Path) -> tuple[str | None, str]:
     with zipfile.ZipFile(path) as archive:
-        sections = sorted(n for n in archive.namelist() if re.match(r"Contents/section\d+\.xml", n))
-        xml = "".join(archive.read(n).decode("utf-8", errors="replace") for n in sections)
+        entries = archive.infolist()
+        if len(entries) > MAX_HWPX_ENTRIES or sum(entry.file_size for entry in entries) > MAX_HWPX_BYTES:
+            raise ValueError("HWPX decompression limit exceeded")
+        sections = sorted((entry for entry in entries if re.fullmatch(r"Contents/section\d+\.xml", entry.filename)), key=lambda entry: entry.filename)
+        parts, remaining = [], MAX_HWPX_BYTES
+        for entry in sections:
+            with archive.open(entry) as source:
+                data = source.read(remaining + 1)
+            if len(data) > remaining:
+                raise ValueError("HWPX decompression limit exceeded")
+            remaining -= len(data)
+            parts.append(data.decode("utf-8", errors="replace"))
+        xml = "".join(parts)
 
     def table_to_text(match: re.Match) -> str:
         rows = []

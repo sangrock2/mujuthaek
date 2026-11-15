@@ -59,7 +59,7 @@ class AuthTokenServiceTest {
   }
 
   @Test
-  void concurrentRefreshLoserAlsoGetsTokens() {
+  void concurrentRefreshLoserRevokesTheFamily() {
     // 두 요청이 같은 쿠키로 동시에 찾기를 통과하고, 먼저 온 쪽이 바꾼 시각을 적어 늦은 쪽의 표시가 0줄인 경우.
     // 예전에는 409로 끝나 프론트가 로그아웃으로 봤어요. 지금은 늦은 쪽도 새 토큰을 받아요(2026-10-29)
     LoginUser user = login("3010");
@@ -82,43 +82,58 @@ class AuthTokenServiceTest {
         .thenReturn(0);
     var service = new AuthTokenService(jwtEncoder, props, repo, users, admins, Clock.systemUTC());
 
-    var pair = service.refresh("raw");
-
-    assertThat(pair.accessToken()).isNotBlank();
-    assertThat(pair.refreshToken()).isNotEqualTo("raw");
+    assertThatThrownBy(() -> service.refresh("raw")).isInstanceOf(CustomException.class);
+    org.mockito.Mockito.verify(repo).deleteFamily(user.userId(), saved.getFamilyId());
   }
 
   @Test
-  void rotatedRefreshTokenIsAcceptedOnlyWithinGrace() {
-    // 새로고침 연타·탭 여러 개: 바꾼 옛 쿠키가 잠깐 뒤에 또 와도 로그아웃되지 않아요. 30초가 지나면 받지 않아요
+  void reusedRefreshTokenImmediatelyRevokesItsFamilyButNotAnotherLogin() {
+    // 회전 직후의 재사용도 거부하고 해당 로그인만 폐기해요.
     LoginUser user = login("3011");
     Instant t0 = Instant.now();
     String raw = at(t0).issue(user).refreshToken();
 
+    String otherLogin = at(t0).issue(user).refreshToken();
     String first = at(t0).refresh(raw).refreshToken();
-    var late = at(t0.plusSeconds(10)).refresh(raw);
-
-    assertThat(late.refreshToken()).isNotEqualTo(first).isNotEqualTo(raw);
-    assertThat(at(t0.plusSeconds(10)).refresh(first).accessToken())
-        .isNotBlank(); // 먼저 받은 새 값도 그대로 써요
-    assertThatThrownBy(
-            () -> at(t0.plus(AuthTokenService.ROTATED_GRACE).plusSeconds(1)).refresh(raw))
+    assertThatThrownBy(() -> at(t0).refresh(raw))
         .isInstanceOf(CustomException.class)
         .extracting(e -> ((CustomException) e).errorCode())
         .isEqualTo(ErrorCode.INVALID_REFRESH_TOKEN);
+    assertThatThrownBy(() -> at(t0).refresh(first)).isInstanceOf(CustomException.class);
+    assertThat(at(t0).refresh(otherLogin).accessToken()).isNotBlank();
   }
 
   @Test
-  void cleanupDeletesRotatedTokensPastGraceButKeepsFreshOnes() {
+  void cleanupKeepsUsedHashesUntilExpiryForReplayDetection() {
     LoginUser user = login("3012");
     Instant t0 = Instant.now();
     String raw = at(t0).issue(user).refreshToken();
     String fresh = at(t0).refresh(raw).refreshToken();
 
-    at(t0.plus(AuthTokenService.ROTATED_GRACE).plusSeconds(1)).deleteExpired();
-
-    assertThat(refreshTokens.findByTokenHash(AuthTokenService.hash(raw))).isEmpty();
+    assertThat(at(t0.plusSeconds(31)).deleteExpired()).isZero();
+    assertThat(refreshTokens.findByTokenHash(AuthTokenService.hash(raw))).isPresent();
     assertThat(refreshTokens.findByTokenHash(AuthTokenService.hash(fresh))).isPresent();
+    at(t0.plus(props.refreshTokenTtl()).plusSeconds(1)).deleteExpired();
+    assertThat(refreshTokens.findByTokenHash(AuthTokenService.hash(raw))).isEmpty();
+    assertThat(refreshTokens.findByTokenHash(AuthTokenService.hash(fresh))).isEmpty();
+  }
+
+  @Test
+  void accountBoundIssueLimitDoesNotConsumeTheRefreshCookieOrBlockAnotherMember() {
+    LoginUser user = login("issue-limit-member");
+    LoginUser other = login("issue-limit-other");
+    Instant now = Instant.now();
+    String raw = at(now).issue(user).refreshToken();
+    for (int i = 1; i < AuthTokenService.MAX_ISSUED_PER_MINUTE; i++) at(now).issue(user);
+    assertThatThrownBy(() -> at(now).refresh(raw))
+        .isInstanceOfSatisfying(
+            CustomException.class,
+            error -> assertThat(error.errorCode()).isEqualTo(ErrorCode.RATE_LIMITED));
+    assertThat(
+            refreshTokens.findByTokenHash(AuthTokenService.hash(raw)).orElseThrow().getRotatedAt())
+        .isNull();
+    assertThat(at(now).issue(other).accessToken()).isNotBlank();
+    assertThat(at(now.plusSeconds(61)).refresh(raw).accessToken()).isNotBlank();
   }
 
   private AuthTokenService at(Instant now) {

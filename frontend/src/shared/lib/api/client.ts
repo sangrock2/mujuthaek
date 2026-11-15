@@ -39,25 +39,69 @@ export class ApiError extends Error {
 // access token은 메모리에만 둬요. refresh token은 백엔드가 HttpOnly 쿠키로 관리해요
 let accessToken: string | null = null;
 let refreshing: Promise<string | null> | null = null;
+let sessionEpoch = 0;
+let sessionChannel: BroadcastChannel | null = null;
+const sessionListeners = new Set<() => void>();
 
 export const authToken = {
   get: () => accessToken,
   set: (token: string | null) => {
+    sessionEpoch++;
     accessToken = token;
   },
 };
 
-/** 로그인 연장 한 번. 409(다른 요청이 먼저 연장함)면 그쪽이 받은 새 쿠키로 한 번 더 해요 */
-async function postRefresh(retried = false): Promise<string | null> {
+function channel() {
+  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return null;
+  sessionChannel ??= new BroadcastChannel("mujuthaek-session");
+  return sessionChannel;
+}
+
+export function subscribeSessionEnded(listener: () => void) {
+  sessionListeners.add(listener);
+  const bus = channel();
+  if (bus)
+    bus.onmessage = (event) => {
+      if (event.data?.type !== "logout") return;
+      authToken.set(null);
+      for (const notify of sessionListeners) notify();
+    };
+  return () => {
+    sessionListeners.delete(listener);
+    if (!sessionListeners.size) {
+      sessionChannel?.close();
+      sessionChannel = null;
+    }
+  };
+}
+
+async function withSessionLock<T>(run: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request(
+      "mujuthaek-auth-refresh",
+      { signal: AbortSignal.timeout(20000) },
+      run,
+    );
+  }
+  return run();
+}
+
+export async function endSession() {
+  await withSessionLock(async () => {
+    await apiFetch(endpoints.authLogout, { method: "POST", signal: AbortSignal.timeout(10000) });
+    authToken.set(null);
+    channel()?.postMessage({ type: "logout" });
+  });
+}
+
+/** 로그인 연장 한 번. 사용한 토큰을 다시 보내는 자동 재시도는 하지 않아요. */
+async function postRefresh(): Promise<string | null> {
   const res = await fetch(`${API_BASE_URL}${endpoints.authRefresh}`, {
     method: "POST",
     headers: { Accept: "application/json" },
     credentials: "include",
+    signal: AbortSignal.timeout(10000),
   });
-  if (res.status === 409 && !retried) {
-    await new Promise((r) => setTimeout(r, 300));
-    return postRefresh(true);
-  }
   const data = res.ok ? ((await res.json()) as { accessToken: string }) : null;
   return data?.accessToken ?? null;
 }
@@ -67,17 +111,15 @@ async function postRefresh(retried = false): Promise<string | null> {
  * 잠금으로 한 탭씩 차례로 해요(같은 쿠키로 동시에 연장하면 늦은 쪽이 로그아웃되던 문제, 2026-10-29). 잠금이 없는 브라우저는 그냥 보내요
  */
 export function refreshAccessToken(): Promise<string | null> {
-  const run = () => postRefresh();
-  // 잠금 콜백이 돌려준 Promise를 풀어 받아요
-  const locked = async (): Promise<string | null> =>
-    await navigator.locks.request("mujuthaek-auth-refresh", run);
-  refreshing ??= (typeof navigator !== "undefined" && navigator.locks ? locked() : run())
+  const epoch = sessionEpoch;
+  refreshing ??= withSessionLock(() => postRefresh())
     .then((token) => {
+      if (epoch !== sessionEpoch) return null;
       accessToken = token;
       return accessToken;
     })
     .catch(() => {
-      accessToken = null;
+      if (epoch === sessionEpoch) accessToken = null;
       return null;
     })
     .finally(() => {

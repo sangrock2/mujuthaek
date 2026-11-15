@@ -16,6 +16,9 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
   @Query("select t.userId from RefreshToken t where t.tokenHash = :tokenHash")
   Optional<UUID> findUserIdByTokenHash(String tokenHash);
 
+  @Query("select count(t) from RefreshToken t where t.userId = :userId and t.createdAt >= :since")
+  long recentlyIssued(UUID userId, Instant since);
+
   @Modifying(flushAutomatically = true, clearAutomatically = true)
   @Query("delete from RefreshToken t where t.userId = :userId and t.familyId = :familyId")
   int deleteFamily(UUID userId, UUID familyId);
@@ -34,8 +37,12 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
       "update RefreshToken t set t.rotatedAt = :now where t.tokenHash = :tokenHash and t.rotatedAt is null")
   int markRotated(String tokenHash, Instant now);
 
-  /** 만료된 값과, 바꾼 지 rotatedBefore보다 오래돼 더는 받지 않는 값을 지워요. */
+  @Query(
+      "select (count(t) > 0) from RefreshToken t where t.userId = :userId and t.familyId = :familyId and t.rotatedAt is null and t.expiresAt > :now")
+  boolean activeFamily(UUID userId, UUID familyId, Instant now);
+
+  /** 사용한 토큰의 해시도 원래 만료일까지 남겨 재사용을 감지해요. */
   @Modifying
-  @Query("delete from RefreshToken t where t.expiresAt <= :now or t.rotatedAt <= :rotatedBefore")
-  int deleteExpired(Instant now, Instant rotatedBefore);
+  @Query("delete from RefreshToken t where t.expiresAt <= :now")
+  int deleteExpired(Instant now);
 }
