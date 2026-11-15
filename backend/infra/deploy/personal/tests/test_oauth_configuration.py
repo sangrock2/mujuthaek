@@ -2,9 +2,14 @@ import importlib.util
 import json
 import tempfile
 import unittest
+import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import release_host
 
 spec = importlib.util.spec_from_file_location('configure_oauth', Path(__file__).resolve().parents[1] / 'configure_oauth.py')
 oauth = importlib.util.module_from_spec(spec)
@@ -79,8 +84,11 @@ class OAuthConfiguration(unittest.TestCase):
             self.run_apply(directory).assert_called_once()
 
     def test_restart_names_api_only_and_never_builds_images(self):
-        with patch.object(oauth, 'compose') as compose, patch.object(oauth, 'healthy'):
+        with patch.object(oauth, 'compose') as compose, patch.object(oauth, 'healthy'), \
+                patch.object(release_host, 'Host') as factory:
+            factory.return_value.worker_cpu_budget.return_value = nullcontext()
             oauth.restart(Path('.env'))
+            factory.return_value.worker_cpu_budget.assert_called_once()
         self.assertEqual(compose.call_args_list[0].args,
                          (Path('.env'), 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'api'))
 

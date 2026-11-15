@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import time
 from pathlib import Path
 
 from configure_collection import merge, private_file
@@ -45,16 +44,11 @@ def credentials(text):
 
 
 def restart(env):
-    compose(env, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'notification')
-    for _ in range(30):
-        try:
-            result = compose(env, 'exec', '-T', 'nginx', 'wget', '-qO-', 'http://notification:8081/actuator/health')
-            if json.loads(result.stdout).get('status') == 'UP':
-                return
-        except Exception:
-            pass
-        time.sleep(3)
-    raise RuntimeError('Notification service did not become healthy')
+    from release_host import Host
+    host = Host()
+    with host.worker_cpu_budget():
+        compose(env, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'notification')
+        host.healthy(('notification',))
 
 
 def main():
