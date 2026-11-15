@@ -20,6 +20,9 @@ public class RefreshToken {
   @Column(nullable = false)
   private UUID userId;
 
+  @Column(nullable = false)
+  private UUID familyId;
+
   @Column(nullable = false, length = 64, unique = true)
   private String tokenHash;
 
@@ -35,7 +38,13 @@ public class RefreshToken {
   protected RefreshToken() {}
 
   public RefreshToken(UUID userId, String tokenHash, Instant expiresAt, Instant now) {
+    this(userId, UUID.randomUUID(), tokenHash, expiresAt, now);
+  }
+
+  public RefreshToken(
+      UUID userId, UUID familyId, String tokenHash, Instant expiresAt, Instant now) {
     this.userId = userId;
+    this.familyId = familyId;
     this.tokenHash = tokenHash;
     this.expiresAt = expiresAt;
     this.createdAt = now;
@@ -51,5 +60,9 @@ public class RefreshToken {
 
   public Instant getRotatedAt() {
     return rotatedAt;
+  }
+
+  public UUID getFamilyId() {
+    return familyId;
   }
 }

@@ -1,3 +1,7 @@
 allowBuilds:
   sharp: false
   unrs-resolver: false
+
+# GHSA-g3hv-75wg-m249: eslint가 가져오는 glob 처리기의 자원 증폭 수정.
+overrides:
+  "minimatch@>=7.0.0 <11.0.1": 11.0.1

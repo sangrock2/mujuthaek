@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "4.1.1"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
     id("com.diffplug.spotless") version "8.9.0"
     jacoco
@@ -19,6 +19,9 @@ java {
 repositories {
     mavenCentral()
 }
+
+// GHSA-cqgh-8p3p-mx4m 등: Boot BOM의 5.30.0에는 AMQP 파서·JSON-RPC 수정이 빠져 있어요.
+extra["rabbit-amqp-client.version"] = "5.37.1"
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webmvc")

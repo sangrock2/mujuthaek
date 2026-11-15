@@ -368,6 +368,66 @@ class SecurityIntegrationTest {
   }
 
   @Test
+  void logoutRevokesGraceTokenAndSiblingButKeepsAnotherLogin() throws Exception {
+    LoginUser user = login("security-family-logout");
+    Cookie original = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
+    Cookie otherLogin = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
+    Cookie current =
+        refreshCookie(
+            mvc.perform(post("/api/auth/refresh").cookie(original))
+                .andExpect(status().isOk())
+                .andReturn());
+    Cookie sibling =
+        refreshCookie(
+            mvc.perform(post("/api/auth/refresh").cookie(original))
+                .andExpect(status().isOk())
+                .andReturn());
+
+    mvc.perform(post("/api/auth/logout").cookie(current)).andExpect(status().isNoContent());
+    for (Cookie revoked : List.of(original, current, sibling)) {
+      mvc.perform(post("/api/auth/refresh").cookie(revoked)).andExpect(status().isUnauthorized());
+    }
+    mvc.perform(post("/api/auth/refresh").cookie(otherLogin)).andExpect(status().isOk());
+  }
+
+  @Test
+  void racingLogoutAndRefreshCannotLeaveARefreshSessionAlive() throws Exception {
+    LoginUser user = login("security-family-race");
+    Cookie original = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
+    Cookie current =
+        refreshCookie(
+            mvc.perform(post("/api/auth/refresh").cookie(original))
+                .andExpect(status().isOk())
+                .andReturn());
+    var start = new java.util.concurrent.CountDownLatch(1);
+    try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      var refresh =
+          pool.submit(
+              () -> {
+                start.await();
+                return mvc.perform(post("/api/auth/refresh").cookie(original)).andReturn();
+              });
+      var logout =
+          pool.submit(
+              () -> {
+                start.await();
+                return mvc.perform(post("/api/auth/logout").cookie(current)).andReturn();
+              });
+      start.countDown();
+      MvcResult raced = refresh.get(15, java.util.concurrent.TimeUnit.SECONDS);
+      assertThat(logout.get(15, java.util.concurrent.TimeUnit.SECONDS).getResponse().getStatus())
+          .isEqualTo(204);
+      assertThat(raced.getResponse().getStatus()).isIn(200, 401);
+      if (raced.getResponse().getStatus() == 200) {
+        mvc.perform(post("/api/auth/refresh").cookie(refreshCookie(raced)))
+            .andExpect(status().isUnauthorized());
+      }
+    }
+    mvc.perform(post("/api/auth/refresh").cookie(original)).andExpect(status().isUnauthorized());
+    mvc.perform(post("/api/auth/refresh").cookie(current)).andExpect(status().isUnauthorized());
+  }
+
+  @Test
   void firstLoginGoesToCallbackWithNewFlag() throws Exception {
     var kakao =
         new DefaultOAuth2User(

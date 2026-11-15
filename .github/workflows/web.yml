@@ -30,6 +30,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-security-baseline.cjs
+      - run: pnpm audit --audit-level moderate
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm test:ui

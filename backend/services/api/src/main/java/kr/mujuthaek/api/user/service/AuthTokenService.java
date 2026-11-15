@@ -86,11 +86,12 @@ public class AuthTokenService {
   @Transactional
   public TokenPair issue(LoginUser user) {
     Instant now = clock.instant();
+    users.lockById(user.userId()).orElseThrow(() -> new CustomException(ErrorCode.UNAUTHENTICATED));
     notSuspended(user.userId(), now);
     return new TokenPair(
         accessToken(user, now),
         props.accessTokenTtl(),
-        newRefreshToken(user.userId(), now),
+        newRefreshToken(user.userId(), UUID.randomUUID(), now),
         props.refreshTokenTtl());
   }
 
@@ -103,8 +104,17 @@ public class AuthTokenService {
    */
   @Transactional(noRollbackFor = CustomException.class) // 만료된 값도 지운 채로 401을 보내요
   public TokenPair refresh(String rawRefreshToken) {
-    Instant now = clock.instant();
     String tokenHash = hash(rawRefreshToken);
+    UUID userId =
+        refreshTokens
+            .findUserIdByTokenHash(tokenHash)
+            .orElseThrow(() -> new CustomException(ErrorCode.INVALID_REFRESH_TOKEN));
+    User user =
+        users
+            .lockById(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.INVALID_REFRESH_TOKEN));
+    // 잠금을 얻은 뒤 시각과 토큰을 다시 확인해, 기다리는 동안의 로그아웃·회전도 반영해요.
+    Instant now = clock.instant();
     RefreshToken saved =
         refreshTokens
             .findByTokenHash(tokenHash)
@@ -120,29 +130,37 @@ public class AuthTokenService {
     if (rotatedAt != null && rotatedAt.plus(ROTATED_GRACE).isBefore(now)) {
       throw new CustomException(ErrorCode.INVALID_REFRESH_TOKEN);
     }
-    User user =
-        users
-            .findById(saved.getUserId())
-            .orElseThrow(() -> new CustomException(ErrorCode.INVALID_REFRESH_TOKEN));
     notSuspended(user.getId(), now);
     var login = new LoginUser(user.getId(), user.getNickname(), user.getRole().name());
     return new TokenPair(
         accessToken(login, now),
         props.accessTokenTtl(),
-        newRefreshToken(user.getId(), now),
+        newRefreshToken(user.getId(), saved.getFamilyId(), now),
         props.refreshTokenTtl());
   }
 
-  /** 로그아웃: 이 refresh token만 지워요 (다른 기기 로그인은 유지). 이미 없으면 아무것도 안 해요. */
+  /** 로그아웃: 이 로그인에서 파생된 토큰을 모두 지워요. 다른 기기 로그인은 유지해요. */
   @Transactional
   public void revoke(String rawRefreshToken) {
-    refreshTokens.deleteByTokenHash(hash(rawRefreshToken));
+    String tokenHash = hash(rawRefreshToken);
+    refreshTokens
+        .findUserIdByTokenHash(tokenHash)
+        .ifPresent(
+            userId -> {
+              if (users.lockById(userId).isPresent()) {
+                refreshTokens
+                    .findByTokenHash(tokenHash)
+                    .ifPresent(saved -> refreshTokens.deleteFamily(userId, saved.getFamilyId()));
+              }
+            });
   }
 
   /** 모든 기기에서 로그아웃 (탈퇴·권한 회수 때). access token은 남은 시간(최대 accessTokenTtl)까지는 유효해요. */
   @Transactional
   public void revokeAll(UUID userId) {
-    refreshTokens.deleteByUserId(userId);
+    if (users.lockById(userId).isPresent()) {
+      refreshTokens.deleteByUserId(userId);
+    }
   }
 
   /** 만료된 refresh token과, 바꾼 지 오래돼 더는 받지 않는 값 정리. */
@@ -173,9 +191,10 @@ public class AuthTokenService {
     return jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
   }
 
-  private String newRefreshToken(UUID userId, Instant now) {
+  private String newRefreshToken(UUID userId, UUID familyId, Instant now) {
     String raw = randomToken();
-    refreshTokens.save(new RefreshToken(userId, hash(raw), now.plus(props.refreshTokenTtl()), now));
+    refreshTokens.save(
+        new RefreshToken(userId, familyId, hash(raw), now.plus(props.refreshTokenTtl()), now));
     return raw;
   }
 

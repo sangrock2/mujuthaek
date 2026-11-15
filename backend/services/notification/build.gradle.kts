@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "4.1.1"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
     id("com.diffplug.spotless") version "8.9.0"
 }
@@ -18,6 +18,9 @@ java {
 repositories {
     mavenCentral()
 }
+
+// API와 같은 AMQP 클라이언트 보안 패치를 사용해요.
+extra["rabbit-amqp-client.version"] = "5.37.1"
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webmvc")

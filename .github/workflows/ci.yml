@@ -43,7 +43,9 @@ jobs:
         run: docker info
       # gradlew의 저장소 실행 비트에 의존하지 않아요.
       - name: 포맷·테스트·커버리지 검사
-        run: bash ./gradlew --no-daemon --stacktrace check
+        run: bash ./gradlew --no-daemon --stacktrace check securityDependencyInventory --init-script ../../infra/security/dependencies.init.gradle
+      - name: Audit resolved runtime dependencies
+        run: python3 ../../infra/security/audit_dependencies.py build/reports/security/dependencies.json --output build/reports/security/audit.json
       - name: 검사 보고서 보관
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -83,6 +85,10 @@ jobs:
           uv run --frozen pytest -q
       - name: 배포·롤백 안전장치 검사
         run: python3 -m unittest discover -s infra/deploy/personal/tests -v
+      - name: Dependency audit regression tests
+        run: python3 -m unittest discover -s infra/security/tests -v
+      - name: Audit Python lockfiles
+        run: python3 infra/security/audit_dependencies.py --uv-lock services/collector/uv.lock services/extraction/uv.lock libs/python-platform/uv.lock --output security-python-audit.json
       - name: nginx HTTPS 통합 검사
         run: python3 infra/deploy/tests/verify_https.py
       - name: 인증서 자동화 오프라인 검사
