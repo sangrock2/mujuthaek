@@ -40,7 +40,7 @@ dependencies {
     implementation("software.amazon.awssdk:s3") // area 원천 파일 읽기 (로컬은 MinIO)
     implementation("org.postgresql:postgresql") // area 적재기가 COPY(CopyManager)를 직접 써요
     implementation("com.github.ben-manes.caffeine:caffeine") // 무거운 관리자 조회를 잠깐 다시 쓰는 캐시 (common/cache/RecentCache)
-    implementation("com.networknt:json-schema-validator:3.0.8") // notice가 받은 이벤트를 계약 스키마로 검사해요
+    implementation("com.networknt:json-schema-validator:3.0.9") // notice가 받은 이벤트를 계약 스키마로 검사해요
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-starter-security-test")
