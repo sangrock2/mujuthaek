@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -83,6 +83,7 @@ class HostSelection(unittest.TestCase):
     def fake(self, directory, target):
         obj = host.Host.__new__(host.Host)
         obj.runtime = Path(directory)
+        obj.worker_cpu_budget = nullcontext
         old = snapshot()
         obj.current = lambda: {'release': old['release'], 'images': old['images']}
         obj.schema = lambda: 'same-schema'

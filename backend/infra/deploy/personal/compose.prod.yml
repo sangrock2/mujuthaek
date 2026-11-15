@@ -64,7 +64,7 @@ services:
       SERVER_SERVLET_SESSION_COOKIE_SECURE: "true"
       SERVER_SERVLET_SESSION_COOKIE_HTTP_ONLY: "true"
       SERVER_SERVLET_SESSION_COOKIE_SAME_SITE: lax
-      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError -XX:ActiveProcessorCount=1
       API_DB_URL: jdbc:postgresql://postgres:5432/api
       API_DB_PASSWORD: ${API_DB_PASSWORD}
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "8"
@@ -101,7 +101,7 @@ services:
     mem_limit: 384m
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError -XX:ActiveProcessorCount=1
       NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/notification
       NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
@@ -156,6 +156,7 @@ services:
     profiles: [workers]
     image: mujuthaek-personal-collector:${COLLECTOR_RELEASE:-${RELEASE}}
     build: {context: ../../.., dockerfile: services/collector/Dockerfile}
+    cpus: "0.10"
     mem_limit: 768m
     environment:
       <<: *aws
@@ -183,6 +184,7 @@ services:
     profiles: [workers]
     image: mujuthaek-personal-extraction:${EXTRACTION_RELEASE:-${RELEASE}}
     build: {context: ../../.., dockerfile: services/extraction/Dockerfile}
+    cpus: "0.15"
     mem_limit: 1536m
     environment:
       <<: *aws

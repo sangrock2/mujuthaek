@@ -4,7 +4,6 @@ import os
 import re
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 BASE = Path('/opt/mujuthaek-source/backend/infra/deploy/personal')
@@ -50,22 +49,16 @@ def compose(env, *args):
 
 
 def healthy():
-    for _ in range(60):
-        result = subprocess.run(['curl', '-fsS', '--max-time', '3', 'http://127.0.0.1:8080/actuator/health'],
-                                capture_output=True, text=True)
-        if result.returncode == 0:
-            try:
-                if json.loads(result.stdout).get('status') == 'UP':
-                    return
-            except ValueError:
-                pass
-        time.sleep(3)
-    raise RuntimeError('API health check failed')
+    from release_host import Host
+    Host.__new__(Host).healthy(('api',))
 
 
 def restart(env):
-    compose(env, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'api')
-    healthy()
+    from release_host import Host
+    host = Host()
+    with host.worker_cpu_budget():
+        compose(env, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'api')
+        healthy()
     compose(env, 'exec', '-T', 'nginx', 'nginx', '-t')
     compose(env, 'exec', '-T', 'nginx', 'nginx', '-s', 'reload')
 
