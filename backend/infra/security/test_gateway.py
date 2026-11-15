@@ -3,6 +3,7 @@
 No production URL or credential is accepted. Docker and openssl are required.
 """
 import concurrent.futures
+from contextlib import closing
 import http.client
 import http.server
 import json
@@ -94,7 +95,7 @@ class Gateway:
         return http.client.HTTPSConnection('127.0.0.1', self.port, context=CONTEXT, timeout=5)
 
     def get(self, path, headers=None):
-        with self.connection() as client:
+        with closing(self.connection()) as client:
             client.request('GET', path, headers=headers or {})
             response = client.getresponse()
             return response.status, response.read()
@@ -130,20 +131,20 @@ def main():
                 assert gateway.get(path)[0] == 404
                 assert len(SEEN) == before
             results['internal_and_management_paths_blocked'] = True
-            with http.client.HTTPConnection('127.0.0.1', gateway.http_port, timeout=5) as client:
+            with closing(http.client.HTTPConnection('127.0.0.1', gateway.http_port, timeout=5)) as client:
                 client.request('GET', '/api/test?token=' + marker)
                 assert client.getresponse().status == 404
             results['plaintext_listener_never_proxies_application'] = True
             # Send just the headers: oversized declared body must be rejected before it reaches the app.
             before = len(SEEN)
-            with gateway.connection() as client:
+            with closing(gateway.connection()) as client:
                 client.putrequest('POST', '/api/test?token=' + marker)
                 client.putheader('Content-Length', str(1024 * 1024 + 1))
                 client.endheaders()
                 assert client.getresponse().status == 413
             assert len(SEEN) == before
             results['oversized_body_blocked_before_upstream'] = True
-            with gateway.connection() as client:
+            with closing(gateway.connection()) as client:
                 client.putrequest('POST', '/api/test')
                 client.putheader('Content-Length', '1')
                 client.putheader('Transfer-Encoding', 'chunked')
