@@ -39,7 +39,7 @@ class AuthController implements AuthApiSpec {
       pair = tokens.refresh(raw);
     } catch (CustomException e) {
       // 쿠키가 없어졌거나 만료됐을 때만 지워요(정지 등 다른 오류로 지우면 먼저 온 요청이 받은 새 쿠키까지 지워져요).
-      // 바꾼 지 얼마 안 된 옛 쿠키는 401이 아니라 새 토큰을 받아요(AuthTokenService.ROTATED_GRACE)
+      // 재사용된 토큰이면 서버가 해당 로그인 계보를 폐기하고 401을 보내요.
       if (e.errorCode() == ErrorCode.INVALID_REFRESH_TOKEN) {
         cookies.clear(response);
       }

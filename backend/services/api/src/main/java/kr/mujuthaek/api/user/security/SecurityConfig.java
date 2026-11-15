@@ -18,6 +18,7 @@ import java.util.List;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.user.domain.AdminPermission;
 import kr.mujuthaek.api.user.service.AdminUserService;
+import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.JwtProperties;
 import kr.mujuthaek.api.user.service.UserService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -52,8 +53,8 @@ import org.springframework.web.util.UrlPathHelper;
  *   <li>{@code /api/admin/**}는 관리자, 경로마다 받은 권한이 있어야 해요({@link #adminPaths}). {@code /api/users/**}는
  *       로그인한 회원만. 나머지(공고·혜택 조회 등)는 누구나
  *   <li>서버는 로그인 상태를 저장하지 않아요(STATELESS). 카카오 로그인 중간의 state만 잠깐 세션에 둬요
- *   <li>CSRF는 끄요: 인증은 Bearer 헤더라 다른 사이트가 대신 보낼 수 없고, 쿠키를 쓰는 재발급·로그아웃은 SameSite=Lax + POST라 다른 사이트에서
- *       실리지 않아요
+ *   <li>CSRF는 끄요: 일반 API는 Bearer 헤더를 쓰고, 쿠키를 쓰는 재발급·로그아웃은 정확한 CORS 출처 허용 목록과 SameSite=Lax + POST로
+ *       다른 사이트에서 실리지 않아요
  * </ul>
  */
 @Configuration
@@ -71,7 +72,8 @@ class SecurityConfig {
       ProblemResponses problems,
       UserService userService,
       AdminUserService adminUsers,
-      AdminAuthorization admin)
+      AdminAuthorization admin,
+      AuthTokenService tokens)
       throws Exception {
     AuthenticationEntryPoint unauthorized =
         (request, response, error) -> problems.write(request, response, ErrorCode.UNAUTHENTICATED);
@@ -105,7 +107,7 @@ class SecurityConfig {
                     .authenticationEntryPoint(unauthorized)
                     .accessDeniedHandler(forbidden))
         .addFilterAfter(
-            new WithdrawnUserFilter(userService, adminUsers, problems),
+            new WithdrawnUserFilter(userService, adminUsers, problems, tokens),
             BearerTokenAuthenticationFilter.class)
         .exceptionHandling(
             errors ->

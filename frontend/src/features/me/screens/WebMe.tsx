@@ -50,7 +50,7 @@ const grayButton =
 
 /** 내 정보 (웹). 탭은 주소의 ?tab=으로도 열려요 (예: /me?tab=reports) */
 export function WebMe({ initialTab }: { initialTab?: MeTab }) {
-  const logout = useLogout();
+  const { logout, logoutError } = useLogout();
   const router = useRouter();
   const params = useSearchParams();
   const { data: session } = useSession();
@@ -126,11 +126,20 @@ export function WebMe({ initialTab }: { initialTab?: MeTab }) {
                   </span>
                   <button
                     type="button"
-                    onClick={() => void logout().then(() => router.push(routes.main))}
+                    onClick={() =>
+                      void logout().then((ok) => {
+                        if (ok) router.push(routes.main);
+                      })
+                    }
                     className="text-text-sub hover:text-text-sub inline-flex min-h-[44px] cursor-pointer items-center border-0 bg-transparent p-0 text-[14px] font-semibold"
                   >
                     로그아웃
                   </button>
+                  {logoutError && (
+                    <p role="alert" className="text-danger text-[13px]">
+                      {logoutError}
+                    </p>
+                  )}
                 </>
               ) : (
                 <Link

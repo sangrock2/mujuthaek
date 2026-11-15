@@ -1,10 +1,11 @@
 """첨부 엑셀(공급주택목록) → AI 원문. 테스트 안에서 작은 xlsx(zip + XML)를 직접 만들어 씁니다. 네트워크·아카이브 없음."""
 
+import builtins
 import copy
 import io
 import zipfile
 
-from mujuthaek_extraction.intake import InMemorySourceReader, build_intake
+from mujuthaek_extraction.intake import InMemorySourceReader, build_intake, xlsx_reader
 from mujuthaek_extraction.intake.xlsx_reader import AI_MAX_ROWS, read_xlsx
 from tests.intake.test_pdf_reader import CELLS, attachment, make_pdf
 from tests.support.events import raw_event
@@ -39,6 +40,34 @@ def make_xlsx(rows: list[list[str | float]], sheet: str = "주택목록") -> byt
 
 
 LISTING = [HEADER, [1, "대구광역시 남구 안지랑로3길 7", "105", "1234*", 19.68, 795500], [2, "대구광역시 남구 앞산순환로95길 34", "501", "5678*", 23.4, 947500]]
+
+
+def merged_workbook(ref):
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(make_xlsx([["단지", "주소"], ["", "서울"]]))) as source, zipfile.ZipFile(output, "w") as target:
+        for entry in source.infolist():
+            data = source.read(entry)
+            if entry.filename == "xl/worksheets/sheet1.xml":
+                data = data.replace(b"</worksheet>", f'<mergeCells><mergeCell ref="{ref}"/></mergeCells></worksheet>'.encode())
+            target.writestr(entry.filename, data)
+    return output.getvalue()
+
+
+def test_tall_merge_visits_only_present_rows(monkeypatch):
+    data = merged_workbook("A1:A1048576")
+
+    def bounded_range(*args):
+        result = builtins.range(*args)
+        assert len(result) <= 10_000, "untrusted merge must not cause a loop over empty rows"
+        return result
+
+    monkeypatch.setattr(xlsx_reader, "range", bounded_range, raising=False)
+    result = read_xlsx(data)
+    assert result is not None and "| 단지 | 서울 |" in result.text
+
+
+def test_out_of_sheet_merge_is_rejected():
+    assert read_xlsx(merged_workbook("A1:A999999999999999")) is None
 
 
 def test_listing_rows_are_rendered_without_door_passwords():
