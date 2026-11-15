@@ -37,7 +37,7 @@ def affected(paths):
         elif path.startswith(('backend/infra/', 'backend/services/collector/', 'backend/services/extraction/', '.github/')):
             # Infrastructure and inactive workers have their own installation path.
             continue
-        elif path in ('.gitignore', '.gitattributes', 'LICENSE', 'CODEOWNERS'):
+        elif path in ('.gitignore', '.gitattributes', '.gitleaksignore', 'LICENSE', 'CODEOWNERS'):
             continue
         else:
             # Unknown shared build input: prefer an extra deployment to a missed one.

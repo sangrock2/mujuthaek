@@ -18,10 +18,12 @@ jobs:
     uses: ./.github/workflows/contracts.yml
   e2e:
     uses: ./.github/workflows/e2e.yml
+  secrets:
+    uses: ./.github/workflows/secret-scan.yml
   ready:
     name: CI ready
     if: always()
-    needs: [web, backend, contracts, e2e]
+    needs: [web, backend, contracts, e2e, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Require every check
@@ -30,8 +32,10 @@ jobs:
           BACKEND: ${{ needs.backend.result }}
           CONTRACTS: ${{ needs.contracts.result }}
           E2E: ${{ needs.e2e.result }}
+          SECRETS: ${{ needs.secrets.result }}
         run: |
           test "$WEB" = success
           test "$BACKEND" = success
           test "$CONTRACTS" = success
           test "$E2E" = success
+          test "$SECRETS" = success

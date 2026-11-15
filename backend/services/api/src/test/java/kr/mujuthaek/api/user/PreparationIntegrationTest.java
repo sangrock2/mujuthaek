@@ -226,7 +226,7 @@ class PreparationIntegrationTest {
             .put("title", "다른 회원의 변경")
             .put("done", true)
             .put("expectedRevision", owned.revision());
-    mvc.perform(get(base).header("Authorization", token))
+    mvc.perform(get("/api/users/me/preparations").header("Authorization", token))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.items").isEmpty());
     mvc.perform(

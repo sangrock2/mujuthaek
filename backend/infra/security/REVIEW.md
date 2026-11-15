@@ -8,7 +8,7 @@
 
 변경: 로그인별 `family_id`를 두고 회전한 토큰과 동시 요청에서 파생된 토큰을 같은 계보로 연결합니다. 로그아웃은 해당 계보를 모두 삭제합니다. 사용자 행 잠금 후 토큰과 현재 시각을 다시 확인해 로그아웃과 재발급 사이의 경합을 직렬화합니다. 별도 로그인에서 발급한 토큰은 유지합니다.
 
-검증: `SecurityIntegrationTest.logoutRevokesGraceTokenAndSiblingButKeepsAnotherLogin`과 `racingLogoutAndRefreshCannotLeaveARefreshSessionAlive`. `Security regression proof` 워크플로는 고정한 과거 커밋의 서비스 코드로 첫 검사가 정확히 **401을 기대했지만 200이 반환돼 실패**하는지 확인하고, 현재 코드로 두 검사가 통과하는지 확인합니다. 다른 컴파일·DB·네트워크 오류는 재현 성공으로 인정하지 않습니다. 증거는 `logout-security-proof` artifact의 XML·JSON에 보관합니다. 해당 CI가 성공하기 전에는 실 DB 재현 완료로 기록하지 않습니다.
+검증: `SecurityIntegrationTest.logoutRevokesGraceTokenAndSiblingButKeepsAnotherLogin`과 `racingLogoutAndRefreshCannotLeaveARefreshSessionAlive`. `Security regression proof` 워크플로는 고정한 과거 커밋의 서비스 코드로 첫 검사가 정확히 **401을 기대했지만 200이 반환돼 실패**하는지 확인하고, 현재 코드로 두 검사가 통과하는지 확인합니다. 다른 컴파일·DB·네트워크 오류는 재현 성공으로 인정하지 않습니다. 증거는 `logout-security-proof` artifact의 XML·JSON에 보관합니다. [첫 실 DB 재현·수정 검증 성공](https://github.com/sangrock2/mujuthaek/actions/runs/43708973537/job/132796192485). 전체 CI와 운영 배포 상태는 별도로 확인합니다.
 
 운영 영향: 새 컬럼·인덱스 마이그레이션이 있습니다. 기존 미회전 토큰의 로그인은 유지하고, 계보를 복원할 수 없는 이전 버전의 회전된 토큰은 유예를 종료합니다. 스키마 변경 후 앱만 과거 버전으로 되돌리는 작업은 기존 배포 보호 장치에 따라 제한됩니다. access token 즉시 폐기와 탈취 토큰 재사용 감지·계보 전체 폐기는 별도 과제이며 이번 수정으로 구현했다고 주장하지 않습니다.
 
@@ -40,6 +40,12 @@
 적용 후 IAM 시뮬레이션: 앱 주체의 원문·백업 Get/Put은 기존대로 허용되고, 배포·운영 경로 Get/Put은 명시적 거부였습니다. 예전에도 차단된 배포 경로를 이번에 처음 차단했다고 기록하지 않습니다. 앱과 백업의 자격 증명을 더 세분화하는 일은 후속 과제로 남습니다. 서명 URL은 이번에 추가하지 않았고, 공고 PDF는 기존 공개 상태·파일 경로 검증 후 서버 스트리밍 구조를 유지합니다.
 
 ## 5. 후속 검토 항목
+
+배포 공급망도 함께 보완했습니다. 외부 GitHub Actions 참조 39개를 공식 태그가 가리키는 커밋 SHA로 고정했고, 태그 주석을 유지해 Dependabot 업데이트를 검토할 수 있게 했습니다. 이는 이후 태그 변경에 따른 코드 교체를 방지하는 조치이며 해당 액션 내부 의존성까지 모두 고정했다는 의미는 아닙니다.
+
+Gitleaks 8.30.1로 Git 이력을 검사한 원시 탐지는 5개였습니다. 3개는 테스트 실행 중 생성하는 RSA 키에 붙이는 PEM 구분자였고, 나머지는 Web Push RFC 시험 벡터와 입력값 비노출 검사의 모의 문자열이었습니다. 검토한 과거 커밋·경로·규칙·행의 정확한 fingerprint만 `.gitleaksignore`로 예외 처리합니다. 테스트 디렉터리나 커밋 전체를 제외하지 않습니다. 새로 생성한 가상 비밀값이 여전히 탐지되는 canary 검사와 checksum을 고정한 검사기를 필수 CI에 연결합니다. 검사 결과나 토큰 문자열은 공개 로그에 내보내지 않습니다. 이번 검사에서 실운영 키 유출은 확인되지 않았으며, 도구가 모든 형태의 비밀값을 탐지한다는 뜻은 아닙니다.
+
+저장소의 GitHub Secret scanning과 Push protection도 활성화했습니다. 공급자에게 탐지 키를 보내는 validity checks는 활성화하지 않았습니다. 실키가 발견되면 파일에서 지우는 것에 앞서 해당 공급자에서 폐기·재발급해야 하며, Git 이력 변경은 별도로 검토합니다. Dependabot의 자동 보안 수정 PR은 기본 브랜치로만 향하므로 기존 dev → main 규칙과 충돌하지 않도록 이번에는 켜지 않았습니다. dev 대상 주간 버전 업데이트와 필수 취약점 CI를 사용합니다.
 
 - Vercel → Nginx에서 실제 사용자 IP를 신뢰할 조건과 요청 제한 키 검증. 전달 헤더를 무조건 신뢰하도록 바꾸지 않습니다.
 - 인증 쿠키 경로의 CORS·Origin·SameSite 조건을 실제 브라우저로 검증. 현재 CORS가 차단하는 요청을 CSRF 취약점으로 단정하지 않습니다.
