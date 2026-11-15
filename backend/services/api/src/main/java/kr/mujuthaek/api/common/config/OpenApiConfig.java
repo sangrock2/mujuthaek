@@ -130,7 +130,7 @@ class OpenApiConfig {
     return GroupedOpenApi.builder()
         .group("user")
         .displayName("사용자 API")
-        .pathsToMatch("/api/v1/**", "/api/users/**", "/api/auth/**")
+        .pathsToMatch("/api/v1/**", "/api/users/**", "/api/auth/**", "/api/email-notifications/**")
         .build();
   }
 

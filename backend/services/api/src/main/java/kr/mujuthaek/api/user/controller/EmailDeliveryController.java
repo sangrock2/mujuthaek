@@ -13,7 +13,8 @@ import org.springframework.web.bind.annotation.*;
 
 /** 발송 직전 동의를 다시 봐서, 수신 해제 전에 큐에 들어간 메일도 차단해요. */
 @RestController
-class EmailDeliveryController {
+public class EmailDeliveryController
+    implements kr.mujuthaek.api.user.controller.spec.EmailDeliveryApiSpec {
   private final EmailNotificationService emails;
   private final String secret;
   private final UserNotificationQueryService users;
@@ -27,9 +28,9 @@ class EmailDeliveryController {
     this.users = users;
   }
 
-  record Check(UUID userId, String email, String type) {}
+  public record Check(UUID userId, String email, String type) {}
 
-  record Token(String token) {
+  public record Token(String token) {
     @Override
     public String toString() {
       return "UnsubscribeToken[REDACTED]";
@@ -37,7 +38,7 @@ class EmailDeliveryController {
   }
 
   @PostMapping("/internal/email-eligibility")
-  EmailNotificationService.Eligibility eligible(
+  public EmailNotificationService.Eligibility eligible(
       @RequestHeader(value = "X-Notification-Token", defaultValue = "") String token,
       @RequestBody Check body) {
     if (secret.isBlank()
@@ -57,7 +58,7 @@ class EmailDeliveryController {
   }
 
   @PostMapping("/api/email-notifications/unsubscribe")
-  void unsubscribe(@RequestBody Token body) {
+  public void unsubscribe(@RequestBody Token body) {
     emails.unsubscribe(body.token());
   }
 }
