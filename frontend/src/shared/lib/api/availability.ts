@@ -1,8 +1,5 @@
 import { useSyncExternalStore } from "react";
 
-/** 백엔드 서버는 자동 중지로 매일 이 시간에만 켜져 있어요 (한국 시간) */
-export const SERVICE_HOURS = "10:00~19:00";
-
 // 백엔드가 응답하지 않는지 (연결 실패, 또는 Vercel·프록시가 대신 낸 502·503·504). 화면 위 안내(ServiceHoursBanner)가 봐요
 let down = false;
 const listeners = new Set<() => void>();

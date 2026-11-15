@@ -21,3 +21,18 @@ export function secureApiOrigin(value: string | undefined, hosted = false): stri
   }
   return url.origin;
 }
+
+/** Vercel 프록시를 쓸 때 브라우저는 현재 사이트 주소로 요청해야 인증 쿠키와 도메인이 맞아요. */
+export function browserApiOrigin(
+  value: string | undefined,
+  proxyOrigin: string,
+  hosted = false,
+): string {
+  const origin = secureApiOrigin(value, hosted);
+  if (hosted && proxyOrigin && origin) {
+    throw new Error(
+      "API_ORIGIN으로 Vercel 프록시를 사용할 때 NEXT_PUBLIC_API_BASE_URL은 비워야 합니다.",
+    );
+  }
+  return origin;
+}
