@@ -76,6 +76,8 @@ export function useLogout() {
     }
     authToken.set(null);
     await client.cancelQueries();
+    // clear()로 query를 제거하기 전에 기존 화면의 observer에도 로그아웃을 알려요.
+    client.setQueryData(sessionKey, null);
     client.clear();
     client.setQueryData(sessionKey, null);
     return true;
@@ -89,6 +91,7 @@ export function SessionSync() {
     () =>
       subscribeSessionEnded(() => {
         void client.cancelQueries().then(() => {
+          client.setQueryData(sessionKey, null);
           client.clear();
           client.setQueryData(sessionKey, null);
         });
