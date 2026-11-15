@@ -44,7 +44,7 @@ function RowInner({ label, value, accent }: { label: string; value: string; acce
 }
 
 export function MMe() {
-  const logout = useLogout();
+  const { logout, logoutError } = useLogout();
   const router = useRouter();
   const params = useSearchParams();
   const { data: session } = useSession();
@@ -208,11 +208,20 @@ export function MMe() {
           <div className="flex flex-col gap-[4px] px-[8px]">
             <button
               type="button"
-              onClick={() => void logout().then(() => router.push(routes.main))}
+              onClick={() =>
+                void logout().then((ok) => {
+                  if (ok) router.push(routes.main);
+                })
+              }
               className="text-text-sub hover:text-text-sub inline-flex min-h-[44px] cursor-pointer items-center self-start border-0 bg-transparent p-0 text-[14px] font-semibold"
             >
               로그아웃
             </button>
+            {logoutError && (
+              <p role="alert" className="text-danger text-[13px]">
+                {logoutError}
+              </p>
+            )}
             <WithdrawButton />
           </div>
         )}

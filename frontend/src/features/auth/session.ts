@@ -4,8 +4,14 @@
 // 로그인하지 않았으면(401) null. 화면은 이걸로 로그인/내 홈을 나눠 보여줘요
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect } from "react";
-import { api, ApiError, authToken } from "@/shared/lib/api/client";
+import { useCallback, useEffect, useState } from "react";
+import {
+  api,
+  ApiError,
+  authToken,
+  endSession,
+  subscribeSessionEnded,
+} from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
 import { routes } from "@/shared/lib/routes";
@@ -57,15 +63,42 @@ export function useSession() {
 /** 로그아웃: 백엔드가 refresh token 쿠키를 지우고, 메모리의 access token과 로그인 상태도 비워요 */
 export function useLogout() {
   const client = useQueryClient();
-  return useCallback(async () => {
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const logout = useCallback(async () => {
+    setLogoutError(null);
     if (!USE_MOCKS) {
-      await api.post(endpoints.authLogout).catch(() => undefined);
+      try {
+        await endSession();
+      } catch {
+        setLogoutError("로그아웃을 완료하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.");
+        return false;
+      }
     }
     authToken.set(null);
     await client.cancelQueries();
+    // clear()로 query를 제거하기 전에 기존 화면의 observer에도 로그아웃을 알려요.
+    client.setQueryData(sessionKey, null);
     client.clear();
     client.setQueryData(sessionKey, null);
+    return true;
   }, [client]);
+  return { logout, logoutError };
+}
+
+export function SessionSync() {
+  const client = useQueryClient();
+  useEffect(
+    () =>
+      subscribeSessionEnded(() => {
+        void client.cancelQueries().then(() => {
+          client.setQueryData(sessionKey, null);
+          client.clear();
+          client.setQueryData(sessionKey, null);
+        });
+      }),
+    [client],
+  );
+  return null;
 }
 
 /** 간편 로그인 표시 이름 */

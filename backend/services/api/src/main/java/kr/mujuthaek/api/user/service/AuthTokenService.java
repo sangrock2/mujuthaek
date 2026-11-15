@@ -5,7 +5,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -17,6 +16,7 @@ import kr.mujuthaek.api.user.domain.User;
 import kr.mujuthaek.api.user.repository.AdminUserRepository;
 import kr.mujuthaek.api.user.repository.RefreshTokenRepository;
 import kr.mujuthaek.api.user.repository.UserRepository;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
@@ -31,8 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ul>
  *   <li>access token: JWT (HS256). sub = 회원 ID, role, nickname. 서버에 저장하지 않아요
- *   <li>refresh token: 무작위 32바이트. DB에는 SHA-256 해시만. 재발급할 때마다 새 값으로 바꿔요(회전). 쓴 값은 {@link
- *       #ROTATED_GRACE} 동안만 더 받아 주고, 그 뒤로는 받지 않아요
+ *   <li>refresh token: 무작위 32바이트. DB에는 해시만 두고 한 번만 사용해요. 재사용되면 해당 로그인 계보를 폐기해요
  * </ul>
  */
 @Service
@@ -40,13 +39,8 @@ public class AuthTokenService {
 
   public static final String ROLE_CLAIM = "role";
   public static final String NICKNAME_CLAIM = "nickname";
-
-  /**
-   * 바꾼 refresh token을 더 받아 주는 시간. 새로고침을 빠르게 하거나 탭 여러 개가 함께 연장하면, 먼저 간 요청이 바꾼 새 쿠키를 브라우저가 받기 전에 늦은
-   * 요청이 옛 쿠키를 들고 와요(응답을 받기 전에 페이지를 떠나면 새 쿠키를 아예 못 받기도 해요). 그때 로그아웃되지 않게 잠깐은 옛 값으로도 연장해 줘요
-   * (2026-10-29).
-   */
-  public static final Duration ROTATED_GRACE = Duration.ofSeconds(30);
+  public static final String SESSION_CLAIM = "sid";
+  static final int MAX_ISSUED_PER_MINUTE = 30;
 
   private final JwtEncoder jwtEncoder;
   private final JwtProperties props;
@@ -86,12 +80,14 @@ public class AuthTokenService {
   @Transactional
   public TokenPair issue(LoginUser user) {
     Instant now = clock.instant();
+    UUID familyId = UUID.randomUUID();
     users.lockById(user.userId()).orElseThrow(() -> new CustomException(ErrorCode.UNAUTHENTICATED));
     notSuspended(user.userId(), now);
+    checkIssueLimit(user.userId(), now);
     return new TokenPair(
-        accessToken(user, now),
+        accessToken(user, familyId, now),
         props.accessTokenTtl(),
-        newRefreshToken(user.userId(), UUID.randomUUID(), now),
+        newRefreshToken(user.userId(), familyId, now),
         props.refreshTokenTtl());
   }
 
@@ -99,8 +95,7 @@ public class AuthTokenService {
    * refresh token으로 새 access token 발급. refresh token도 새로 바꿔요. 권한·닉네임은 DB의 지금 값을 써요 (ADMIN으로 바꾸면 다음
    * 재발급부터 적용).
    *
-   * <p>쓴 값은 지우지 않고 바꾼 시각만 적어요. 같은 값이 {@link #ROTATED_GRACE} 안에 다시 오면(새로고침 연타, 탭 여러 개가 동시에 연장) 그 요청도
-   * 새 토큰을 받아요. 그 뒤에 오면 401이에요. 동시에 온 요청끼리도 둘 다 새 토큰을 받고, 브라우저에는 마지막에 받은 쿠키가 남아요(어느 쪽이든 유효).
+   * <p>사용한 값의 해시를 원래 만료일까지 보관해 재사용을 감지해요. 재사용 시 새로 발급한 토큰도 같은 계보 전체를 폐기합니다.
    */
   @Transactional(noRollbackFor = CustomException.class) // 만료된 값도 지운 채로 401을 보내요
   public TokenPair refresh(String rawRefreshToken) {
@@ -123,17 +118,13 @@ public class AuthTokenService {
       refreshTokens.deleteByTokenHash(tokenHash);
       throw new CustomException(ErrorCode.INVALID_REFRESH_TOKEN);
     }
-    Instant rotatedAt = saved.getRotatedAt();
-    if (rotatedAt == null && refreshTokens.markRotated(tokenHash, now) == 0) {
-      rotatedAt = now; // 동시에 온 다른 요청이 방금 바꿨어요
-    }
-    if (rotatedAt != null && rotatedAt.plus(ROTATED_GRACE).isBefore(now)) {
-      throw new CustomException(ErrorCode.INVALID_REFRESH_TOKEN);
-    }
+    if (saved.getRotatedAt() != null) throw reused(saved);
+    checkIssueLimit(userId, now);
+    if (refreshTokens.markRotated(tokenHash, now) == 0) throw reused(saved);
     notSuspended(user.getId(), now);
     var login = new LoginUser(user.getId(), user.getNickname(), user.getRole().name());
     return new TokenPair(
-        accessToken(login, now),
+        accessToken(login, saved.getFamilyId(), now),
         props.accessTokenTtl(),
         newRefreshToken(user.getId(), saved.getFamilyId(), now),
         props.refreshTokenTtl());
@@ -155,7 +146,7 @@ public class AuthTokenService {
             });
   }
 
-  /** 모든 기기에서 로그아웃 (탈퇴·권한 회수 때). access token은 남은 시간(최대 accessTokenTtl)까지는 유효해요. */
+  /** 모든 기기에서 로그아웃. 계보를 확인하는 access token도 다음 요청부터 거부해요. */
   @Transactional
   public void revokeAll(UUID userId) {
     if (users.lockById(userId).isPresent()) {
@@ -163,11 +154,16 @@ public class AuthTokenService {
     }
   }
 
-  /** 만료된 refresh token과, 바꾼 지 오래돼 더는 받지 않는 값 정리. */
+  /** 원래 유효기간이 끝난 토큰만 정리해요. 사용한 해시는 만료 전 재사용 감지를 위해 남겨요. */
   @Transactional
   public int deleteExpired() {
     Instant now = clock.instant();
-    return refreshTokens.deleteExpired(now, now.minus(ROTATED_GRACE));
+    return refreshTokens.deleteExpired(now);
+  }
+
+  @Transactional(readOnly = true)
+  public boolean activeSession(UUID userId, UUID familyId) {
+    return refreshTokens.activeFamily(userId, familyId, clock.instant());
   }
 
   /** 이용 정지 중이면 로그인·재발급을 막아요 (정지할 때 로그인도 모두 끊어요). */
@@ -177,7 +173,20 @@ public class AuthTokenService {
     }
   }
 
-  private String accessToken(LoginUser user, Instant now) {
+  private void checkIssueLimit(UUID userId, Instant now) {
+    if (refreshTokens.recentlyIssued(userId, now.minusSeconds(60)) >= MAX_ISSUED_PER_MINUTE) {
+      throw new CustomException(ErrorCode.RATE_LIMITED);
+    }
+  }
+
+  private CustomException reused(RefreshToken token) {
+    refreshTokens.deleteFamily(token.getUserId(), token.getFamilyId());
+    LoggerFactory.getLogger(AuthTokenService.class)
+        .warn("Refresh token reuse detected; login revoked: userId={}", token.getUserId());
+    return new CustomException(ErrorCode.INVALID_REFRESH_TOKEN);
+  }
+
+  private String accessToken(LoginUser user, UUID familyId, Instant now) {
     var claims =
         JwtClaimsSet.builder()
             .issuer(props.issuer())
@@ -186,6 +195,7 @@ public class AuthTokenService {
             .expiresAt(now.plus(props.accessTokenTtl()))
             .claim(ROLE_CLAIM, user.role())
             .claim(NICKNAME_CLAIM, user.nickname() == null ? "" : user.nickname())
+            .claim(SESSION_CLAIM, familyId.toString())
             .build();
     var header = JwsHeader.with(MacAlgorithm.HS256).build();
     return jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();

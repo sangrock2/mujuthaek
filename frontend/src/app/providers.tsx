@@ -8,6 +8,7 @@ import { DemoNotice } from "@/shared/layout/DemoNotice";
 import { OfflineBanner } from "@/shared/pwa/OfflineBanner";
 import { ServiceHoursBanner } from "@/shared/pwa/ServiceHoursBanner";
 import { ServiceWorkerRegister } from "@/shared/pwa/ServiceWorkerRegister";
+import { SessionSync } from "@/features/auth/session";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -21,6 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <SessionSync />
       <ServiceWorkerRegister />
       <OfflineBanner />
       <ServiceHoursBanner />

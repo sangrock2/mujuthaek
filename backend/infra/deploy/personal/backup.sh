@@ -3,7 +3,9 @@ set -euo pipefail
 cd /opt/mujuthaek-source/backend/infra/deploy/personal
 umask 077
 mkdir -p runtime/backups
-timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+exec 9>runtime/backup.lock
+flock -w 600 9
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)-$(cat /proc/sys/kernel/random/uuid)
 for db in api notification collector extraction; do
   docker compose --env-file .env --env-file versions.env -f compose.prod.yml exec -T postgres \
     pg_dump -U postgres -Fc "$db" > "runtime/backups/${db}-${timestamp}.dump.tmp"

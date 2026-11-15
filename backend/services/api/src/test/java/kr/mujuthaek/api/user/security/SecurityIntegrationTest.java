@@ -291,7 +291,7 @@ class SecurityIntegrationTest {
   }
 
   @Test
-  void refreshRotatesTokenAndOldOneStillWorksBriefly() throws Exception {
+  void refreshRotatesTokenAndReuseRevokesAlreadyIssuedAccessTokens() throws Exception {
     LoginUser user = login("2005");
     var first = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
 
@@ -309,15 +309,14 @@ class SecurityIntegrationTest {
 
     mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + access))
         .andExpect(status().isOk());
-    // 바꾼 지 얼마 안 된 옛 값은 다시 와도 새 토큰을 받아요(새로고침 연타·탭 여러 개). 그 뒤로는 못 써요(AuthTokenServiceTest)
-    MvcResult late =
-        mvc.perform(post("/api/auth/refresh").cookie(first)).andExpect(status().isOk()).andReturn();
-    assertThat(refreshCookie(late).getValue()).isNotEqualTo(first.getValue());
-    mvc.perform(post("/api/auth/refresh").cookie(second)).andExpect(status().isOk());
+    mvc.perform(post("/api/auth/refresh").cookie(first)).andExpect(status().isUnauthorized());
+    mvc.perform(post("/api/auth/refresh").cookie(second)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + access))
+        .andExpect(status().isUnauthorized());
   }
 
   @Test
-  void refreshesWithTheSameCookieAtOnceAllSucceed() throws Exception {
+  void simultaneousReuseHasOnlyOneSuccessAndClosesTheFamily() throws Exception {
     // 새로고침 연타·탭 여러 개: 같은 쿠키로 연장이 한꺼번에 와도 모두 새 토큰을 받아요(예전에는 늦은 쪽이 409·401로 로그아웃)
     LoginUser user = login("2098");
     var cookie = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
@@ -337,9 +336,10 @@ class SecurityIntegrationTest {
                 }));
       }
       start.countDown();
-      for (var result : results) {
-        assertThat(result.get()).isEqualTo(200);
-      }
+      var statuses = new java.util.ArrayList<Integer>();
+      for (var result : results) statuses.add(result.get());
+      assertThat(statuses.stream().filter(status -> status == 200).count()).isEqualTo(1);
+      assertThat(statuses.stream().filter(status -> status == 401).count()).isEqualTo(4);
     } finally {
       pool.shutdownNow();
     }
@@ -368,7 +368,7 @@ class SecurityIntegrationTest {
   }
 
   @Test
-  void logoutRevokesGraceTokenAndSiblingButKeepsAnotherLogin() throws Exception {
+  void logoutRevokesRotatedTokenAndKeepsAnotherLogin() throws Exception {
     LoginUser user = login("security-family-logout");
     Cookie original = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
     Cookie otherLogin = new Cookie(RefreshTokenCookies.NAME, tokens.issue(user).refreshToken());
@@ -377,14 +377,9 @@ class SecurityIntegrationTest {
             mvc.perform(post("/api/auth/refresh").cookie(original))
                 .andExpect(status().isOk())
                 .andReturn());
-    Cookie sibling =
-        refreshCookie(
-            mvc.perform(post("/api/auth/refresh").cookie(original))
-                .andExpect(status().isOk())
-                .andReturn());
 
     mvc.perform(post("/api/auth/logout").cookie(current)).andExpect(status().isNoContent());
-    for (Cookie revoked : List.of(original, current, sibling)) {
+    for (Cookie revoked : List.of(original, current)) {
       mvc.perform(post("/api/auth/refresh").cookie(revoked)).andExpect(status().isUnauthorized());
     }
     mvc.perform(post("/api/auth/refresh").cookie(otherLogin)).andExpect(status().isOk());
@@ -405,7 +400,7 @@ class SecurityIntegrationTest {
           pool.submit(
               () -> {
                 start.await();
-                return mvc.perform(post("/api/auth/refresh").cookie(original)).andReturn();
+                return mvc.perform(post("/api/auth/refresh").cookie(current)).andReturn();
               });
       var logout =
           pool.submit(
@@ -425,6 +420,85 @@ class SecurityIntegrationTest {
     }
     mvc.perform(post("/api/auth/refresh").cookie(original)).andExpect(status().isUnauthorized());
     mvc.perform(post("/api/auth/refresh").cookie(current)).andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void logoutImmediatelyRejectsAccessTokensForReadsAndWrites() throws Exception {
+    LoginUser user = login("session-access-revoke");
+    var current = tokens.issue(user);
+    var other = tokens.issue(user);
+    String bearer = "Bearer " + current.accessToken();
+    mvc.perform(get("/api/users/me").header("Authorization", bearer)).andExpect(status().isOk());
+    mvc.perform(
+            post("/api/auth/logout")
+                .cookie(new Cookie(RefreshTokenCookies.NAME, current.refreshToken())))
+        .andExpect(status().isNoContent());
+    mvc.perform(get("/api/users/me").header("Authorization", bearer))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            post("/api/v1/reports")
+                .header("Authorization", bearer)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"field\":\"ETC\",\"note\":\"차단 검사\"}"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + other.accessToken()))
+        .andExpect(status().isOk());
+    tokens.revokeAll(user.userId());
+    mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + other.accessToken()))
+        .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void legacyAccessTokenRequiresRefreshAndMalformedClaimsReturn401() throws Exception {
+    LoginUser user = login("session-claim-check");
+    var pair = tokens.issue(user);
+    for (String subject : List.of(user.userId().toString(), "invalid-subject")) {
+      var claims =
+          JwtClaimsSet.builder()
+              .issuer("mujuthaek-api")
+              .subject(subject)
+              .issuedAt(Instant.now())
+              .expiresAt(Instant.now().plusSeconds(300))
+              .claim(AuthTokenService.ROLE_CLAIM, "USER")
+              .build();
+      String token =
+          jwtEncoder
+              .encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
+              .getTokenValue();
+      mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + token))
+          .andExpect(status().isUnauthorized());
+    }
+    var renewed =
+        mvc.perform(
+                post("/api/auth/refresh")
+                    .cookie(new Cookie(RefreshTokenCookies.NAME, pair.refreshToken())))
+            .andExpect(status().isOk())
+            .andReturn();
+    String access =
+        com.jayway.jsonpath.JsonPath.read(
+            renewed.getResponse().getContentAsString(), "$.accessToken");
+    mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + access))
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  void untrustedOriginsCannotRefreshOrLogOutEvenFromASiblingSite() throws Exception {
+    LoginUser user = login("session-origin-check");
+    var pair = tokens.issue(user);
+    var cookie = new Cookie(RefreshTokenCookies.NAME, pair.refreshToken());
+    for (String origin : List.of("https://evil.example", "https://evil.localhost:3000", "null")) {
+      mvc.perform(post("/api/auth/refresh").cookie(cookie).header("Origin", origin))
+          .andExpect(status().isForbidden());
+      mvc.perform(post("/api/auth/logout").cookie(cookie).header("Origin", origin))
+          .andExpect(status().isForbidden());
+    }
+    mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + pair.accessToken()))
+        .andExpect(status().isOk());
+    mvc.perform(
+            post("/api/auth/refresh")
+                .cookie(cookie)
+                .header("Origin", loginProperties.frontendUrl()))
+        .andExpect(status().isOk());
   }
 
   @Test

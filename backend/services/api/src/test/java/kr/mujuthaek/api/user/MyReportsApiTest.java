@@ -30,6 +30,7 @@ class MyReportsApiTest {
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
   @Autowired AuthTokenService tokens;
+  @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
   @Test
   void generalReportsNeedLoginAndAKnownKind() throws Exception {
@@ -75,6 +76,81 @@ class MyReportsApiTest {
         .andExpect(jsonPath("$.items[0].targetId").doesNotExist())
         .andExpect(jsonPath("$.items[0].linkPath").doesNotExist())
         .andExpect(jsonPath("$.items[1].field").value("MISSING_NOTICE"));
+  }
+
+  @Test
+  void reportReadAnswerAndPermissionRevocationStayBoundToTheAuthenticatedUser() throws Exception {
+    LoginUser owner = login();
+    LoginUser other = login();
+    LoginUser manager = login();
+    var created =
+        mvc.perform(
+                as(owner, post("/api/v1/reports"))
+                    .content("{\"field\":\"ETC\",\"note\":\"첫 회원의 비공개 문의\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+    String id =
+        com.jayway.jsonpath.JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+    mvc.perform(
+            as(other, post("/api/v1/reports"))
+                .content("{\"field\":\"ETC\",\"note\":\"둘째 회원의 비공개 문의\"}"))
+        .andExpect(status().isOk());
+    String memberToken = "Bearer " + tokens.issue(other).accessToken();
+    jdbc.update("update account.users set role = 'ADMIN' where id = ?", manager.userId());
+    String adminToken =
+        "Bearer "
+            + tokens
+                .issue(new LoginUser(manager.userId(), manager.nickname(), "ADMIN"))
+                .accessToken();
+    try {
+      for (String token : java.util.List.of(memberToken, adminToken)) {
+        for (String suffix : java.util.List.of("", "/counts", "/queue", "/" + id)) {
+          mvc.perform(get("/api/admin/reports" + suffix).header("Authorization", token))
+              .andExpect(status().isForbidden());
+        }
+        for (String action : java.util.List.of("start", "review", "resolve")) {
+          mvc.perform(
+                  post("/api/admin/reports/" + id + "/" + action)
+                      .header("Authorization", token)
+                      .contentType(MediaType.APPLICATION_JSON)
+                      .content("{\"result\":\"KEPT\",\"reply\":\"권한 없는 답변\"}"))
+              .andExpect(status().isForbidden());
+        }
+      }
+      jdbc.update(
+          "insert into account.admin_permissions(user_id,permission) values (?, 'REPORTS')",
+          manager.userId());
+      mvc.perform(get("/api/admin/reports/" + id).header("Authorization", adminToken))
+          .andExpect(status().isOk());
+      mvc.perform(post("/api/admin/reports/" + id + "/start").header("Authorization", adminToken))
+          .andExpect(status().isOk());
+      mvc.perform(
+              post("/api/admin/reports/" + id + "/resolve")
+                  .header("Authorization", adminToken)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"result\":\"KEPT\",\"reply\":\"첫 회원만 받을 답변\",\"group\":true}"))
+          .andExpect(status().isOk());
+      mvc.perform(as(owner, get("/api/users/me/reports")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.items[0].reply").value("첫 회원만 받을 답변"));
+      mvc.perform(
+              as(other, get("/api/users/me/reports"))
+                  .param("userId", owner.userId().toString())
+                  .param("reporterId", owner.userId().toString()))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.items.length()").value(1))
+          .andExpect(jsonPath("$.items[0].note").value("둘째 회원의 비공개 문의"))
+          .andExpect(jsonPath("$.items[0].status").value("NEW"))
+          .andExpect(jsonPath("$.items[0].reply").doesNotExist());
+      jdbc.update(
+          "delete from account.admin_permissions where user_id = ? and permission = 'REPORTS'",
+          manager.userId());
+      mvc.perform(get("/api/admin/reports/" + id).header("Authorization", adminToken))
+          .andExpect(status().isForbidden());
+    } finally {
+      jdbc.update("delete from account.admin_permissions where user_id = ?", manager.userId());
+      jdbc.update("update account.users set role = 'USER' where id = ?", manager.userId());
+    }
   }
 
   private MockHttpServletRequestBuilder as(LoginUser user, MockHttpServletRequestBuilder request) {

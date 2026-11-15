@@ -119,6 +119,8 @@ def _merged_ranges(sheet: ElementTree.Element) -> list[tuple[int, int, int, int]
         points = [re.fullmatch(r"\$?([A-Za-z]{1,3})\$?(\d+)", corner) for corner in corners]
         if len(points) == 2 and all(points):
             (c1, r1), (c2, r2) = [(_column_index(p[1], 0), int(p[2])) for p in points]
+            if not (1 <= r1 <= r2 <= 1_048_576 and 0 <= c1 <= c2 < 16_384):
+                raise ValueError("Invalid spreadsheet merge range")
             out.append((r1, c1, r2, c2))
     return out
 
@@ -281,8 +283,8 @@ def read_xlsx(data: bytes) -> XlsxList | None:
                 value = (by_number.get(r1) or hidden_cells.get(r1) or {}).get(c1)
                 if value:
                     last_column = c2 if c2 - c1 < MERGE_REPEAT_COLUMNS else c1
-                    for r in range(r1, r2 + 1):
-                        if r in by_number:
+                    for r in by_number:
+                        if r1 <= r <= r2:
                             for c in range(c1, last_column + 1):
                                 by_number[r].setdefault(c, value)
             hidden_total += hidden_rows + len(hidden_values)
