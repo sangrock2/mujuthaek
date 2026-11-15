@@ -58,6 +58,7 @@ class Selection(unittest.TestCase):
             (['README.md', 'docs/deployment.md', 'frontend/README.md'], []),
             (['backend/services/api/src/test/java/Test.java', '.github/workflows/checks.yml'], []),
             (['backend/services/collector/src/main.py', 'backend/libs/python-platform/pyproject.toml'], []),
+            (['backend/infra/deploy/personal/operations_monitor.py', '.github/workflows/operations.yml'], []),
             (['backend/services/api/Old.java', 'backend/services/notification/New.java'], ['api', 'notification']),
             (['new-shared-build-input.json'], list(planner.COMPONENTS)),
         ]
