@@ -1,6 +1,14 @@
 # Vercel rewrites → nginx → 이 서버. X-Forwarded-Proto·Host로 https 주소(쿠키·OAuth 리다이렉트)를 만들어요
 server:
   forward-headers-strategy: framework
+  tomcat:
+    threads:
+      max: 64
+      min-spare: 4
+    max-connections: 256
+    accept-count: 32
+    connection-timeout: 10s
+  max-http-request-header-size: 16KB
   servlet:
     session:
       cookie:

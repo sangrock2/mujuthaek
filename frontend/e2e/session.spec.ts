@@ -36,7 +36,14 @@ test("인증·refresh 회전·계정 분리·타인 수정 방지", async ({ pag
       })
     ).status(),
   ).toBe(404);
+  // 제목이 없는 초기 렌더만 보고 이동하면 진행 중인 쿠키 회전 응답을 끊을 수 있어요.
+  const deniedDetail = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/users/me/preparations/${p.id}`) &&
+      response.request().method() === "GET",
+  );
   await page.goto(`/me/preparations/${p.id}`);
+  expect((await deniedDetail).status()).toBe(404);
   await expect(
     page.getByRole("heading", { name: "E2E 청년 주거 신청 공고", exact: true }),
   ).toHaveCount(0);
