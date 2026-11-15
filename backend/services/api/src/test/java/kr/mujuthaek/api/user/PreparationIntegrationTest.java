@@ -240,8 +240,11 @@ class PreparationIntegrationTest {
                 .param("expectedRevision", Long.toString(owned.revision()))
                 .header("Authorization", token))
         .andExpect(status().isNotFound());
+    // 준비함 삭제는 없는 항목·남의 항목 모두 204로 무시해요. 아래에서 원본이 그대로인지 확인해요.
     mvc.perform(delete(base + owned.id()).header("Authorization", token))
-        .andExpect(status().isNotFound());
+        .andExpect(status().isNoContent());
+    mvc.perform(delete(base + UUID.randomUUID()).header("Authorization", token))
+        .andExpect(status().isNoContent());
     // 준비함 ID만 내 것으로 바꾸고 다른 사람의 task ID를 섞어도 권한을 얻지 못해요.
     var theirs = service.create(other.userId(), noticeId).preparation();
     change.put("expectedRevision", theirs.revision());
