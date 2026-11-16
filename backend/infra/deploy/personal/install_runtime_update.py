@@ -51,8 +51,8 @@ def main():
         before = manifest.read_text()
         pending = private_file(runtime_manifest(before))
         try:
-            command = ['docker', 'compose', '--env-file', '.env', '--env-file', 'versions.env',
-                       '--profile', 'workers', '-f', str(pending), 'config', '--format', 'json']
+            from compose_runtime import compose_command
+            command = [*compose_command(BASE, manifest=pending, profiles=('workers',)), 'config', '--format', 'json']
             config = json.loads(subprocess.run(command, cwd=BASE, check=True, capture_output=True, text=True, timeout=60).stdout)
             for service, cap in (('collector', 0.10), ('extraction', 0.15)):
                 if float(config['services'][service]['cpus']) != cap:

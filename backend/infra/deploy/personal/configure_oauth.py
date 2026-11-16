@@ -43,8 +43,8 @@ def private_file(content):
 
 
 def compose(env, *args):
-    return subprocess.run(['docker', 'compose', '--env-file', str(env), '--env-file', 'versions.env',
-                           '-f', 'compose.prod.yml', *args], cwd=BASE, check=True,
+    from compose_runtime import compose_command
+    return subprocess.run([*compose_command(BASE, env), *args], cwd=BASE, check=True,
                           capture_output=True, text=True)
 
 

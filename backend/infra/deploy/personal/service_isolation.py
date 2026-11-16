@@ -193,7 +193,8 @@ def check_broker(observed, passwords):
         checks['mq.' + service + '.resources'] = found == [resource_permissions(service)]
         found = [item for item in observed.get('topic_permissions', []) if item.get('user') == user]
         checks['mq.' + service + '.topics'] = sorted(found, key=lambda item: item.get('exchange', '')) == sorted(topic_permissions(service), key=lambda item: item['exchange'])
-    checks['mq.legacy_user_revoked'] = not any(item.get('user') == 'mujuthaek' and item.get('vhost') == VHOST for item in observed.get('permissions', []))
+    checks['mq.legacy_user_revoked'] = not any(item.get('name') == 'mujuthaek' for item in observed.get('users', [])) and not any(item.get('user') == 'mujuthaek' for item in observed.get('permissions', []))
+    checks['mq.exact_users'] = sorted(item.get('name', '') for item in observed.get('users', [])) == sorted(USERS.values())
     for kind in ('exchanges', 'queues'):
         for item in wanted[kind]:
             matches = [value for value in observed.get(kind, []) if value.get('name') == item['name'] and value.get('vhost') == VHOST]

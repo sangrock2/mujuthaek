@@ -29,9 +29,13 @@ def main():
     container = None
     results = {}
     try:
+        image = 'rabbitmq:4.1@sha256:16bf771308e2b6ff8ea4ed8fa202a82ccbfa29e0f140835f7564603762073593'
+        config = ROOT / 'backend/infra/deploy/personal/rabbitmq/isolation.conf'
         container = docker('run', '-d', '--rm', '--user', 'rabbitmq', '--memory', '512m', '--cpus', '1',
                            '--security-opt', 'no-new-privileges:true', '-p', '127.0.0.1::5672',
-                           'rabbitmq:4.1-management')
+                           '-e', 'RABBITMQ_DEFAULT_USER=mujuthaek', '-e', 'RABBITMQ_DEFAULT_PASS=synthetic-unused',
+                           '--mount', f'type=bind,src={config},dst=/etc/rabbitmq/conf.d/90-isolation.conf,readonly',
+                           '--mount', f'type=bind,src={path},dst=/etc/rabbitmq/definitions.json,readonly', image)
         for attempt in range(60):
             ready = subprocess.run(['docker', 'exec', container, 'rabbitmq-diagnostics', '-q', 'check_running'], capture_output=True)
             if ready.returncode == 0:
@@ -39,8 +43,10 @@ def main():
             time.sleep(1)
         else:
             raise RuntimeError('Disposable broker did not start')
-        docker('cp', str(path), container + ':/tmp/definitions.json')
-        docker('exec', container, 'rabbitmqctl', 'import_definitions', '/tmp/definitions.json')
+        users = json.loads(docker('exec', container, 'rabbitmqctl', 'list_users', '--formatter=json'))
+        results['fresh_boot.only_service_users'] = sorted(item['user'] for item in users) == sorted(isolation.USERS.values())
+        if not results['fresh_boot.only_service_users']:
+            raise RuntimeError('Fresh broker created an unexpected default user')
         port = int(docker('port', container, '5672/tcp').rsplit(':', 1)[1])
 
         def connect(service):

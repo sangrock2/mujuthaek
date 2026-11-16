@@ -5,13 +5,14 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from compose_runtime import compose_command
 
 BASE = Path(__file__).resolve().parent
 DATABASES = ("api", "notification", "collector", "extraction")
 
 
 def compose(*args, capture=False):
-    return subprocess.run(["docker", "compose", "--env-file", ".env", "--env-file", "versions.env", "-f", "compose.prod.yml", *args],
+    return subprocess.run([*compose_command(BASE), *args],
                           cwd=BASE, check=True, capture_output=capture, text=capture)
 
 
@@ -54,7 +55,7 @@ def snapshot(phase):
         require_empty_queue()
         for db in DATABASES:
             with (output / f"{db}.dump").open("wb") as archive:
-                subprocess.run(["docker", "compose", "--env-file", ".env", "--env-file", "versions.env", "-f", "compose.prod.yml",
+                subprocess.run([*compose_command(BASE),
                                 "exec", "-T", "postgres", "pg_dump", "-U", "postgres", "-Fc", db], cwd=BASE, stdout=archive, check=True)
         filename = f"/tmp/mujuthaek-migration-{phase}.json"
         compose("exec", "-T", "rabbitmq", "rabbitmqctl", "export_definitions", filename)
@@ -74,7 +75,7 @@ def restore(phase):
     require_empty_queue(allow_no_queues=True)
     for db in DATABASES:
         with (source / f"{db}.dump").open("rb") as archive:
-            subprocess.run(["docker", "compose", "--env-file", ".env", "--env-file", "versions.env", "-f", "compose.prod.yml",
+            subprocess.run([*compose_command(BASE),
                             "exec", "-T", "postgres", "pg_restore", "-U", "postgres", "-d", db, "--clean", "--if-exists", "--exit-on-error"],
                            cwd=BASE, stdin=archive, check=True)
     expected = json.loads((source / "manifest.json").read_text())
