@@ -41,7 +41,7 @@ def operations_trust(prefix):
 
 
 def secret(name, value):
-    subprocess.run(['gh', 'secret', 'set', name, '--repo', REPO], input=value,
+    subprocess.run(['gh', 'secret', 'set', name, '--repo', REPO, '--env', 'vercel-production'], input=value,
                    check=True, capture_output=True, text=True, timeout=60)
 
 

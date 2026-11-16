@@ -7,3 +7,5 @@ Please report vulnerabilities through [GitHub private vulnerability reporting](h
 Use an isolated local environment when reproducing issues. Testing must not interrupt the production service, send real notifications, or access other users' data.
 
 If a credential is exposed, revoke or rotate it before removing it from Git history. Deleting the text alone does not invalidate the credential.
+
+Dependency updates follow the same `dev` → `main` review path. If Dependabot opens a security update against `main`, retarget it to `dev` before merging; the branch-direction check intentionally prevents direct merges into `main`.
