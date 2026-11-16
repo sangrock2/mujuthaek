@@ -13,9 +13,8 @@ from pathlib import Path
 BASE = Path('/opt/mujuthaek-source/backend/infra/deploy/personal')
 SERVICES = ('api', 'notification')
 # Used with --pull never everywhere, so a registry tag change can never swap the CLI that holds host credentials.
-# To pin by digest, read it on the host (docker image inspect --format '{{index .RepoDigests 0}}' <this tag>) and
-# replace the value with 'amazon/aws-cli:2.36.28@sha256:<digest>'. No digest is recorded in this repository yet.
-AWS_IMAGE = 'amazon/aws-cli:2.36.28'
+# Multi-platform manifest digest independently read from the official amazon/aws-cli registry.
+AWS_IMAGE = 'amazon/aws-cli:2.36.28@sha256:9e94ede8b677fe5456a152fd6698a6726810160497882123bfd9dd40a5671d74'
 # Files the release manifest fingerprints (.github/scripts/backend_release.py HOST_FILES); differences are reported.
 HOST_FILES = ('compose.prod.yml', 'nginx/default.conf', 'nginx/acme.conf')
 READINESS_SECONDS = 600

@@ -21,7 +21,7 @@ x-app: &app
 
 services:
   rabbitmq:
-    image: rabbitmq:4.1-management
+    image: rabbitmq:4.1-management@sha256:479361ae8fbb8c852bf67f4acbbfa6f3f6810f8f08119ae6ad4d922bfeaa27c3
     # 노드 이름(rabbit@<호스트 이름>)이 데이터 폴더 이름이에요. 고정하지 않으면 컨테이너가 다시 만들어질 때(설정이 바뀐 배포)
     # 호스트 이름이 바뀌어 빈 폴더로 시작해 큐 안의 메시지·shovel 설정이 사라져요 (실측 2026-10-29 운영: 도로명주소 적재 요청 12건)
     hostname: rabbitmq
@@ -45,7 +45,7 @@ services:
       retries: 10
 
   migrate-extraction:
-    image: flyway/flyway:11.14
+    image: flyway/flyway:11.14@sha256:510ae446ffc9129c061860e73633dbc1898d638dc8c965e3b57bba3e916bc32d
     profiles: [migrate]
     logging: *logging
     # 암호는 명령행 인자(프로세스 목록·docker inspect의 Args에 보임)가 아니라 환경 변수로 넘겨요
@@ -216,7 +216,7 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST:-rabbitmq}:5672/
 
   nginx:
-    image: nginx:1.29-alpine
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     environment:
       API_PUBLIC_HOST: ${API_PUBLIC_HOST:?Set the certificate DNS name or public IP}
       NGINX_ENVSUBST_FILTER: ^API_PUBLIC_HOST$
