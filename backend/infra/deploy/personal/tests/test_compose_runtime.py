@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,7 +18,18 @@ class ComposeRuntimeTests(unittest.TestCase):
             activation = folder / 'activation.env'
             activation.write_text('SERVICE_ISOLATION_READY=verified-v1\n')
             activation.chmod(0o600)
-            command = compose_command(base, 'pending.env', profiles=('workers',))
+            original_stat = Path.stat
+
+            def root_owned_fixture(path, *args, **kwargs):
+                info = original_stat(path, *args, **kwargs)
+                if path == activation:
+                    fields = list(info)
+                    fields[4] = 0
+                    return os.stat_result(fields)
+                return info
+
+            with patch.object(Path, 'stat', root_owned_fixture):
+                command = compose_command(base, 'pending.env', profiles=('workers',))
             self.assertIn('pending.env', command)
             self.assertIn(str(activation), command)
             self.assertEqual(command[-2:], ['-f', str(base / 'compose.isolated.yml')])

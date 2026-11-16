@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,20 @@ class BackupEncryptionActivation(unittest.TestCase):
         self.marker.write_text(json.dumps({'format': 'cms-aes256gcm-rsa-oaep-sha256-v1',
             'certificate_sha256': hashlib.sha256(b'synthetic certificate').hexdigest()}))
         self.marker.chmod(0o600)
+        original_stat = Path.stat
+        marker = self.marker
+
+        def root_owned_fixture(path, *args, **kwargs):
+            info = original_stat(path, *args, **kwargs)
+            if path == marker:
+                fields = list(info)
+                fields[4] = 0
+                return os.stat_result(fields)
+            return info
+
+        patcher = patch.object(Path, 'stat', root_owned_fixture)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def encrypt(self, source, destination, certificate):
         destination.write_bytes(b'synthetic ciphertext')
