@@ -47,6 +47,22 @@ class ServiceIsolation(unittest.TestCase):
             self.assertNotIn('/backups', text)
         self.assertNotIn('/area', str(isolation.storage_policy('extraction', 'synthetic-bucket')))
 
+    def test_unused_legacy_admin_and_unknown_users_also_fail(self):
+        changed = copy.deepcopy(self.definitions)
+        changed['users'].append({'name': 'mujuthaek', 'tags': ['administrator']})
+        checks = isolation.check_broker(changed, self.passwords)
+        self.assertFalse(checks['mq.legacy_user_revoked'])
+        self.assertFalse(checks['mq.exact_users'])
+
+    def test_effective_classic_default_is_accepted_but_not_quorum(self):
+        changed = copy.deepcopy(self.definitions)
+        queue = changed['queues'][0]
+        queue['type'] = 'classic'
+        queue['arguments']['x-queue-type'] = 'classic'
+        self.assertTrue(all(isolation.check_broker(changed, self.passwords).values()))
+        queue['type'] = 'quorum'
+        self.assertFalse(all(isolation.check_broker(changed, self.passwords).values()))
+
     def test_duplicate_env_settings_fail_closed(self):
         with self.assertRaises(ValueError):
             isolation.env_values('API_MQ_PASSWORD=a\nAPI_MQ_PASSWORD=b\n')
