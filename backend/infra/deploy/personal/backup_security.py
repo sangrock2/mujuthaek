@@ -75,18 +75,24 @@ def prepare(aws, config):
     aws.call('iam', 'put-user-policy', '--user-name', BACKUP_USER, '--policy-name', 'BackupPrefixOnly',
              '--policy-document', json.dumps(expected))
     if not keys:
-        if PRIVATE.exists() and PRIVATE.stat().st_size:
+        if PRIVATE.exists() or PRIVATE.is_symlink():
             raise RuntimeError('Refusing to overwrite an existing private configuration')
-        if not PRIVATE.exists():
-            private_file(PRIVATE)
-        key = aws.call('iam', 'create-access-key', '--user-name', BACKUP_USER)['AccessKey']
+        descriptor = create_private_file(PRIVATE)
+        key = None
         try:
-            data = {'AWS_ACCESS_KEY_ID': key['AccessKeyId'], 'AWS_SECRET_ACCESS_KEY': key['SecretAccessKey'],
-                    'AWS_REGION': 'ap-northeast-2', 'S3_BUCKET': config['bucket'], 'BACKUP_IDENTITY_ARN': user['Arn']}
-            PRIVATE.write_text(''.join(f'{name}={value}\n' for name, value in data.items()), encoding='utf-8')
+            # Keep the protected creation handle open: never reopen a replaceable pathname to write a secret.
+            with os.fdopen(descriptor, 'w', encoding='utf-8', newline='\n') as output:
+                key = aws.call('iam', 'create-access-key', '--user-name', BACKUP_USER)['AccessKey']
+                info, named = os.fstat(output.fileno()), PRIVATE.stat(follow_symlinks=False)
+                if (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino):
+                    raise RuntimeError('Private credential path changed during key issuance')
+                data = {'AWS_ACCESS_KEY_ID': key['AccessKeyId'], 'AWS_SECRET_ACCESS_KEY': key['SecretAccessKey'],
+                        'AWS_REGION': 'ap-northeast-2', 'S3_BUCKET': config['bucket'], 'BACKUP_IDENTITY_ARN': user['Arn']}
+                output.write(''.join(f'{name}={value}\n' for name, value in data.items()))
         except Exception:
             # This newly created key has never been installed on the server.
-            aws.call('iam', 'delete-access-key', '--user-name', BACKUP_USER, '--access-key-id', key['AccessKeyId'])
+            if key:
+                aws.call('iam', 'delete-access-key', '--user-name', BACKUP_USER, '--access-key-id', key['AccessKeyId'])
             raise
     print('Backup-only identity prepared; app permissions unchanged; values not printed.')
 

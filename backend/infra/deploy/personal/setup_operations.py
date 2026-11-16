@@ -37,7 +37,7 @@ def policy():
 
 def operations_trust(prefix):
     provider = PROVIDER.replace('659355919826', settings.ACCOUNT)
-    return trust_policy(prefix, WORKFLOWS, provider=provider)
+    return trust_policy(prefix, WORKFLOWS, provider=provider, environment='vercel-production')
 
 
 def secret(name, value):

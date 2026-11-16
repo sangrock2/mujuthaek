@@ -494,12 +494,26 @@ class NoticeContractTest(unittest.TestCase):
                 self.assertTrue([e for e in errors if e.startswith(f"SCHEMA {path}")], errors)
                 self.assertFalse([e for e in errors if secret in e], errors)
 
-    def test_schema_error_names_missing_and_extra_fields(self):
+    def test_schema_error_names_missing_fields_but_not_untrusted_extra_names(self):
         del self.notice["notice"]["title"]
         self.notice["notice"]["extraField"] = 1
         errors = contract.validate(self.notice, "schemas/standard-notice.v1.json")
         self.assertIn("SCHEMA /notice: required: 필수 칸 없음 title", errors)
-        self.assertIn("SCHEMA /notice: additionalProperties: 허용되지 않은 칸 extraField", errors)
+        self.assertIn("SCHEMA /notice: additionalProperties: 허용되지 않은 칸 1개(이름은 남기지 않음)", errors)
+        self.assertNotIn("extraField", "\n".join(errors))
+
+    def test_secret_that_looks_like_a_field_name_is_not_logged(self):
+        secret = "SyntheticCredentialKey987"
+        self.notice["notice"][secret] = "value"
+        errors = contract.validate(self.notice, "schemas/standard-notice.v1.json")
+        self.assertTrue(errors)
+        self.assertNotIn(secret, "\n".join(errors))
+
+    def test_error_pointer_never_echoes_unknown_map_keys(self):
+        from types import SimpleNamespace
+        secret = "SyntheticCredentialKey987"
+        error = SimpleNamespace(absolute_path=["notice", secret, 0, "title"])
+        self.assertEqual(contract.schema_path(error), "/notice/<이름 숨김>/0/title")
 
     def test_missing_collector_detail_url_stays_null(self):
         self.notice["sourceReferences"][0]["detailUrl"] = None

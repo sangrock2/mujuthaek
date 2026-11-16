@@ -19,6 +19,17 @@ FIXTURE = {'account': '111111111111', 'bucket': 'example-private-bucket', 'budge
 
 
 class OperationsTests(unittest.TestCase):
+    def test_verification_never_sends_mail_or_writes_state(self):
+        with patch.dict('os.environ', {'OPERATIONS_CONFIG': json.dumps(FIXTURE), 'VERCEL_TOKEN': 'synthetic'}), \
+                patch.object(sys, 'argv', ['monitor', '--verify-only']), \
+                patch.object(monitor, 'aws', return_value={'Account': FIXTURE['account']}) as aws, \
+                patch.object(monitor, 'vercel_status', return_value={'project_access': True}) as vercel, \
+                patch.object(monitor, 'run') as run, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(monitor.main(), 0)
+            aws.assert_called_once_with('sts', 'get-caller-identity')
+            vercel.assert_called_once_with('synthetic')
+            run.assert_not_called()
+
     def setUp(self):
         self.now = datetime(2026, 11, 15, tzinfo=timezone.utc)
         monitor.configure(FIXTURE)

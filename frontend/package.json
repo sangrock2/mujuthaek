@@ -2,12 +2,16 @@
   "name": "mujuthaek-fe",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "test:ui": "node scripts/test-ui-regressions.cjs",
+    "test:tooling": "node --test scripts/e2e-environment.test.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "preview:api": "node scripts/run-e2e.mjs --preview",
     "preview:resume": "node scripts/run-e2e.mjs --resume-preview",

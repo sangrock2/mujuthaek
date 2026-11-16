@@ -13,3 +13,5 @@ infra/.env
 **/.env.*
 **/test-results
 infra/deploy/personal/runtime
+services/collector/tests
+services/extraction/tests

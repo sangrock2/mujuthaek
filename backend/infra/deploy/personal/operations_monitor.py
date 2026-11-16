@@ -245,9 +245,19 @@ def run(send_snapshot=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--send-report', action='store_true')
+    parser.add_argument('--verify-only', action='store_true',
+                        help='Verify provider authentication without sending mail or writing state')
     args = parser.parse_args()
     try:
         configure(json.loads(os.environ['OPERATIONS_CONFIG']))
+        if args.verify_only:
+            if args.send_report:
+                raise CheckError('Verification cannot send a report.')
+            if aws('sts', 'get-caller-identity')['Account'] != ACCOUNT:
+                raise CheckError('Account mismatch.')
+            vercel_status(os.environ.get('VERCEL_TOKEN'))
+            print('AWS OIDC and protected Vercel credential verified; no mail or monitor state changes.')
+            return 0
         ok = run(args.send_report)
     except Exception:
         # Public repository: never print provider payloads, balances, token metadata or stack traces.

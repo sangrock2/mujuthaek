@@ -4,6 +4,10 @@ on:
     - cron: '15 0 * * *'
   workflow_dispatch:
     inputs:
+      verify_only:
+        description: Verify AWS OIDC and Vercel access without sending mail or writing monitor state
+        type: boolean
+        default: false
       send_report:
         description: Send a private snapshot to the owner's configured email
         type: boolean
@@ -15,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   monitor:
+    environment: vercel-production
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -39,8 +44,10 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           OPERATIONS_CONFIG: ${{ secrets.OPERATIONS_CONFIG }}
           SEND_REPORT: ${{ inputs.send_report }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
         shell: bash
         run: |
           args=()
+          if [ "$VERIFY_ONLY" = true ]; then args+=(--verify-only); fi
           if [ "$SEND_REPORT" = true ]; then args+=(--send-report); fi
           python backend/infra/deploy/personal/operations_monitor.py "${args[@]}"

@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
+import { isolatedEnvironment, localDockerEndpoint } from "./e2e-environment.mjs";
 
 const frontend = fileURLToPath(new URL("../", import.meta.url));
 const resumePreview = process.argv.includes("--resume-preview");
@@ -19,36 +20,7 @@ if (!/^mujuthaek-e2e-[a-z0-9-]+$/.test(project)) throw new Error("Invalid E2E_PR
 const compose = ["compose", "-p", project, "-f", path.join(root, "backend/infra/e2e/compose.yml")];
 const logs = path.join(frontend, "test-results/servers");
 mkdirSync(logs, { recursive: true });
-const env = {
-  ...process.env,
-  E2E_ALLOW_LOCAL: "1",
-  E2E_CONTROL_KEY: randomBytes(32).toString("hex"),
-  NEXT_PUBLIC_USE_MOCKS: "false",
-  NEXT_PUBLIC_API_PREVIEW: previewMode ? "true" : "false",
-  NEXT_PUBLIC_API_BASE_URL: "",
-  NEXT_PUBLIC_GA_ID: "",
-  NEXT_PUBLIC_KAKAO_MAP_KEY: "",
-  NEXT_PUBLIC_VAPID_PUBLIC_KEY: "",
-  TRAFFIC_INGEST_URL: "",
-  TRAFFIC_INGEST_TOKEN: "",
-  API_ORIGIN: "http://127.0.0.1:18080",
-};
-// 호출자의 개발/운영 접속 설정이 격리 설정을 덮어쓰지 않게 제거한다.
-for (const key of Object.keys(env)) {
-  if (
-    /^(SPRING_|SERVER_|API_DB_|NOTIFICATION_|RABBITMQ_|S3_|MINIO_|AWS_|JWT_|PUSH_|OAUTH_|JUDGING_)/.test(
-      key,
-    ) ||
-    [
-      "JAVA_TOOL_OPTIONS",
-      "JDK_JAVA_OPTIONS",
-      "GRADLE_OPTS",
-      "FRONTEND_URL",
-      "CORS_ORIGINS",
-    ].includes(key)
-  )
-    delete env[key];
-}
+const env = isolatedEnvironment(process.env, previewMode, randomBytes(32).toString("hex"));
 const children = [],
   handles = [];
 let cleaned = false,
@@ -59,6 +31,7 @@ function command(executable, args, cwd = frontend, log) {
     env,
     stdio: log ? ["ignore", log, log] : "inherit",
     windowsHide: true,
+    shell: false,
     detached: process.platform !== "win32",
   });
   children.push(child);
@@ -132,6 +105,8 @@ async function preview() {
   );
   if (!created.ok) throw new Error(`Preview preparation failed (${created.status})`);
   const preparation = await created.json();
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(preparation.id ?? ""))
+    throw new Error("Invalid preparation ID");
   const token = resumePreview
     ? new URL(previousPreview.url).pathname.slice(1)
     : randomBytes(24).toString("hex");
@@ -222,6 +197,18 @@ for (const signal of ["SIGINT", "SIGTERM"])
     process.exit(1);
   });
 try {
+  const context = spawnSync(
+    "docker",
+    ["context", "inspect", "--format", "{{json .Endpoints.docker.Host}}"],
+    {
+      env,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15_000,
+    },
+  );
+  if (context.status !== 0 || !localDockerEndpoint(JSON.parse(context.stdout.trim())))
+    throw new Error("E2E requires a local Docker daemon; remote contexts are refused");
   // 기존 포트의 서버를 재사용하지 않아 공유/운영 서버에 fixture가 적용되는 것을 막는다.
   for (const port of [13000, 18080, 18081, ...(previewMode ? [13001] : [])])
     await new Promise((resolve, reject) => {
@@ -266,6 +253,20 @@ try {
       ]),
     );
 } catch (error) {
+  if (composeStarted) {
+    const diagnostic = openSync(path.join(logs, "rabbitmq-startup.log"), "w");
+    try {
+      spawnSync("docker", [...compose, "logs", "--no-color", "--tail", "160", "rabbitmq"], {
+        cwd: root,
+        env,
+        windowsHide: true,
+        timeout: 15_000,
+        stdio: ["ignore", diagnostic, diagnostic],
+      });
+    } finally {
+      closeSync(diagnostic);
+    }
+  }
   console.error(error.message);
   process.exitCode = 1;
 } finally {
