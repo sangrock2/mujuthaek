@@ -1,7 +1,9 @@
 """Install the explicitly verified public source archive while preserving live secrets and runtime data."""
+import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -102,4 +104,14 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--archive', type=Path, required=True)
+    parser.add_argument('--sha256', required=True)
+    parser.add_argument('--commit', required=True)
+    args = parser.parse_args()
+    if not re.fullmatch('[a-f0-9]{64}', args.sha256) or not re.fullmatch('[a-f0-9]{40}', args.commit):
+        raise SystemExit('Expected a verified SHA256 and full source commit')
+    if args.archive.is_symlink() or args.archive.resolve().parent != Path('/home/ubuntu'):
+        raise SystemExit('Expected a regular uploaded source archive under /home/ubuntu')
+    ARCHIVE, EXPECTED, COMMIT = args.archive, args.sha256, args.commit
     main()
