@@ -10,7 +10,8 @@ ORIGIN = "https://mujuthaek.vercel.app"
 
 
 def compose(env_file, *args, capture=False):
-    return subprocess.run(["docker", "compose", "--env-file", str(env_file), "--env-file", "versions.env", "-f", "compose.prod.yml", *args],
+    from compose_runtime import compose_command
+    return subprocess.run([*compose_command(BASE, env_file), *args],
                           cwd=BASE, check=True, capture_output=capture, text=capture)
 
 

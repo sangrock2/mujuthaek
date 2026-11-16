@@ -155,8 +155,8 @@ class Host:
                  '--only-show-errors', '--sse', 'AES256')
 
     def compose(self, *args, timeout=120):
-        return subprocess.run(['docker', 'compose', '--env-file', '.env', '--env-file', 'versions.env',
-                               '-f', 'compose.prod.yml', *args], cwd=BASE, check=True,
+        from compose_runtime import compose_command
+        return subprocess.run([*compose_command(BASE), *args], cwd=BASE, check=True,
                               capture_output=True, text=True, timeout=timeout)
 
     def progress(self, phase, **details):

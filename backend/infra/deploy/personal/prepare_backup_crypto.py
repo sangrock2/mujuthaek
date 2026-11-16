@@ -42,7 +42,7 @@ def main():
     user_arn = 'arn:aws:iam::659355919826:user/mujuthaek-personal-backup'
     simulation = aws.call('iam', 'simulate-principal-policy', '--policy-source-arn', user_arn,
         '--action-names', 's3:GetObject', '--resource-arns', 'arn:aws:s3:::' + BUCKET + '/' + PREFIX + 'recovery-private.pem',
-        '--resource-policy', json.dumps(observed), '--caller-arn', user_arn, '--resource-owner', aws.account,
+        '--resource-policy', json.dumps(observed), '--caller-arn', user_arn, '--resource-owner', root_arn,
         '--context-entries', 'ContextKeyName=aws:PrincipalArn,ContextKeyType=string,ContextKeyValues=' + user_arn)
     if simulation['EvaluationResults'][0]['EvalDecision'] != 'explicitDeny':
         raise RuntimeError('Backup identity not explicitly denied; no keys uploaded')

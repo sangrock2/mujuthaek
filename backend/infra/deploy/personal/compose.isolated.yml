@@ -2,6 +2,10 @@
 # service_isolation.py prepares definitions/policies and validates the merged configuration before cutover.
 x-service-isolation: ${SERVICE_ISOLATION_READY:?run the offline service-isolation readiness check first}
 services:
+  rabbitmq:
+    volumes:
+      - ./rabbitmq/isolation.conf:/etc/rabbitmq/conf.d/90-isolation.conf:ro
+      - ./runtime/service-isolation/broker-definitions.json:/etc/rabbitmq/definitions.json:ro
   api:
     environment:
       RABBITMQ_USER: mujuthaek-api
