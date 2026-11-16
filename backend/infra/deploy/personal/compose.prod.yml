@@ -19,7 +19,7 @@ x-aws: &aws
   S3_BUCKET: ${S3_BUCKET:?private bucket required}
 services:
   postgres:
-    image: postgis/postgis:17-3.5
+    image: postgis/postgis:17-3.5@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
     restart: unless-stopped
     mem_limit: 768m
     logging: *log
@@ -42,7 +42,7 @@ services:
   rabbitmq:
     # No management plugin: nothing here uses its HTTP API or UI, and rabbitmqctl (policies, definitions export/import,
     # queue listing) and rabbitmq-diagnostics are part of the core image (security audit section 4).
-    image: rabbitmq:4.1
+    image: rabbitmq:4.1@sha256:16bf771308e2b6ff8ea4ed8fa202a82ccbfa29e0f140835f7564603762073593
     hostname: rabbitmq
     restart: unless-stopped
     mem_limit: 320m
@@ -139,7 +139,7 @@ services:
       # Bearer token for /actuator/prometheus; optional so an older host .env keeps working (empty: prod answers 404)
       METRICS_TOKEN: ${METRICS_TOKEN:-}
   migrate-collector:
-    image: flyway/flyway:11.14
+    image: flyway/flyway:11.14@sha256:510ae446ffc9129c061860e73633dbc1898d638dc8c965e3b57bba3e916bc32d
     command: [migrate]
     profiles: [workers]
     mem_limit: 384m
@@ -154,7 +154,7 @@ services:
     volumes:
       - ../../../services/collector/migrations:/flyway/sql:ro
   migrate-extraction:
-    image: flyway/flyway:11.14
+    image: flyway/flyway:11.14@sha256:510ae446ffc9129c061860e73633dbc1898d638dc8c965e3b57bba3e916bc32d
     command: [migrate]
     profiles: [workers]
     mem_limit: 384m
@@ -219,7 +219,7 @@ services:
       EXTRACTION_DAILY_BUDGET_USD: ${EXTRACTION_DAILY_BUDGET_USD:-0}
       EXTRACTION_MONTHLY_BUDGET_USD: ${EXTRACTION_MONTHLY_BUDGET_USD:-0}
   nginx:
-    image: nginx:1.29-alpine
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     restart: unless-stopped
     mem_limit: 96m
     logging: *log

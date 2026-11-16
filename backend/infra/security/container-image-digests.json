@@ -1,0 +1,19 @@
+{
+  "verified_at": "2026-11-16",
+  "source": "Docker/OCI publisher registry manifests",
+  "images": {
+    "amazon/aws-cli:2.36.28": "sha256:9e94ede8b677fe5456a152fd6698a6726810160497882123bfd9dd40a5671d74",
+    "postgis/postgis:17-3.5": "sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+    "rabbitmq:4.1": "sha256:16bf771308e2b6ff8ea4ed8fa202a82ccbfa29e0f140835f7564603762073593",
+    "nginx:1.29-alpine": "sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+    "flyway/flyway:11.14": "sha256:510ae446ffc9129c061860e73633dbc1898d638dc8c965e3b57bba3e916bc32d",
+    "python:3.12-slim": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "ghcr.io/astral-sh/uv:0.12.10": "sha256:2bb3ebca0a796a155094a27773d290c4b074572e6107f171d88d086682fd2500",
+    "eclipse-temurin:25-jdk": "sha256:b8705e936964c228dfce359e63dbf08f6c69cb380ed1d576b1f6b1064f15567d",
+    "eclipse-temurin:25-jre": "sha256:a640968ae55027b322cedd5f8228b01a84baff0b9e9360e47601c6a111ba1699",
+    "node:24-bookworm-slim": "sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54",
+    "ghcr.io/astral-sh/uv:0.13.1": "sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336",
+    "rabbitmq:4.1-management": "sha256:479361ae8fbb8c852bf67f4acbbfa6f3f6810f8f08119ae6ad4d922bfeaa27c3",
+    "prom/node-exporter:v1.9.1": "sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a"
+  }
+}

@@ -1,7 +1,7 @@
 # 빌드 컨텍스트는 저장소 루트예요: docker build -f services/collector/Dockerfile -t mujuthaek-collector .
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # uv 버전은 uv.lock을 만든 버전과 맞춰요 (예전 uv는 새 lock 형식을 --frozen으로 읽지 못할 수 있어요)
-COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.10@sha256:2bb3ebca0a796a155094a27773d290c4b074572e6107f171d88d086682fd2500 /uv /usr/local/bin/uv
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never PYTHONUNBUFFERED=1 TZ=Asia/Seoul
 
 WORKDIR /app

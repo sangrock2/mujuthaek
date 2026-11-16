@@ -82,7 +82,7 @@ class HostManifest(unittest.TestCase):
 
     def test_broker_runs_without_the_management_plugin(self):
         broker = service(self.source, 'rabbitmq')
-        self.assertIn('\n    image: rabbitmq:4.1\n', broker)
+        self.assertRegex(broker, r'\n    image: rabbitmq:4\.1@sha256:[a-f0-9]{64}\n')
         self.assertNotIn('management', broker.split('image:')[1].splitlines()[0])
         self.assertNotIn('15672', self.source)
         # Every broker command the personal scripts run is a core CLI command.
