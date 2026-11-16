@@ -17,6 +17,11 @@ import {
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
 import { routes } from "@/shared/lib/routes";
+import {
+  logoutWithPushCleanup,
+  stopBrowserPushSubscription,
+  syncExistingPushSubscription,
+} from "@/shared/lib/push";
 
 /** GET /api/users/me (백엔드 MeResponse) */
 export type Session = {
@@ -108,7 +113,7 @@ export function useLogout() {
     setLogoutError(null);
     if (!USE_MOCKS) {
       try {
-        await endSession();
+        await logoutWithPushCleanup(endSession);
       } catch {
         setLogoutError("로그아웃을 완료하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.");
         return false;
@@ -142,6 +147,7 @@ export function SessionSync() {
   const { data: session } = useQuery({ ...sessionQuery, enabled: !free });
   const userId = session?.id;
   const needsTerms = session?.termsAgreed === false;
+  const sessionResolved = session !== undefined;
 
   useEffect(
     () =>
@@ -174,6 +180,20 @@ export function SessionSync() {
   useEffect(() => {
     if (userId) claimDeviceData(userId);
   }, [userId]);
+
+  useEffect(() => {
+    if (USE_MOCKS || !sessionResolved) return;
+    let current = true;
+    const update =
+      userId && !needsTerms
+        ? syncExistingPushSubscription(() => current)
+        : stopBrowserPushSubscription(() => current);
+    // 알림 설정 화면은 usePush가 동기화 실패를 안내해요. 여기서는 화면 전체의 로그인을 막지 않아요.
+    void update.catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [userId, needsTerms, sessionResolved]);
 
   useEffect(() => {
     if (needsTerms && !free) router.replace(routes.signup);

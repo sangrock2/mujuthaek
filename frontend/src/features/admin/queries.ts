@@ -475,7 +475,10 @@ export function useAdminUsers(query: string, filter: AdminUserFilter, page: numb
   });
 }
 
-/** 회원 ID → 이름 (처리 기록의 관리자 이름) */
+/**
+ * 회원 ID → 이름 (처리 기록의 관리자 이름). 이름 조회 권한이 없으면(403) 다시 묻지 않고,
+ * 화면은 이름 대신 회원 ID 앞부분을 보여 줘요
+ */
 export function useAdminUserNames(ids: string[]) {
   return useQuery({
     queryKey: ["admin", LIVE ? "live" : "mock", "user-names", ...ids],
@@ -483,6 +486,8 @@ export function useAdminUserNames(ids: string[]) {
       LIVE ? liveUserNames(ids) : Promise.resolve(adminUsersMock.filter((u) => ids.includes(u.id))),
     enabled: ids.length > 0,
     staleTime: 5 * 60_000,
+    // 이름은 보조 정보라 실패(권한 없음 등)해도 다시 시도하지 않아요
+    retry: false,
   });
 }
 

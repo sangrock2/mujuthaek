@@ -8,11 +8,16 @@
 import csv
 from pathlib import Path
 
+from mujuthaek_platform.archives import check_zip_path
+
+MAX_XLSX_ENTRIES = 2048  # 시트 하나짜리 원천 엑셀은 항목이 수십 개예요
+
 
 def xlsx_to_csv(source: Path, target: Path) -> int:
     """첫 시트를 CSV로 쓰고, 머리줄을 뺀 레코드 수를 돌려줘요."""
     from openpyxl import load_workbook
 
+    check_zip_path(source, max_entries=MAX_XLSX_ENTRIES)  # openpyxl도 zipfile로 열어서 중앙 디렉터리를 먼저 확인해요(2026-11-16 보안 감사 4장)
     workbook = load_workbook(source, read_only=True, data_only=True)
     try:
         rows = 0

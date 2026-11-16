@@ -10,6 +10,7 @@ import {
   ConditionTags,
   ConfirmCondButton,
   InterestChips,
+  RegionShareOption,
   SetupProgress,
   setupCard,
 } from "@/features/auth/components/WelcomeParts";
@@ -73,6 +74,7 @@ export function WebWelcome() {
             </span>
           </span>
           <InterestChips setup={setup} chipClassName="px-[18px]" />
+          <RegionShareOption setup={setup} />
         </section>
 
         <section

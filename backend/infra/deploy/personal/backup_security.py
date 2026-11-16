@@ -1,13 +1,12 @@
 """Prepare a backup-only identity, then restrict app storage only after verified host cutover."""
 import argparse
-import csv
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 
 from aws_personal import AWS, RUNTIME
+from private_files import create_private_file
 
 BACKUP_USER = 'mujuthaek-personal-backup'
 PRIVATE = RUNTIME / '.env.backup-isolated'
@@ -39,13 +38,8 @@ def app_policy(bucket):
 
 
 def private_file(path):
-    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    descriptor = create_private_file(path)
     os.close(descriptor)
-    if os.name == 'nt':
-        response = subprocess.run(['whoami', '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, check=True)
-        sid = next(csv.reader(response.stdout.strip().splitlines()))[1]
-        subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', f'*{sid}:(F)'],
-                       check=True, capture_output=True)
 
 
 def values(path):

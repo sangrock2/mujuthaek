@@ -73,3 +73,37 @@ def test_regular_hwpx_still_extracts_text():
     value, status = text.extract_text(payload, "hwpx")
     assert "주거 공고문" in value
     assert status == "HWPX 텍스트·표"
+
+
+def test_hwpx_xml_parser_keeps_paragraphs_and_table_cells():
+    source = "<hp:p>" + "공고 안내 " * 40 + "</hp:p><hp:tbl><hp:tr><hp:tc><hp:p>보증금</hp:p></hp:tc><hp:tc>100원</hp:tc></hp:tr></hp:tbl>"
+    value, _ = text.extract_text(hwpx([("Contents/section0.xml", source)]), "hwpx")
+    assert "[표]\n보증금 | 100원" in value
+
+
+def test_hwpx_malformed_xml_is_rejected_without_tag_regex():
+    value, status = text.extract_text(hwpx([("Contents/section0.xml", "<" * 256)]), "hwpx")
+    assert value is None and "ParseError" in status
+
+
+def test_hwpx_xml_structure_budget_precedes_expansion(monkeypatch):
+    monkeypatch.setattr(text, "MAX_XML_NODES", 3)
+    value, status = text.extract_text(hwpx([("Contents/section0.xml", "<hp:p><hp:t>a</hp:t><hp:t>b</hp:t></hp:p>")]), "hwpx")
+    assert value is None and "ValueError" in status
+
+
+def test_hwpx_does_not_accept_dtd_entities():
+    source = '<!DOCTYPE root [<!ENTITY private "synthetic">]><root>&private;</root>'
+    assert text.extract_text(hwpx([("Contents/section0.xml", source)]), "hwpx")[0] is None
+
+
+def test_entry_count_is_checked_before_zipfile_reads_the_directory(monkeypatch):
+    """항목 수는 ZipFile이 중앙 디렉터리를 통째로 읽기 전에 끝 레코드로 확인해요(2026-11-16 보안 감사 4장)."""
+    monkeypatch.setattr(text, "MAX_HWPX_ENTRIES", 2)
+    payload = hwpx([(f"Contents/section{n}.xml", "") for n in range(3)])
+
+    def no_zipfile(*args, **kwargs):
+        raise AssertionError("ZipFile을 만들면 안 돼요")
+
+    monkeypatch.setattr(text.zipfile, "ZipFile", no_zipfile)
+    assert text.extract_text(payload, "hwpx") == (None, "HWPX 읽기 실패 (ArchiveRejected)")

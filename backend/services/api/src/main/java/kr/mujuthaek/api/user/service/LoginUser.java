@@ -2,6 +2,7 @@ package kr.mujuthaek.api.user.service;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -19,10 +20,15 @@ import org.springframework.security.oauth2.core.user.OAuth2User;
  * @param nickname 없을 수 있어요
  * @param role USER, ADMIN 또는 SUPER_ADMIN (토큰을 받을 때의 값. 관리자 화면 권한은 요청마다 DB로 다시 확인해요)
  */
-public record LoginUser(UUID userId, String nickname, String role)
+public record LoginUser(UUID userId, String nickname, String role, Instant authenticatedAt)
     implements OAuth2User, Serializable {
 
   @Serial private static final long serialVersionUID = 1L;
+
+  /** 소셜 로그인 도중 또는 기존 호출자용. 민감 동작은 검증된 JWT의 인증 시각이 필요해요. */
+  public LoginUser(UUID userId, String nickname, String role) {
+    this(userId, nickname, role, null);
+  }
 
   public boolean isAdmin() {
     return Role.valueOf(role).isAdmin();

@@ -39,4 +39,16 @@ class BearerTokenResolverTest {
     refresh.addHeader("Authorization", "Bearer old");
     assertThat(SecurityConfig.bearerTokenResolver().resolve(refresh)).isNull();
   }
+
+  @Test
+  void actuatorBearerIsTheMetricsTokenNotAMemberToken() {
+    // 지표 토큰(Bearer)을 JWT로 검증하면 401이라 actuator는 회원 토큰을 읽지 않아요(2026-11-16 보안 감사 4장)
+    var metrics = new MockHttpServletRequest("GET", "/actuator/prometheus");
+    metrics.addHeader("Authorization", "Bearer scrape");
+    assertThat(SecurityConfig.bearerTokenResolver().resolve(metrics)).isNull();
+
+    var api = new MockHttpServletRequest("GET", "/api/users/me");
+    api.addHeader("Authorization", "Bearer abc");
+    assertThat(SecurityConfig.bearerTokenResolver().resolve(api)).isEqualTo("abc");
+  }
 }

@@ -70,14 +70,13 @@ public interface UserApiSpec {
       description =
           "선택 항목이에요(가입 마무리 화면·마이페이지). 약관·개인정보처리방침 변경, 이용 제한, 계정 안내처럼 꼭 알려야 할 때만 쓰고 알림 메일·광고는 보내지"
               + " 않아요. 인증 코드는 받지 않아요. 화면이 보여 준 동의 문구 버전(consentVersion, 예: email-v1)을 같이 보내요. 같은"
-              + " 주소로 다시 보내도 동의 버전·시각을 새로 남겨요. 저장한 주소는 GET /api/users/me의 email로 확인해요.")
+              + " 주소로 다시 보내도 동의 버전·시각을 새로 남겨요. 소유권을 인증한 주소가 아니므로 로그인·계정 복구에 쓰지 않고 다른 회원의 등록 여부도 알려주지 않아요. 저장한 주소는 GET /api/users/me의 email로 확인해요.")
   @ApiResponse(responseCode = "204", description = "저장했어요")
   @ApiResponse(
       responseCode = "400",
       description =
           "VALIDATION_FAILED — email이 비었거나 이메일 형식이 아니거나 254자를 넘어요. "
               + "consentVersion이 비었거나 영문·숫자·점·하이픈 20자를 벗어나요")
-  @ApiResponse(responseCode = "409", description = "EMAIL_ALREADY_USED — 다른 회원이 쓰는 주소예요 (대소문자 무시)")
   ResponseEntity<Void> changeEmail(
       @Parameter(hidden = true) LoginUser user, ContactEmailRequest request);
 

@@ -61,4 +61,14 @@ public class EmailDeliveryController
   public void unsubscribe(@RequestBody Token body) {
     emails.unsubscribe(body.token());
   }
+
+  /**
+   * 메일 앱의 「수신 거부」 버튼(RFC 8058 {@code List-Unsubscribe-Post}). 메일 앱은 머리글의 주소에 {@code
+   * List-Unsubscribe=One-Click} 폼을 POST할 뿐이라 서명된 토큰을 주소에 실어요. 위 링크 해제와 같은 검사를 해요(2026-11-16 보안 감사
+   * 4장).
+   */
+  @PostMapping("/api/email-notifications/unsubscribe/one-click")
+  public void unsubscribeOneClick(@RequestParam("token") String token) {
+    emails.unsubscribe(token);
+  }
 }

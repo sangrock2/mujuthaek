@@ -81,6 +81,9 @@ class PushSubscriptionServiceTest {
         "https://evilpush.apple.com/a", // 하위 도메인이 아니라 이름만 비슷함
         "https://push.apple.com.evil.com/a",
         "https://fcm.googleapis.com:8443/a",
+        "https://fcm.googleapis.com:/a", // 포트 칸만 비었음 (2026-11-16 보안 감사 4장: VAPID aud가 어긋나요)
+        "https://fcm.googleapis.com",
+        "https://fcm.googleapis.com/a#b",
         "https://user@fcm.googleapis.com/a",
         "http://fcm.googleapis.com/a",
         "https://localhost/a",

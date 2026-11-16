@@ -5,13 +5,19 @@ import json
 import os
 import re
 import subprocess
+import tarfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 BASE = Path('/opt/mujuthaek-source/backend/infra/deploy/personal')
 SERVICES = ('api', 'notification')
+# Used with --pull never everywhere, so a registry tag change can never swap the CLI that holds host credentials.
+# To pin by digest, read it on the host (docker image inspect --format '{{index .RepoDigests 0}}' <this tag>) and
+# replace the value with 'amazon/aws-cli:2.36.28@sha256:<digest>'. No digest is recorded in this repository yet.
 AWS_IMAGE = 'amazon/aws-cli:2.36.28'
+# Files the release manifest fingerprints (.github/scripts/backend_release.py HOST_FILES); differences are reported.
+HOST_FILES = ('compose.prod.yml', 'nginx/default.conf', 'nginx/acme.conf')
 READINESS_SECONDS = 600
 # Dead-letter queues that hold personal data (notification recipients' emails and push keys, expired push
 # subscriptions) get a 7-day age and size cap, without redeclaring queues (changed x-arguments fail with
@@ -26,6 +32,63 @@ def dlq_retention_command():
     name, pattern, definition = DLQ_RETENTION
     return ('exec', '-T', 'rabbitmq', 'rabbitmqctl', 'set_operator_policy', '--priority', '0', '--apply-to', 'queues',
             name, pattern, json.dumps(definition, separators=(',', ':')))
+
+
+def image_name(tag):
+    # The containerd image store spells Docker Hub library names out in full; compare the short form.
+    return tag.strip().removeprefix('docker.io/library/')
+
+
+def archive_tags(path):
+    """Repository tags inside a `docker save` archive, read before `docker load` can apply any of them."""
+    try:
+        with tarfile.open(path, 'r|*') as archive:
+            for member in archive:
+                if member.name.removeprefix('./') == 'manifest.json' and member.isfile() and member.size <= 1024 * 1024:
+                    entries = json.loads(archive.extractfile(member).read())
+                    return sorted(image_name(tag) for entry in entries for tag in (entry.get('RepoTags') or []))
+    except (tarfile.TarError, OSError, ValueError, AttributeError, TypeError):
+        raise ValueError('Image archive is unreadable') from None
+    raise ValueError('Image archive has no manifest')
+
+
+def require_tags(path, expected):
+    # A checksum proves which archive was published, not what it retags: a loaded `nginx:...` or `amazon/aws-cli:...`
+    # tag would silently replace an image other containers run.
+    if archive_tags(path) != sorted(expected):
+        raise ValueError('Image archive tags differ from the release')
+
+
+def loaded_tags(output):
+    return sorted(image_name(line.split(':', 1)[1]) for line in output.splitlines() if line.startswith('Loaded image:'))
+
+
+def load_images(path, expected, timeout):
+    require_tags(path, expected)
+    result = subprocess.run(['docker', 'load', '-i', str(path)], check=True, capture_output=True, text=True, timeout=timeout)
+    if loaded_tags(result.stdout) != sorted(expected):
+        raise ValueError('Loaded image tags differ from the release')
+
+
+def normalized_digest(path):
+    return hashlib.sha256(Path(path).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+
+
+def config_drift(base, expected):
+    """Names of host files whose content differs from the release commit; empty when the manifest has no record."""
+    if not isinstance(expected, dict):
+        return []
+    drift = []
+    for name in HOST_FILES:
+        if name not in expected:
+            continue
+        try:
+            same = normalized_digest(Path(base) / name) == expected[name]
+        except OSError:
+            same = False
+        if not same:
+            drift.append(name)
+    return drift
 
 
 def release_id(value):
@@ -80,7 +143,7 @@ class Host:
             raise RuntimeError('Host release credentials must be root-owned and mode 600')
 
     def aws(self, *args):
-        return subprocess.run(['docker', 'run', '--rm', '--env-file', str(self.credentials),
+        return subprocess.run(['docker', 'run', '--rm', '--pull', 'never', '--env-file', str(self.credentials),
                                '--mount', f'type=bind,src={self.runtime},dst=/releases',
                                AWS_IMAGE, *args], check=True, capture_output=True, text=True, timeout=120)
 
@@ -233,7 +296,8 @@ class Host:
             digest = hashlib.file_digest(source, 'sha256').hexdigest()
         if digest != data['archive_sha256']:
             raise ValueError('Archive checksum mismatch')
-        subprocess.run(['docker', 'load', '-i', str(archive)], check=True, capture_output=True, timeout=300)
+        services = data.get('archive_services', list(SERVICES))
+        load_images(archive, [data['images'][service]['tag'] for service in services], timeout=300)
 
     def ensure_images(self, data, services):
         loaded = set()
@@ -286,6 +350,13 @@ class Host:
         state = {'protocol': 2, 'release': target, 'previous': old['release'], 'schema': self.schema(),
                  'commit': data.get('commit'), 'images': data['images'], 'changed_services': services,
                  'applied_at': int(time.time())}
+        # Releases ship images only; compose and nginx files change through a reviewed source install. Report local
+        # edits or a missed install without failing an otherwise healthy deployment.
+        drift = config_drift(BASE, data.get('host_files'))
+        if 'host_files' in data:
+            state['config_drift'] = drift
+        if drift:
+            print(json.dumps({'warning': 'host_config_drift', 'files': drift}), flush=True)
         (self.runtime / 'current.json').write_text(json.dumps(state))
         (self.runtime / 'state.json').write_text(json.dumps(state))
         self.progress('saving-release-state')

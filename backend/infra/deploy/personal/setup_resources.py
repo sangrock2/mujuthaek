@@ -5,14 +5,16 @@ from pathlib import Path
 from aws_personal import AWS, INSTANCE, RUNTIME, REGION, STATIC_IP_NAME
 from backup_security import APP_POLICY, app_policy
 from storage_security import BOUNDARY_POLICY, tls_policy, runtime_boundary
+from private_files import write_private_file
 
 # Runtime secrets a fresh host's .env gets. TRAFFIC_IP_SALT keeps stored IP hashes from being reversed with a public
 # default salt; EMAIL_UNSUBSCRIBE_KEY signs unsubscribe links apart from the service token (security audit L-1, L-15).
+# METRICS_TOKEN guards /actuator/prometheus on api and notification (security audit section 4).
 SECRETS = (
     "POSTGRES_PASSWORD", "API_DB_PASSWORD", "NOTIFICATION_DB_PASSWORD", "COLLECTOR_DB_PASSWORD",
     "EXTRACTION_DB_PASSWORD", "RABBITMQ_PASSWORD", "JWT_SECRET", "NOTIFICATION_INTERNAL_TOKEN",
     "COLLECTOR_ADMIN_TOKEN", "EXTRACTION_REVIEW_TOKEN", "TRAFFIC_INGEST_TOKEN", "TRAFFIC_IP_SALT",
-    "EMAIL_UNSUBSCRIBE_KEY",
+    "EMAIL_UNSUBSCRIBE_KEY", "METRICS_TOKEN",
 )
 
 
@@ -80,9 +82,7 @@ def main():
     values.update(AWS_ACCESS_KEY_ID=key["AccessKeyId"], AWS_SECRET_ACCESS_KEY=key["SecretAccessKey"],
                   AWS_REGION=REGION, S3_BUCKET=bucket, PUBLIC_ORIGIN=f'https://{ip["ipAddress"]}',
                   API_TLS_CERT_DIR="/opt/mujuthaek-source/backend/infra/deploy/personal/tls")
-    with env_file.open("x", encoding="ascii", newline="\n") as output:
-        output.write("".join(f"{k}={v}\n" for k, v in values.items()))
-    env_file.chmod(0o600)
+    write_private_file(env_file, "".join(f"{k}={v}\n" for k, v in values.items()), encoding="ascii")
     (RUNTIME / "versions.env").write_text("RELEASE=20261113-1\n", encoding="ascii")
     print(json.dumps({"static_ip": ip["ipAddress"], "bucket": bucket, "runtime_user": username, "credentials": "saved locally; not printed"}))
 

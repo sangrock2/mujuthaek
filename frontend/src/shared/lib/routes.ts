@@ -1,3 +1,6 @@
+import { pathSegment } from "./api/path";
+import { safeAppPath } from "./safeUrl";
+
 // 디자인 파일(X.dc.html) → 라우트
 export const routes = {
   main: "/",
@@ -12,20 +15,20 @@ export const routes = {
   profile: "/profile",
   home: "/home",
   benefits: "/benefits",
-  benefit: (id: string) => `/benefits/${id}`,
+  benefit: (id: string) => `/benefits/${pathSegment(id)}`,
   homes: "/homes",
-  notice: (id: string) => `/notices/${id}`,
+  notice: (id: string) => `/notices/${pathSegment(id)}`,
   score: "/score",
   /** 대출 자격 확인 (정확한 소득·순자산을 이 화면에서만 넣어요) */
   loans: "/loans",
   alerts: "/alerts",
   me: "/me",
   preparations: "/me/preparations",
-  preparation: (id: string) => `/me/preparations/${encodeURIComponent(id)}`,
+  preparation: (id: string) => `/me/preparations/${pathSegment(id)}`,
   search: "/search",
   business: "/business",
   bizOnboarding: "/business/onboarding",
-  space: (id: string) => `/business/spaces/${id}`,
+  space: (id: string) => `/business/spaces/${pathSegment(id)}`,
   bizSupport: "/business/support",
   announcements: "/announcements",
   faq: "/faq",
@@ -51,10 +54,7 @@ export type Mode = "home" | "business";
 /** 조건 입력 뒤 돌아갈 곳을 붙인 조건 입력 주소 (예: /homes에서 「조건 수정」) */
 export const profileThen = (next: string) => `${routes.profile}?next=${encodeURIComponent(next)}`;
 
-/** 돌아갈 곳으로 쓸 수 있는 앱 안 경로만 (「/」로 시작, 「//」·「/\\」·외부 주소는 버려요) */
+/** URL 파서가 탭·줄바꿈을 제거한 뒤 외부 주소가 되지 않게 공통 앱 경로 검증을 써요. */
 export function safeNext(value: string | null | undefined): string | null {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) {
-    return null;
-  }
-  return value;
+  return safeAppPath(value);
 }

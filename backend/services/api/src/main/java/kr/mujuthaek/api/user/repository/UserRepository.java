@@ -27,12 +27,4 @@ public interface UserRepository extends JpaRepository<User, UUID> {
           "select exists (select 1 from account.users where id = :userId and terms_agreed_at is not null)",
       nativeQuery = true)
   boolean termsAgreed(UUID userId);
-
-  /** 다른 회원이 이 연락용 이메일을 쓰고 있나 (대소문자 무시, 유니크 인덱스 users_email_uk와 같은 기준) */
-  @Query(
-      value =
-          "select exists (select 1 from account.users"
-              + " where lower(email) = lower(:email) and id <> :userId)",
-      nativeQuery = true)
-  boolean emailUsedByOther(String email, UUID userId);
 }

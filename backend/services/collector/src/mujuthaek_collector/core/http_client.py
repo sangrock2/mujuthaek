@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 import ssl
 import time
 import urllib.parse
@@ -38,6 +39,7 @@ MAX_ROBOTS_BYTES = MAX_ROBOTS_CHARS  # robots.txt는 RFC 9309가 요구하는 �
 # 그 출처의 회차를 끝없이 붙잡았어요(2026-11-16 보안 감사 M-7)
 PAGE_SECONDS = 120.0
 FILE_SECONDS = 600.0
+HOST_NAME = re.compile(r"(?:[a-z0-9-]{1,63}\.)+[a-z]{2,63}")  # legacy TLS를 허용할 정확한 호스트 이름
 ROBOTS_SECONDS = 60.0
 
 
@@ -159,12 +161,39 @@ def looks_like_waiting_room(html: str) -> bool:
     return visible < 1500
 
 
+def redirect_referer(previous: str, target: str) -> str | None:
+    """주소 이동 뒤 보낼 Referer. 쿼리(공공데이터 serviceKey 등)·조각은 빼고, 다른 호스트로 가면 출처(scheme://host/)만,
+    https에서 http로 내려가면 보내지 않아요. 예전에는 이전 주소를 통째로 보내 API 키가 이동한 호스트에 새었어요(2026-11-16 보안 감사 5장)."""
+    before, after = urllib.parse.urlsplit(previous), urllib.parse.urlsplit(target)
+    if before.scheme == "https" and after.scheme != "https":
+        return None
+    if (before.scheme, before.netloc) != (after.scheme, after.netloc):
+        return f"{before.scheme}://{before.netloc}/"
+    return urllib.parse.urlunsplit((before.scheme, before.netloc, before.path or "/", "", ""))
+
+
+def legacy_tls_context() -> ssl.SSLContext:
+    """예전 보안 연결만 받는 기관용 연결 설정. 인증서 확인(CERT_REQUIRED)·호스트 이름 확인은 켜 둔 채 예전 암호 방식만 더 허용해요."""
+    context = ssl.create_default_context()
+    context.set_ciphers("DEFAULT:@SECLEVEL=1")
+    context.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+    return context
+
+
+def legacy_hosts(hosts: tuple[str, ...]) -> tuple[str, ...]:
+    """낮춘 연결 설정을 쓸 호스트 이름. 와일드카드·포트·경로 없이 정확한 이름만 받아요."""
+    for host in hosts:
+        if not isinstance(host, str) or not HOST_NAME.fullmatch(host):
+            raise ValueError(f"legacy TLS 호스트는 소문자 도메인 이름이어야 해요: {host!r}")
+    return tuple(hosts)
+
+
 class PoliteClient:
     def __init__(
         self,
         *,
         delay_seconds: float = 4.0,
-        legacy_tls: bool = False,
+        legacy_tls_hosts: tuple[str, ...] = (),
         timeout: float = 20.0,
         max_file_bytes: int = 30 * 1024 * 1024,
         max_page_bytes: int = 20 * 1024 * 1024,
@@ -174,19 +203,16 @@ class PoliteClient:
         transport: httpx.BaseTransport | None = None,
         sleep=time.sleep,
     ):
-        verify: ssl.SSLContext | bool = True
-        if legacy_tls:  # 예전 보안 연결만 받는 기관용. 인증서 확인은 유지하고 예전 암호 방식만 추가로 허용
-            context = ssl.create_default_context()
-            context.set_ciphers("DEFAULT:@SECLEVEL=1")
-            context.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
-            verify = context
+        # 예전 보안 연결만 받는 기관의 호스트에만 예전 암호 방식(SECLEVEL=1)을 허용해요. 인증서·호스트 이름 확인은 그대로예요.
+        # 예전에는 출처 단위로 켜서 그 출처가 이동·다운로드하는 다른 호스트까지 낮춘 설정을 썼어요(2026-11-16 보안 감사 4장)
+        mounts = {f"https://{host}": PublicHTTPTransport(legacy_tls_context()) for host in legacy_hosts(legacy_tls_hosts)}
         self._client = httpx.Client(
             # 직접 풀 수 있는 압축만 청해요(설치된 확장에 따라 br·zstd가 붙지 않게)
             headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
             timeout=timeout,
-            verify=verify,
             follow_redirects=False,  # 이동하는 주소마다 robots.txt를 확인하려고 직접 따라감
-            transport=transport if transport is not None else PublicHTTPTransport(verify if isinstance(verify, ssl.SSLContext) else None),
+            transport=transport if transport is not None else PublicHTTPTransport(),
+            mounts=mounts if transport is None else None,
             trust_env=False,  # 환경 proxy가 목적지 DNS/IP 검사를 우회하지 못하게 해요
         )
         self._user_agent = user_agent
@@ -320,7 +346,7 @@ class PoliteClient:
                 response.close()
                 if response.status_code in (301, 302, 303):
                     method, data = "GET", None
-                referer, url = url, location
+                referer, url = redirect_referer(url, location), location
                 continue
             return response
         raise BlockedError(f"주소 이동이 너무 많아요: {url}")

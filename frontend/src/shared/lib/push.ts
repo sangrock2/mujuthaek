@@ -2,6 +2,26 @@ import { api } from "@/shared/lib/api/client";
 import { endpoints } from "@/shared/lib/api/endpoints";
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
+let pendingPush: Promise<void> = Promise.resolve();
+
+/** 등록·해제·로그아웃을 같은 브라우저에서 직렬화해 해제 직후 지연된 PUT이 되살리지 못하게 해요. */
+function withPushLock<T>(run: () => Promise<T>): Promise<T> {
+  const result = pendingPush.then(async (): Promise<T> => {
+    if (typeof navigator !== "undefined" && navigator.locks) {
+      return await navigator.locks.request(
+        "mujuthaek-push-subscription",
+        { signal: AbortSignal.timeout(20000) },
+        run,
+      );
+    }
+    return run();
+  });
+  pendingPush = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -17,12 +37,60 @@ function sameKey(a: ArrayBuffer | null, b: Uint8Array) {
 }
 
 export function isPushSupported() {
-  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  return (
+    typeof navigator !== "undefined" &&
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window
+  );
 }
 
 export async function getPushSubscription() {
-  const registration = await navigator.serviceWorker.ready;
-  return registration.pushManager.getSubscription();
+  if (!isPushSupported()) return null;
+  // ready는 등록에 실패한 브라우저에서 끝나지 않아요. 로그아웃은 현재 등록이 없으면 바로 계속해요.
+  const registration = await navigator.serviceWorker.getRegistration();
+  return registration?.pushManager.getSubscription() ?? null;
+}
+
+async function registerSubscription(subscription: PushSubscription) {
+  await api.put(
+    endpoints.pushSubscriptions,
+    {
+      ...subscription.toJSON(),
+      userAgent: navigator.userAgent,
+    },
+    { signal: AbortSignal.timeout(10000) },
+  );
+}
+
+async function removeBrowserSubscription(subscription: PushSubscription) {
+  if (!(await subscription.unsubscribe()) && (await getPushSubscription())) {
+    throw new Error("이 브라우저의 알림을 끄지 못했어요. 다시 시도해 주세요.");
+  }
+}
+
+/** 로그인·계정 변경 때 기존 구독을 현재 계정에 맞춰요. 실패하면 이전 계정 알림이 남지 않게 브라우저 구독도 꺼요. */
+export function syncExistingPushSubscription(isCurrent: () => boolean = () => true) {
+  return withPushLock(async () => {
+    const subscription = await getPushSubscription();
+    if (!subscription || !isCurrent()) return false;
+    try {
+      await registerSubscription(subscription);
+      return isCurrent();
+    } catch (error) {
+      await removeBrowserSubscription(subscription);
+      throw error;
+    }
+  });
+}
+
+/** 로그인하지 않았거나 약관 동의 전인 계정에는 이전 사람의 브라우저 알림을 남기지 않아요. */
+export function stopBrowserPushSubscription(isCurrent: () => boolean = () => true) {
+  return withPushLock(async () => {
+    const subscription = await getPushSubscription();
+    if (subscription && isCurrent()) await removeBrowserSubscription(subscription);
+  });
 }
 
 /** 공개키: 설정 값이 있으면 그것, 없으면 백엔드에서 받아요 (백엔드에 키가 없으면 503) */
@@ -40,32 +108,48 @@ export async function subscribePush() {
       "브라우저에서 알림이 허용되지 않았어요. 주소창 왼쪽 자물쇠에서 알림을 허용해 주세요.",
     );
 
-  const key = await publicKey().catch(() => "");
-  if (!key) throw new Error("알림 서버 설정(공개키)을 받지 못했어요. 잠시 뒤 다시 해 주세요.");
-
-  const registration = await navigator.serviceWorker.ready;
-  // 예전에 다른 키로 받은 구독이 남아 있으면 새 키로 받을 수 없어서 먼저 풀어요
-  const old = await registration.pushManager.getSubscription();
-  if (old && !sameKey(old.options.applicationServerKey, urlBase64ToUint8Array(key))) {
-    await old.unsubscribe();
-  }
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(key),
+  return withPushLock(async () => {
+    const key = await publicKey().catch(() => "");
+    if (!key) throw new Error("알림 서버 설정(공개키)을 받지 못했어요. 잠시 뒤 다시 해 주세요.");
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration)
+      throw new Error("알림 준비를 마치지 못했어요. 화면을 새로 열고 다시 시도해 주세요.");
+    const old = await registration.pushManager.getSubscription();
+    if (old && !sameKey(old.options.applicationServerKey, urlBase64ToUint8Array(key))) {
+      await removeBrowserSubscription(old);
+    }
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+    try {
+      await registerSubscription(subscription);
+    } catch (error) {
+      await removeBrowserSubscription(subscription);
+      throw error;
+    }
+    return subscription;
   });
-  // 기기 목록에 보여 줄 이름으로 브라우저 정보를 함께 보내요 (백엔드가 200자로 잘라요)
-  await api.put(endpoints.pushSubscriptions, {
-    ...subscription.toJSON(),
-    userAgent: navigator.userAgent,
-  });
-  return subscription;
 }
 
-export async function unsubscribePush() {
+async function unsubscribeCurrentPush() {
   const subscription = await getPushSubscription();
   if (!subscription) return;
   await api.delete(endpoints.pushSubscriptions, {
     body: { endpoint: subscription.endpoint },
+    signal: AbortSignal.timeout(10000),
   });
-  await subscription.unsubscribe();
+  await removeBrowserSubscription(subscription);
+}
+
+export function unsubscribePush() {
+  return withPushLock(unsubscribeCurrentPush);
+}
+
+/** 현재 기기만 해제한 뒤 세션을 끝내요. 해제 실패 때는 로그아웃 성공으로 표시하지 않아요. */
+export function logoutWithPushCleanup(logout: () => Promise<void>) {
+  return withPushLock(async () => {
+    await unsubscribeCurrentPush();
+    await logout();
+  });
 }

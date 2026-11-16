@@ -566,12 +566,18 @@ class ChatApiTest {
                 Integer.class,
                 mine))
         .isZero();
-    // 남는 답장의 좋아요·검토 전 신고 수는 그 회원 몫만큼 줄어요
+    // 좋아요는 지우고, 신고는 개인 정보 없이 검토 작업으로 남겨요
     var counts =
         jdbc.queryForMap(
             "select like_count, report_count from chat.messages where id = ?::uuid", replyId);
     assertThat(counts.get("like_count")).isEqualTo(0);
-    assertThat(counts.get("report_count")).isEqualTo(0);
+    assertThat(counts.get("report_count")).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from chat.message_reports where message_id = ?::uuid and reporter_id is null and detail is null",
+                Integer.class,
+                replyId))
+        .isEqualTo(1);
     // 다른 사람의 답장은 남고, 원문 자리는 지운 글처럼 보여요
     mvc.perform(get("/api/v1/notices/{id}/chat/messages", room))
         .andExpect(jsonPath("$.items.length()").value(1))
@@ -582,6 +588,32 @@ class ChatApiTest {
         .andExpect(jsonPath("$.items[0].parent.authorNickname").doesNotExist());
     // 보고 있던 사람 화면에서도 내려가요
     assertThat(body(stream)).contains("event:message.deleted").contains(mine);
+  }
+
+  @Test
+  void withdrawnReportersDoNotRemoveTheHiddenMessagesReviewQueue() throws Exception {
+    UUID room = UUID.randomUUID();
+    String id = send(room, member(), "검토가 필요한 글");
+    for (int i = 0; i < 3; i++) {
+      LoginUser reporter = member();
+      report(id, reporter, "ETC").andExpect(status().isCreated());
+      events.publishEvent(new UserWithdrawn(reporter.userId()));
+    }
+    messageAt(room).andExpect(jsonPath("$.items[0].status").value("HIDDEN_REPORTED"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from chat.message_reports where message_id = ?::uuid and reporter_id is null and detail is null and review_status = 'PENDING'",
+                Integer.class,
+                id))
+        .isEqualTo(3);
+    LoginUser admin = chatAdmin();
+    mvc.perform(
+            get("/api/admin/chat/reports")
+                .param("size", "100")
+                .header("Authorization", bearer(admin)))
+        .andExpect(jsonPath("$.items[?(@.messageId == '" + id + "')]").isNotEmpty());
+    review(id, admin, "RESTORE");
+    messageAt(room).andExpect(jsonPath("$.items[0].status").value("VISIBLE"));
   }
 
   @Test

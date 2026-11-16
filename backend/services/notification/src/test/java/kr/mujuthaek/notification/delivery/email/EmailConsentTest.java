@@ -50,5 +50,28 @@ class EmailConsentTest {
     channel.send(user, "a@example.com", List.of(notice));
     verify(sender)
         .send(argThat(message -> message.text().contains("/email/unsubscribe#token=signed-token")));
+    // 메일 앱의 「수신 거부」 버튼용 주소도 같이 실어요 (2026-11-16 보안 감사 4장)
+    verify(sender)
+        .send(
+            argThat(
+                message ->
+                    "https://example.com/api/email-notifications/unsubscribe/one-click?token=signed-token"
+                        .equals(message.oneClickUnsubscribeUrl())));
+  }
+
+  @Test
+  void oneClickLinkIsHttpsOnlyAndEncodesTheToken() {
+    assertThat(channel.oneClickUnsubscribeUrl("a b")).endsWith("?token=a+b");
+    assertThat(channel.oneClickUnsubscribeUrl("")).isNull();
+    var local =
+        new EmailChannel(
+            sender,
+            new MailProperties(
+                "ses",
+                "noreply@example.com",
+                "http://localhost:5173",
+                new MailProperties.Ses("ap-northeast-2", 1)),
+            consent);
+    assertThat(local.oneClickUnsubscribeUrl("signed-token")).isNull();
   }
 }

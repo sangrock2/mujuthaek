@@ -5,6 +5,7 @@ import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError, type Problem } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { pathSegment } from "@/shared/lib/api/path";
 
 export type PreparationStatus = "PREPARING" | "SUBMITTED" | "ARCHIVED";
 export type DocumentState = "TODO" | "DONE" | "NOT_APPLICABLE" | "CHECK_REQUIRED" | "RECHECK_REQUIRED";
@@ -142,7 +143,8 @@ export type Preparation = {
 type Page = { items: Preparation[]; nextCursor: string | null; hasNext: boolean };
 
 export const preparationsKey = ["preparations"] as const;
-export const preparationPath = (id: string) => `${endpoints.preparations}/${encodeURIComponent(id)}`;
+// 경로의 ID는 pathSegment로 넣어요 (「..」 거부, 2026-11-16 보안 감사 4장)
+export const preparationPath = (id: string) => `${endpoints.preparations}/${pathSegment(id)}`;
 
 export function preparationError(error: unknown) {
   if (error instanceof ApiError)
@@ -216,7 +218,7 @@ export function usePreparation(id: string) {
         });
 
       if (action.kind === "document")
-        return api.put<Preparation>(`${path}/documents/${encodeURIComponent(action.id)}`, {
+        return api.put<Preparation>(`${path}/documents/${pathSegment(action.id)}`, {
           ...body,
           state: action.state,
         });
@@ -231,7 +233,7 @@ export function usePreparation(id: string) {
         });
 
       if (action.kind === "task-update")
-        return api.put<Preparation>(`${path}/tasks/${encodeURIComponent(action.task.id)}`, {
+        return api.put<Preparation>(`${path}/tasks/${pathSegment(action.task.id)}`, {
           title: action.task.title,
           dueOn: action.task.dueOn,
           done: action.task.done,
@@ -239,7 +241,7 @@ export function usePreparation(id: string) {
         });
 
       if (action.kind === "task-delete")
-        return api.delete<Preparation>(`${path}/tasks/${encodeURIComponent(action.id)}?expectedRevision=${p.revision}`);
+        return api.delete<Preparation>(`${path}/tasks/${pathSegment(action.id)}?expectedRevision=${p.revision}`);
 
       return api.delete<Preparation | null>(path);
     },

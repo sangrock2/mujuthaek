@@ -5,6 +5,7 @@ S3 위치: raw/<출처>/<글 키>/v<버전>/<순번>-<파일명>
 기관 다운로드 주소·해시·추출한 글자는 DB에 계속 남아요.
 """
 
+import hashlib
 import re
 from datetime import date
 from pathlib import Path
@@ -65,10 +66,29 @@ class S3FileStore:
             raise
 
 
+UNSAFE_KEY_CHARS = re.compile(r"[^0-9A-Za-z가-힣._\-]+")
+DOT_RUNS = re.compile(r"[.]{2,}")
+KEY_EXTENSION = re.compile(r"\.[0-9A-Za-z]{1,5}$")
+DIGEST_CHARS = 12
+
+
 def safe_part(text: str, limit: int = 80) -> str:
-    """S3 키에 쓸 수 있게: 슬래시·공백·특수문자는 _로. 한글은 그대로 둬요."""
-    cleaned = re.sub(r"[^0-9A-Za-z가-힣._\-]+", "_", text).strip("_")
-    return cleaned[:limit] or "file"
+    """S3 키에 쓸 수 있게: 슬래시·공백·특수문자는 _로. 한글은 그대로 둬요.
+
+    정리하면서 글자를 바꾸거나 자르면 원래 값의 해시 12자리를 `~` 뒤에 붙여요(확장자는 끝에 그대로). 예전에는 `a/b`와 `a_b`,
+    앞 80자가 같은 글 키가 같은 S3 키가 되어 다른 글의 원본을 덮어쓸 수 있었어요(2026-11-16 보안 감사 4장).
+    정리할 것이 없는 값은 예전과 같은 키이고, `~`는 정리한 글자에 나오지 않아 두 모양이 겹치지 않아요.
+    이미 저장한 키는 DB(raw_files.s3_key)에 적힌 그대로 읽고 지우므로, 규칙이 바뀌어도 예전 키를 다시 계산하지 않아요.
+    """
+    # `..`는 경로 이동으로 읽힐 수 있고 api도 `..`가 든 키를 거절해서(NoticeFileStore.allowed) 점 하나로 줄여요
+    cleaned = DOT_RUNS.sub(".", UNSAFE_KEY_CHARS.sub("_", text)).strip("_")
+    if text and cleaned == text and len(text) <= limit and text != ".":  # `.`만인 조각도 경로로 읽혀서 해시를 붙여요
+        return text
+    digest = "~" + hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()[:DIGEST_CHARS]
+    found = KEY_EXTENSION.search(cleaned)
+    extension = found.group(0) if found else ""
+    stem = cleaned[: len(cleaned) - len(extension)]
+    return (stem[: limit - len(digest) - len(extension)] or "file") + digest + extension
 
 
 def object_key(source_code: str, post_key: str, version: int, idx: int, name: str) -> str:

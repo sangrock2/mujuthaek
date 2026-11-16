@@ -8,7 +8,7 @@ import {
   refreshAccessToken,
 } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
-import { apiPath, isUuid } from "@/shared/lib/api/path";
+import { apiPath, isUuid, pathSegment } from "@/shared/lib/api/path";
 
 export type TraceToolCall = { name: string | null; args: string | null };
 export type TraceToolResult = { name: string | null; result: string | null; failed: boolean };
@@ -129,18 +129,34 @@ export function splitRefs(text: string, refs: Record<string, TraceRef> | undefin
 /** 관리자 원문 PDF 주소 (GET /api/admin/reviews/{jobId}/files/{fileId}). 목업이면 그 파일 ID의 시연용 예시 PDF (public/mock) */
 export function tracePdfUrl(jobId: string | null, fileId: string) {
   return USE_MOCKS || !jobId
-    ? `/mock/${encodeURIComponent(fileId)}.pdf`
-    : `${API_BASE_URL}/api/admin/reviews/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}`;
+    ? `/mock/${pathSegment(fileId)}.pdf`
+    : `${API_BASE_URL}${apiPath`/api/admin/reviews/${jobId}/files/${fileId}`}`;
 }
 
 /** 로그인이 필요한 관리자 원문 PDF를 받아요 (토큰이 끝났으면 한 번 다시 받아서) */
 export async function fetchAdminPdf(src: string): Promise<ArrayBuffer> {
+  const base = API_BASE_URL || window.location.origin;
+  const url = new URL(src, base);
+  const reviewFile = /^\/api\/admin\/reviews\/[^/]+\/files\/[^/]+$/.test(url.pathname);
+  const demoFile = USE_MOCKS && /^\/mock\/[^/]+\.pdf$/.test(url.pathname);
+  if (
+    url.origin !== new URL(base).origin ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (!reviewFile && !demoFile)
+  ) {
+    throw new Error("검수 원문 주소를 확인하지 못했어요.");
+  }
   const send = () =>
-    fetch(src, {
+    fetch(url.href, {
       headers: {
         ...(authToken.get() && { Authorization: `Bearer ${authToken.get()}` }),
       },
       credentials: "include",
+      // 검수 원문은 서버가 private 캐시를 허용해도 브라우저 캐시에 남기지 않아요 (공용 PC, 2026-11-16 보안 감사 4장)
+      cache: "no-store",
     });
   let res = await send();
   if (res.status === 401 && (await refreshAccessToken())) res = await send();

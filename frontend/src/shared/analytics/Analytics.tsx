@@ -14,6 +14,17 @@ import {
   type Consent,
 } from "@/shared/lib/analytics";
 import { routes } from "@/shared/lib/routes";
+import { cn } from "@/shared/lib/cn";
+import { Toggle } from "@/shared/ui/Toggle";
+
+/** 이 브라우저의 동의 상태. 서버와 첫 렌더는 「모름」이에요(동의 여부는 이 브라우저에만 있어요) */
+function useConsent() {
+  return useSyncExternalStore<Consent | "unknown">(
+    (listener) => onConsentChange(() => listener()),
+    readConsent,
+    () => "unknown",
+  );
+}
 
 /**
  * GA 스크립트와 동의 배너. 측정 ID가 없으면(로컬·목업) 아무것도 그리지 않아요.
@@ -21,12 +32,7 @@ import { routes } from "@/shared/lib/routes";
  */
 export function Analytics() {
   const pathname = usePathname();
-  // 서버와 첫 렌더는 「모름」이라 아무것도 그리지 않아요(동의 여부는 이 브라우저에만 있어요)
-  const consent = useSyncExternalStore<Consent | "unknown">(
-    (listener) => onConsentChange(() => listener()),
-    readConsent,
-    () => "unknown",
-  );
+  const consent = useConsent();
 
   if (!GA_ID || consent === "unknown" || pathname?.startsWith("/admin")) return null;
   if (consent === null) return <ConsentBanner />;
@@ -55,7 +61,7 @@ function ConsentBanner() {
         <p className="m-0 text-[14px] leading-[1.6]">
           서비스를 고치는 데 쓰려고 방문 통계(Google Analytics)를 모아도 될까요? 본 화면, 들어온
           경로, 기기 종류, 원문 보기 같은 이용 행동을 모으고, 입력한 소득·자산 같은 조건 값은 보내지
-          않아요.{" "}
+          않아요. 고른 뒤에도 내 정보 → 개인정보 설정에서 언제든 바꿀 수 있어요.{" "}
           <Link href={routes.privacy} className="text-text-sub underline">
             개인정보 처리방침
           </Link>
@@ -77,6 +83,34 @@ function ConsentBanner() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 방문 통계 동의를 나중에 바꾸거나 철회하는 곳 (내 정보 → 개인정보 설정, 2026-11-16 보안 감사 4장).
+ * 끄면 GA를 바로 멈추고 GA 쿠키를 지워요. 측정 ID가 없으면(GA를 쓰지 않으면) 그리지 않아요
+ */
+export function AnalyticsConsentSetting({ className }: { className?: string }) {
+  const consent = useConsent();
+  if (!GA_ID || consent === "unknown") return null;
+  const note =
+    consent === "granted"
+      ? "허용했어요. 끄면 바로 멈추고 이 브라우저의 GA 쿠키를 지워요"
+      : consent === "denied"
+        ? "모으지 않아요"
+        : "아직 고르지 않았어요 (고르기 전에는 모으지 않아요)";
+  return (
+    <div className={cn("flex items-center justify-between gap-[16px]", className)}>
+      <span className="flex flex-col gap-[2px]">
+        <span className="text-[16px] font-semibold">방문 통계(Google Analytics)</span>
+        <span className="text-text-sub text-[13px] leading-[1.6]">{note}</span>
+      </span>
+      <Toggle
+        checked={consent === "granted"}
+        onChange={(on) => writeConsent(on ? "granted" : "denied")}
+        label="방문 통계 허용"
+      />
     </div>
   );
 }

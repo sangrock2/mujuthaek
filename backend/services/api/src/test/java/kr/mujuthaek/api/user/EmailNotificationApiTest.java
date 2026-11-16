@@ -143,6 +143,45 @@ class EmailNotificationApiTest {
     mvc.perform(as(user, get(PATH))).andExpect(jsonPath("$.enabled").value(false));
   }
 
+  /** 메일 앱의 「수신 거부」 버튼(RFC 8058): 로그인 없이 폼 POST로 끄고, 서명이 틀리면 400 (2026-11-16 보안 감사 4장). */
+  @Test
+  void oneClickUnsubscribeFromTheMailHeaderWorksWithoutLogin() throws Exception {
+    LoginUser user = login();
+    String token = request(user);
+    mvc.perform(as(user, post(PATH + "/verify")).content(token(token))).andExpect(status().isOk());
+    mvc.perform(as(user, put(PATH)).content(settings(true, true))).andExpect(status().isOk());
+    String body =
+        mvc.perform(
+                post("/internal/email-eligibility")
+                    .header("X-Notification-Token", "test-email-private-token")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        "{\"userId\":\""
+                            + user.userId()
+                            + "\",\"email\":\"verified@example.com\",\"type\":\"NEW_NOTICE\"}"))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String unsubscribe = body.replaceAll(".*\"unsubscribeToken\":\"([^\"]+)\".*", "$1");
+    String tampered =
+        unsubscribe.substring(0, unsubscribe.length() - 1)
+            + (unsubscribe.endsWith("0") ? "1" : "0");
+
+    mvc.perform(
+            post("/api/email-notifications/unsubscribe/one-click")
+                .param("token", tampered)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .content("List-Unsubscribe=One-Click"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post("/api/email-notifications/unsubscribe/one-click?token=" + unsubscribe)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .content("List-Unsubscribe=One-Click"))
+        .andExpect(status().isOk());
+    mvc.perform(as(user, get(PATH))).andExpect(jsonPath("$.enabled").value(false));
+  }
+
   private String request(LoginUser user) throws Exception {
     mvc.perform(
             as(user, post(PATH + "/request"))

@@ -12,6 +12,29 @@ BUCKET = 'mujuthaek-personal-659355919826-raw'
 # The only deployment keys CI may replace. Everything else is create-only, which the deploy role's IAM policy also
 # enforces (setup_github_release.py, security audit L-17).
 MUTABLE = ('desired.json', 'releases/current.json')
+# Host files that only change through a reviewed source install. The manifest records their digests at the release
+# commit so the host can report local edits (configuration drift) after each deployment.
+PERSONAL = Path(__file__).resolve().parents[2] / 'backend/infra/deploy/personal'
+HOST_FILES = ('compose.prod.yml', 'nginx/default.conf', 'nginx/acme.conf')
+# Characters that would let a host-written string start a new log line, and so a GitHub workflow command.
+LINE_BREAKS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]+')
+
+
+def log_safe(value, limit=200):
+    """Host-written text for the public CI log: one line, no workflow command markers, bounded length."""
+    text = LINE_BREAKS.sub(' ', str(value))[:limit]
+    while '::' in text:
+        text = text.replace('::', ': :')
+    return text
+
+
+def file_digest(path):
+    # Line endings depend on the machine that packaged the source; the content is what matters.
+    return hashlib.sha256(Path(path).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+
+
+def host_file_digests(base=PERSONAL):
+    return {name: file_digest(Path(base) / name) for name in HOST_FILES}
 
 
 def aws(*args, capture=True):
@@ -59,7 +82,8 @@ def publish(release, commit, base=None, services=None, frontend=None):
             digest = hashlib.file_digest(source, 'sha256').hexdigest()
     data = {'format': 2, 'release': release, 'commit': commit, 'images': images,
             'archive_sha256': digest, 'archive_services': services,
-            'base_release': base['release'] if base else None, 'frontend': frontend}
+            'base_release': base['release'] if base else None, 'frontend': frontend,
+            'host_files': host_file_digests()}
     Path('manifest.json').write_text(json.dumps(data))
     if services:
         put(f'releases/{release}/images.tar.gz', 'images.tar.gz', immutable=True)
@@ -104,7 +128,7 @@ def request(release, mode, request_id, expected_base=None):
         if result.get('status') == 'running':
             if result.get('release') != release:
                 raise RuntimeError('Deployment progress release mismatch')
-            phase = result.get('phase', 'working')
+            phase = log_safe(result.get('phase', 'working'), 64)
             now = time.monotonic()
             if phase != previous_phase or now - reported >= 30:
                 print(f'Host phase: {phase} ({int(now - started)}s elapsed)', flush=True)
@@ -112,8 +136,13 @@ def request(release, mode, request_id, expected_base=None):
             time.sleep(10)
             continue
         if result.get('request') != request_id or result.get('release') != release or not result.get('ok'):
-            raise RuntimeError(f'Deployment failed: {result.get("message", "check server journal")}')
+            raise RuntimeError(f'Deployment failed: {log_safe(result.get("message", "check server journal"))}')
+        # json.dumps escapes control characters, so the record stays on one line that starts with '{'.
         print(json.dumps(result))
+        drift = [name for name in HOST_FILES if name in (result.get('config_drift') or [])]
+        if drift:
+            print('Warning: host files differ from this release commit (edited on the server or not yet installed): '
+                  + ', '.join(drift), flush=True)
         return
     raise TimeoutError('Server did not acknowledge request; inspect status before retrying')
 

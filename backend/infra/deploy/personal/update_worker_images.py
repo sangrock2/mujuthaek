@@ -8,7 +8,7 @@ import subprocess
 import time
 
 from configure_collection import BASE, merge, private_file
-from release_host import Host
+from release_host import Host, load_images
 
 WORKERS = ('extraction', 'collector')
 
@@ -67,7 +67,8 @@ def update(host, release):
         with archive.open('rb') as stream:
             if hashlib.file_digest(stream, 'sha256').hexdigest() != checksum:
                 raise RuntimeError('Worker archive checksum mismatch')
-        subprocess.run(['docker', 'load', '-i', str(archive)], capture_output=True, check=True, timeout=600)
+        # The archive may carry only this commit's two worker tags; anything else is refused before loading.
+        load_images(archive, [f'mujuthaek-personal-{service}:{release}' for service in WORKERS], timeout=600)
     # This helper performs image-only updates. Schema changes need the dedicated migration path.
     for service in WORKERS:
         new_image = f'mujuthaek-personal-{service}:{release}'

@@ -245,6 +245,29 @@ for (const bad of [
 ])
   assert.equal(safeAppPath(bad), null, `앱 경로 거부: ${String(bad)}`);
 
+const { safeNext, routes } = require("../src/shared/lib/routes.ts");
+assert.equal(safeNext("/homes?region=11#results"), "/homes?region=11#results");
+for (const next of [
+  "/\t/attacker.invalid",
+  "/\n/attacker.invalid",
+  "/\r/attacker.invalid",
+  "//attacker.invalid",
+  "/\\attacker.invalid",
+  "https://attacker.invalid",
+  "/x\u0000",
+])
+  assert.equal(safeNext(next), null, "돌아갈 경로도 URL 정규화 전에 제어 문자를 거절");
+for (const encoded of [
+  "%2F%09%2Fattacker.invalid",
+  "%2F%0A%2Fattacker.invalid",
+  "%2F%0D%2Fattacker.invalid",
+])
+  assert.equal(safeNext(new URLSearchParams(`next=${encoded}`).get("next")), null);
+assert.equal(routes.notice("a/b?c"), "/notices/a%2Fb%3Fc");
+assert.equal(routes.benefit("a#b"), "/benefits/a%23b");
+assert.equal(routes.space("a/b"), "/business/spaces/a%2Fb");
+for (const id of [".", "..", ""]) assert.throws(() => routes.preparation(id));
+
 // ── API 경로 조립 (2026-11-16 보안 감사 L-6) ─────────────────────────────
 const { apiPath, isUuid, pathSegment } = require("../src/shared/lib/api/path.ts");
 const traversal = decodeURIComponent("..%2Fusers%3Fsize%3D1%26q%3D");
@@ -304,6 +327,55 @@ global.window = {
 };
 const local = window.localStorage;
 const tab = window.sessionStorage;
+
+// 주거·사업 정보의 삭제·저장 방식·보관 기간 경계는 함께 적용해요.
+const conditionStore = require("../src/features/conditions/store.ts");
+const bizProfile = require("../src/features/business/profile.ts");
+const retention = require("../src/shared/lib/deviceRetention.ts");
+local.removeItem("mujuthaek:save-on-device");
+conditionStore.saveConditions(empty, emptySession);
+bizProfile.saveBizProfile(
+  { ...bizProfile.emptyBizProfile, industry: "SOFTWARE" },
+  {
+    revenue: "1234",
+    restrictions: ["TAX_ARREARS"],
+  },
+);
+assert.equal(JSON.parse(local.getItem("mujuthaek:business:v1")).data.industry, "SOFTWARE");
+conditionStore.setSaveOnDevice(false);
+assert.equal(local.getItem("mujuthaek:business:v1"), null, "기기 저장을 끄면 사업 사본도 지움");
+assert.equal(JSON.parse(tab.getItem("mujuthaek:business:device-session")).industry, "SOFTWARE");
+assert.equal(tab.getItem("mujuthaek:business:revenue"), "1234", "전환 중 매출은 탭에만 유지");
+conditionStore.setSaveOnDevice(true);
+assert.equal(tab.getItem("mujuthaek:business:device-session"), null);
+assert.equal(JSON.parse(local.getItem("mujuthaek:business:v1")).data.industry, "SOFTWARE");
+conditionStore.clearConditions();
+for (const [storage, key] of [
+  [local, "mujuthaek:conditions:v1"],
+  [local, "mujuthaek:business:v1"],
+  [tab, "mujuthaek:conditions:session"],
+  [tab, "mujuthaek:business:device-session"],
+  [tab, "mujuthaek:business:revenue"],
+  [tab, "mujuthaek:business:restrictions"],
+])
+  assert.equal(storage.getItem(key), null, `전체 조건 삭제: ${key}`);
+for (const savedAt of [Date.now() - retention.DEVICE_DATA_TTL_MS, Date.now() + 60_000, "invalid"]) {
+  local.setItem(
+    "mujuthaek:business:v1",
+    JSON.stringify({ savedAt, data: bizProfile.emptyBizProfile }),
+  );
+  bizProfile.moveBizProfileStorage(false);
+  assert.equal(local.getItem("mujuthaek:business:v1"), null);
+  assert.equal(
+    tab.getItem("mujuthaek:business:device-session"),
+    null,
+    "만료/미래 저장값은 옮기지 않음",
+  );
+}
+local.setItem("mujuthaek:business:v1", JSON.stringify(bizProfile.emptyBizProfile));
+bizProfile.moveBizProfileStorage(false);
+assert.equal(local.getItem("mujuthaek:business:v1"), null, "저장 시각 없는 예전 사업 값도 제거");
+assert.equal(tab.getItem("mujuthaek:business:device-session"), null);
 
 const recent = require("../src/features/search/recent.ts");
 const at = 1_800_000_000_000;
@@ -450,6 +522,176 @@ for (const path of [
 ])
   assert.equal(session.isTermsFreePath(path), false, `동의 화면으로 보냄: ${path}`);
 
+// ── 보안 헤더·CSP (2026-11-16 보안 감사 4장) ──────────────────────────────
+const headersLib = require("../src/shared/lib/securityHeaders.ts");
+const csp = (options) =>
+  Object.fromEntries(
+    headersLib
+      .contentSecurityPolicy({
+        dev: false,
+        apiOrigin: "",
+        analytics: false,
+        kakaoMap: false,
+        ...options,
+      })
+      .split("; ")
+      .map((part) => {
+        const [name, ...sources] = part.split(" ");
+        return [name, sources];
+      }),
+  );
+const base = csp({});
+assert.deepEqual(base["connect-src"], ["'self'"], "기본은 이 사이트로만 요청");
+assert.deepEqual(
+  base["script-src"],
+  ["'self'", "'unsafe-inline'"],
+  "운영 빌드는 eval·외부 스크립트 없음",
+);
+assert.deepEqual(base["form-action"], ["'self'"]);
+assert.deepEqual(base["default-src"], ["'self'"]);
+assert.deepEqual(base["object-src"], ["'none'"]);
+assert.deepEqual(base["frame-ancestors"], ["'none'"]);
+assert.equal(
+  base["img-src"].some((s) => s.includes("*") && !s.includes(".")),
+  false,
+  "이미지도 아무 호스트나 받지 않음",
+);
+assert.ok(csp({ dev: true })["script-src"].includes("'unsafe-eval'"), "개발 서버만 eval 허용");
+assert.deepEqual(csp({ apiOrigin: "http://127.0.0.1:18080" })["connect-src"], [
+  "'self'",
+  "http://127.0.0.1:18080",
+]);
+const withThirdParties = csp({ analytics: true, kakaoMap: true });
+assert.ok(withThirdParties["script-src"].includes("https://*.googletagmanager.com"));
+assert.ok(withThirdParties["connect-src"].includes("https://*.google-analytics.com"));
+assert.ok(withThirdParties["script-src"].includes("dapi.kakao.com"));
+assert.ok(withThirdParties["img-src"].includes("*.daumcdn.net"));
+assert.equal(withThirdParties["script-src"].includes("'unsafe-eval'"), false);
+for (const source of [...base["script-src"], ...base["connect-src"]])
+  assert.equal(/google|kakao|daum/.test(source), false, "GA·카카오를 끄면 호스트도 넣지 않음");
+const headerMap = Object.fromEntries(
+  headersLib
+    .securityHeaders({ dev: false, apiOrigin: "", analytics: false, kakaoMap: false })
+    .map((h) => [h.key, h.value]),
+);
+assert.equal(headerMap["Cross-Origin-Opener-Policy"], "same-origin");
+assert.equal(headerMap["Cross-Origin-Resource-Policy"], "same-origin");
+for (const feature of ["camera=()", "microphone=()", "geolocation=()", "payment=()"])
+  assert.ok(headerMap["Permissions-Policy"].includes(feature), feature);
+assert.equal(
+  headersLib.serviceWorkerPolicy(""),
+  "default-src 'self'; script-src 'self'; connect-src 'self'",
+);
+assert.equal(require("../next.config.ts").default.experimental.sri.algorithm, "sha384");
+assert.equal(headersLib.safeGaId("G-ABC123XYZ"), "G-ABC123XYZ");
+for (const bad of ["", undefined, "UA-1234-1", "G-ABC');alert(1);//", "g-abc123", "G-ABC 123"])
+  assert.equal(headersLib.safeGaId(bad), "", `GA ID 거부: ${String(bad)}`);
+
+// ── 서비스 워커 API 주소 (2026-11-16 보안 감사 4장) ──────────────────────
+const vm = require("node:vm");
+const workerApiBase = (href) => {
+  const context = vm.createContext({
+    URL,
+    self: { location: new URL(href), addEventListener() {} },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../public/sw.js"), "utf8"), context);
+  return context.API_BASE ?? vm.runInContext("API_BASE", context);
+};
+assert.equal(workerApiBase("https://app.test/sw.js?api="), "https://app.test", "운영: 같은 주소");
+assert.equal(workerApiBase("https://app.test/sw.js"), "https://app.test");
+assert.equal(
+  workerApiBase(`https://app.test/sw.js?api=${encodeURIComponent("https://evil.test")}`),
+  "https://app.test",
+  "다른 출처는 받지 않음",
+);
+assert.equal(
+  workerApiBase(`https://app.test/sw.js?api=${encodeURIComponent("http://localhost:8080")}`),
+  "https://app.test",
+  "운영 워커는 로컬 주소도 받지 않음",
+);
+assert.equal(
+  workerApiBase(`http://localhost:3000/sw.js?api=${encodeURIComponent("http://localhost:8080")}`),
+  "http://localhost:8080",
+  "로컬 개발: 로컬 API",
+);
+assert.equal(
+  workerApiBase(`http://127.0.0.1:13000/sw.js?api=${encodeURIComponent("https://evil.test")}`),
+  "http://127.0.0.1:13000",
+  "로컬이어도 바깥 호스트는 받지 않음",
+);
+assert.equal(workerApiBase("https://app.test/sw.js?api=javascript:alert(1)"), "https://app.test");
+
+// ── 경로의 ID (2026-11-16 보안 감사 4장) ─────────────────────────────────
+const { endpoints } = require("../src/shared/lib/api/endpoints.ts");
+assert.throws(() => endpoints.noticeDetail(".."), "「..」은 경로에 넣지 않음");
+assert.throws(() => endpoints.chatMessage("."));
+assert.equal(endpoints.favorite("notice", "a/b?c"), "/api/users/me/favorites/notice/a%2Fb%3Fc");
+assert.equal(endpoints.noticeChatStream("n-1"), "/api/v1/notices/n-1/chat/stream");
+
+// ── 제보 딥링크 (2026-11-16 보안 감사 4장) ───────────────────────────────
+const tabs = require("../src/features/me/tabs.ts");
+assert.equal(tabs.reportScreenParam("검색"), "검색");
+assert.equal(tabs.reportScreenParam("관리자 승인 요청"), undefined, "목록에 없는 화면 이름은 버림");
+assert.equal(tabs.reportScreenParam(null), undefined);
+assert.equal(tabs.reportCodeParam("E-503"), "E-503");
+for (const bad of ["", null, "a".repeat(41), "E 503", "<b>x</b>", "-E"])
+  assert.equal(tabs.reportCodeParam(bad), undefined, `오류 코드 거부: ${String(bad)}`);
+for (const from of tabs.reportScreens) {
+  const href = new URL(tabs.reportHref({ from, code: "E-1" }), "https://app.test");
+  assert.equal(
+    tabs.reportScreenParam(href.searchParams.get("from")),
+    from,
+    "앱이 만든 링크는 그대로",
+  );
+}
+
+// ── 방문 통계 동의 철회 (2026-11-16 보안 감사 4장) ───────────────────────
+process.env.NEXT_PUBLIC_GA_ID = "G-TEST1234";
+const cookieJar = new Map([
+  ["_ga", "x"],
+  ["_ga_TEST1234", "y"],
+  ["theme", "dark"],
+]);
+global.location = { hostname: "www.app.test" };
+global.document = {
+  get cookie() {
+    return [...cookieJar].map(([k, v]) => `${k}=${v}`).join("; ");
+  },
+  set cookie(value) {
+    const [pair, ...attrs] = value.split(";").map((s) => s.trim());
+    const [name] = pair.split("=");
+    if (attrs.some((a) => a.toLowerCase().startsWith("expires=thu, 01 jan 1970")))
+      cookieJar.delete(name);
+  },
+};
+// analytics.ts는 전역 localStorage를 읽어요 (브라우저와 같게)
+const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+Object.defineProperty(globalThis, "localStorage", {
+  value: local,
+  configurable: true,
+  writable: true,
+});
+// 앞에서 GA ID 없이 불러온 모듈이 있으면 지우고 GA ID가 있는 상태로 다시 불러요
+delete require.cache[require.resolve("../src/shared/lib/analytics.ts")];
+const analytics = require("../src/shared/lib/analytics.ts");
+const sent = [];
+window.gtag = (...args) => sent.push(args);
+analytics.writeConsent("granted");
+analytics.track("judgment_run");
+assert.equal(sent.length, 1, "동의하면 보냄");
+analytics.writeConsent("denied");
+analytics.track("judgment_run");
+assert.equal(sent.length, 1, "철회하면 불러온 gtag가 있어도 보내지 않음");
+assert.equal(window["ga-disable-G-TEST1234"], true, "GA 자체도 멈춤");
+assert.equal(cookieJar.has("_ga") || cookieJar.has("_ga_TEST1234"), false, "GA 쿠키를 지움");
+assert.equal(cookieJar.get("theme"), "dark", "다른 쿠키는 둠");
+delete window.gtag;
+delete global.document;
+delete global.location;
+local.removeItem("mujuthaek:analytics-consent");
+if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+else delete globalThis.localStorage;
+
 const client = require("../src/shared/lib/api/client.ts");
 (async () => {
   let termsRequired = 0;
@@ -470,8 +712,134 @@ const client = require("../src/shared/lib/api/client.ts");
   await assert.rejects(client.api.get("/api/users/me/favorites"));
   assert.equal(termsRequired, 1, "다른 오류는 알리지 않음");
   stopTerms();
+
+  // 브라우저 푸시의 등록·해제·로그아웃 순서를 합성 구독으로 확인해요. 실제 푸시 서버는 부르지 않아요.
+  const push = require("../src/shared/lib/push.ts");
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let subscription = null;
+  const pushEvents = [];
+  const fakeSubscription = () => ({
+    endpoint: "https://fcm.googleapis.com/synthetic-current-device",
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/synthetic-current-device", keys: {} }),
+    async unsubscribe() {
+      pushEvents.push("browser-unsubscribe");
+      subscription = null;
+      return true;
+    },
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      userAgent: "Synthetic test browser",
+      serviceWorker: {
+        async getRegistration() {
+          return {
+            pushManager: {
+              async getSubscription() {
+                return subscription;
+              },
+            },
+          };
+        },
+      },
+    },
+  });
+  window.PushManager = function PushManager() {};
+  window.Notification = function Notification() {};
+  const originalPut = client.api.put;
+  const originalDelete = client.api.delete;
+  let released;
+  let registrationStarted;
+  const started = new Promise((resolve) => {
+    registrationStarted = resolve;
+  });
+  const registrationGate = new Promise((resolve) => {
+    released = resolve;
+  });
+  client.api.put = async (url, body) => {
+    assert.equal(url, endpoints.pushSubscriptions);
+    assert.equal(body.endpoint, "https://fcm.googleapis.com/synthetic-current-device");
+    pushEvents.push("server-register");
+    registrationStarted();
+    await registrationGate;
+  };
+  client.api.delete = async (url, options) => {
+    assert.equal(url, endpoints.pushSubscriptions, "다른 기기 전체 해제 경로를 부르지 않음");
+    assert.deepEqual(options.body, {
+      endpoint: "https://fcm.googleapis.com/synthetic-current-device",
+    });
+    pushEvents.push("server-delete");
+  };
+  subscription = fakeSubscription();
+  const registering = push.syncExistingPushSubscription();
+  await started;
+  let sessionLive = true;
+  const loggingOut = push.logoutWithPushCleanup(async () => {
+    sessionLive = false;
+    pushEvents.push("server-logout");
+  });
+  const delayedRegister = push.syncExistingPushSubscription(() => sessionLive);
+  released();
+  assert.equal(await registering, true);
+  await loggingOut;
+  assert.equal(await delayedRegister, false, "지연된 등록은 로그아웃 뒤 구독을 되살리지 않음");
+  assert.deepEqual(pushEvents, [
+    "server-register",
+    "server-delete",
+    "browser-unsubscribe",
+    "server-logout",
+  ]);
+  assert.equal(subscription, null);
+
+  subscription = fakeSubscription();
+  pushEvents.length = 0;
+  client.api.delete = async () => {
+    throw new Error("Synthetic delete failure");
+  };
+  await assert.rejects(push.logoutWithPushCleanup(async () => pushEvents.push("server-logout")));
+  assert.deepEqual(pushEvents, [], "서버 해제 실패는 로그아웃 성공으로 넘기지 않음");
+  assert.notEqual(subscription, null);
+
+  client.api.put = async () => {
+    throw new Error("Synthetic registration failure");
+  };
+  await assert.rejects(push.syncExistingPushSubscription());
+  assert.equal(subscription, null, "계정 동기화 실패면 이전 회원 알림을 남기지 않음");
+  assert.deepEqual(pushEvents, ["browser-unsubscribe"]);
+  subscription = fakeSubscription();
+  pushEvents.length = 0;
+  assert.equal(await push.syncExistingPushSubscription(() => false), false);
+  assert.deepEqual(pushEvents, [], "취소된 계정의 구독을 등록하지 않음");
+  await push.stopBrowserPushSubscription();
+  assert.equal(subscription, null, "비로그인 상태의 이전 브라우저 구독도 해제 가능");
+  client.api.put = originalPut;
+  client.api.delete = originalDelete;
+  if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+  else delete globalThis.navigator;
+  delete window.PushManager;
+  delete window.Notification;
+
+  // 검수 PDF는 인증 정보를 신뢰하는 원문 경로에만 붙이고 브라우저 캐시를 남기지 않아요.
+  const { fetchAdminPdf } = require("../src/features/admin/trace.ts");
+  window.location = new URL("https://app.test/admin/review/trace");
+  let pdfRequests = 0;
+  global.fetch = async (url, init) => {
+    pdfRequests++;
+    assert.equal(url, "https://app.test/api/admin/reviews/job-1/files/file-1");
+    assert.equal(init.cache, "no-store");
+    return new Response(new Uint8Array([1, 2, 3]));
+  };
+  assert.equal((await fetchAdminPdf("/api/admin/reviews/job-1/files/file-1")).byteLength, 3);
+  for (const bad of [
+    "https://attacker.invalid/api/admin/reviews/job-1/files/file-1",
+    "//attacker.invalid/api/admin/reviews/job-1/files/file-1",
+    "/api/users/me",
+    "/api/admin/reviews/job-1/files/file-1?token=synthetic",
+  ])
+    await assert.rejects(fetchAdminPdf(bad));
+  assert.equal(pdfRequests, 1, "의도한 원문 경로 밖에는 요청하지 않음");
   console.log(
-    "UI regression checks passed: unknown inputs, explicit false/zero, legacy conditions, optional birth, money formatting, safe links, API paths, device data, terms gate.",
+    "UI regression checks passed: unknown inputs, explicit false/zero, legacy conditions, optional birth, money formatting, safe links and return paths, API paths, device data retention and clearing, push/logout sequencing, admin PDF boundary, terms gate, security headers, service worker origin, report links, analytics opt-out.",
   );
 })().catch((error) => {
   console.error(error);

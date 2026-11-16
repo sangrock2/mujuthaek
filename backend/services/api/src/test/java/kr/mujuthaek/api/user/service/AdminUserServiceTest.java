@@ -48,7 +48,9 @@ class AdminUserServiceTest {
 
   @BeforeEach
   void users() {
-    jdbc.sql("truncate account.users cascade").update();
+    // 감사 행위자 FK 제거 후 긴급 정지와 전역 기록은 users의 cascade 대상이 아니에요.
+    jdbc.sql("truncate account.admin_freeze, account.admin_changes, account.users cascade")
+        .update();
     user(top, "최상위", "SUPER_ADMIN", "2026-10-01T00:00:00Z");
     user(granter, "회원관리", "ADMIN", "2026-10-02T00:00:00Z");
     user(notices, "공고관리", "ADMIN", "2026-10-03T00:00:00Z");
@@ -285,15 +287,22 @@ class AdminUserServiceTest {
 
   @Test
   void 최상위_넘기기는_로그인한_지_10분_안에_일반_관리자에게() {
-    denied(() -> service.transfer(notices, top), ErrorCode.FORBIDDEN, "10분");
+    denied(() -> service.transfer(notices, top, NOW.minusSeconds(601)), ErrorCode.FORBIDDEN, "10분");
     jdbc.sql("update account.users set last_login_at = :t where id = :id")
         .param("t", java.sql.Timestamp.from(NOW.minusSeconds(60)))
         .param("id", top)
         .update();
-    denied(() -> service.transfer(kim, top), ErrorCode.CONFLICT, "일반 관리자에게만");
-    denied(() -> service.transfer(top, granter), ErrorCode.FORBIDDEN, "최상위 관리자만");
+    denied(() -> service.transfer(kim, top, NOW.minusSeconds(60)), ErrorCode.CONFLICT, "일반 관리자에게만");
+    denied(
+        () -> service.transfer(top, granter, NOW.minusSeconds(60)),
+        ErrorCode.FORBIDDEN,
+        "최상위 관리자만");
 
-    var to = service.transfer(notices, top);
+    // 다른 기기 last_login_at이 방금 갱신돼도, 현재 세션 인증 시각은 별도로 검사해요.
+    denied(() -> service.transfer(notices, top, NOW.minusSeconds(601)), ErrorCode.FORBIDDEN, "10분");
+    denied(() -> service.transfer(notices, top, null), ErrorCode.FORBIDDEN, "10분");
+    denied(() -> service.transfer(notices, top, NOW.plusSeconds(1)), ErrorCode.FORBIDDEN, "10분");
+    var to = service.transfer(notices, top, NOW.minusSeconds(60));
     assertThat(to.role()).isEqualTo("SUPER_ADMIN");
     assertThat(service.access(notices).isSuper()).isTrue();
     // 넘긴 사람은 모든 권한을 가진 일반 관리자

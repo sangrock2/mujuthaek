@@ -32,6 +32,10 @@ public class RefreshToken {
   @Column(nullable = false)
   private Instant createdAt;
 
+  /** 이 로그인 계보의 소셜 인증 시각. refresh 회전으로 갱신하지 않아요. */
+  @Column(nullable = false)
+  private Instant authenticatedAt;
+
   /** 로그인 연장으로 사용한 시각. 같은 값이 다시 오면 계보 전체를 폐기해요. */
   private Instant rotatedAt;
 
@@ -43,11 +47,22 @@ public class RefreshToken {
 
   public RefreshToken(
       UUID userId, UUID familyId, String tokenHash, Instant expiresAt, Instant now) {
+    this(userId, familyId, tokenHash, expiresAt, now, now);
+  }
+
+  public RefreshToken(
+      UUID userId,
+      UUID familyId,
+      String tokenHash,
+      Instant expiresAt,
+      Instant now,
+      Instant authenticatedAt) {
     this.userId = userId;
     this.familyId = familyId;
     this.tokenHash = tokenHash;
     this.expiresAt = expiresAt;
     this.createdAt = now;
+    this.authenticatedAt = authenticatedAt;
   }
 
   public boolean expired(Instant now) {
@@ -64,5 +79,9 @@ public class RefreshToken {
 
   public UUID getFamilyId() {
     return familyId;
+  }
+
+  public Instant getAuthenticatedAt() {
+    return authenticatedAt;
   }
 }

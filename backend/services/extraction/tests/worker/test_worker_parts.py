@@ -1,5 +1,6 @@
 """로컬 AI 연결·모델 선택·검수 API 동작. 네트워크·DB 없이 가짜 연결과 가짜 저장소를 씁니다."""
 
+import copy
 import io
 import json
 import urllib.error
@@ -885,6 +886,8 @@ def test_plain_approval_is_recorded_as_not_edited():
         ([{"path": "eligibility/0", "value": "x"}], "JSON Pointer"),
         ([{"path": "/eligibility/0/description"}], "{path, value}"),
         ([], "한 개 이상"),
+        ([{"path": "/eligibility/²/description", "value": "x"}], "칸이 없습니다"),  # '²'.isdigit()이 참이라 500이 났어요
+        ([{"path": "/eligibility/١", "value": "x"}], "칸이 없습니다"),
     ],
 )
 def test_bad_field_edits_are_refused(edits, message):
@@ -954,3 +957,110 @@ def test_review_api_reads_a_chunked_body():
         assert store.rejected == "조각 전송 메모"
     finally:
         server.shutdown()
+
+
+# ---------- 2026-11-16 보안 감사 4·5장: 잠근 칸·처리자 표시·조각 크기 ----------
+
+
+def test_full_candidate_cannot_change_locked_fields():
+    item = pending_item()
+    service, store = service_with(item)
+    stored = copy.deepcopy(item["candidate"])
+    edited = copy.deepcopy(item["candidate"])
+    edited["eligibility"][0]["description"] = "가상 설명을 고침"
+    edited["evidence"] = []
+    edited["quality"]["reviewIssues"] = []
+    status, body = service.approve("job", {"candidate": edited, "reviewer": "admin:7"})
+    assert status == 200, body
+    candidate, _, _ = store.approved
+    assert candidate["eligibility"][0]["description"] == "가상 설명을 고침"
+    assert candidate["evidence"] == stored["evidence"] and candidate["quality"] == stored["quality"]
+    assert store.record["edited"] is True
+
+
+def test_full_candidate_without_stored_result_is_refused():
+    item = pending_item()
+    candidate = item["candidate"]
+    service, store = service_with(item | {"candidate": None})
+    assert service.approve("job", {"candidate": candidate})[0] == 409 and store.approved is None
+
+
+def test_list_limit_accepts_only_ascii_digits():
+    from mujuthaek_extraction.review_api import _list_limit
+
+    assert _list_limit("20") == 20 and _list_limit("²") is None and _list_limit("١٢") is None
+
+
+@pytest.mark.parametrize("reviewer", ["admin:7", "0192f3a0-0000-7000-8000-000000000001", "검수자", None])
+def test_review_api_accepts_short_reviewer_labels(reviewer):
+    server, store = http_server()
+    try:
+        assert call(server, "POST", JOB + "/reject", {"note": "메모", "reviewer": reviewer}) == 200
+        assert store.record == {"reviewer": reviewer}
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("reviewer", ["", "a" * 65, "admin\nforged", "<b>admin</b>", 7])
+def test_review_api_refuses_free_text_reviewer(reviewer):
+    server, store = http_server()
+    try:
+        assert call(server, "POST", JOB + "/reject", {"note": "메모", "reviewer": reviewer}) == 400
+        assert store.rejected is None
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("size", [b"-10", b"+5", b"0x5", b" ", b"fffffffff"])
+def test_review_api_refuses_bad_chunk_sizes(size):
+    import socket
+
+    server, store = http_server()
+    try:
+        request = (
+            (f"POST {JOB}/reject HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n").encode()
+            + size
+            + b"\r\n{}"
+        )
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as conn:
+            conn.sendall(request)  # 연결을 열어 둔 채로도 바로 400이 와야 해요(예전에는 음수 크기로 끝까지 읽으려고 기다렸어요)
+            reply = conn.recv(4096).decode("utf-8", "replace")
+        assert " 400 " in reply.split("\r\n")[0], reply[:80]
+        assert store.rejected is None
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize(
+    "headers,raw",
+    [
+        ([("Content-Length", "2"), ("Transfer-Encoding", "chunked")], b"{}"),
+        ([("Content-Length", "2"), ("Content-Length", "2")], b"{}"),
+        ([("Content-Length", "+2")], b"{}"),
+        ([("Content-Length", "²")], b"{}"),
+        ([("Content-Length", "3")], b"{}"),
+        ([("Transfer-Encoding", "gzip, chunked")], b"0\r\n\r\n"),
+        ([("Transfer-Encoding", "chunked")], b"2\r\n{}X\n0\r\n\r\n"),
+        ([("Transfer-Encoding", "chunked")], b"2\r\n{}\r\n0\r\n" + b"X: 1\r\n" * 33 + b"\r\n"),
+    ],
+)
+def test_review_body_rejects_ambiguous_or_incomplete_framing(headers, raw):
+    from email.message import Message
+
+    from mujuthaek_extraction.review_api import handler_for
+
+    handler = object.__new__(handler_for(None))
+    handler.headers = Message()
+    for name, value in headers:
+        handler.headers[name] = value
+    handler.rfile = io.BytesIO(raw)
+    assert handler._body() is None
+
+
+def test_review_chunk_count_budget(monkeypatch):
+    from mujuthaek_extraction import review_api
+
+    monkeypatch.setattr(review_api, "MAX_CHUNKS", 2)
+    handler = object.__new__(review_api.handler_for(None))
+    handler.rfile = io.BytesIO(b"1\r\na\r\n1\r\nb\r\n0\r\n\r\n")
+    assert handler._chunked() is None

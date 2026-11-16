@@ -41,25 +41,30 @@ jobs:
       id-token: write
     outputs:
       deploy: ${{ steps.plan.outputs.deploy }}
+      frontend: ${{ steps.plan.outputs.frontend }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Planning reads state only and must never fall back to a write-capable role.
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
           aws-region: ap-northeast-2
           allowed-account-ids: "659355919826"
       - name: Select changed runtime components
         id: plan
         env:
           ROLLBACK_RELEASE: ${{ inputs.release }}
-        run: python .github/scripts/deployment_plan.py
+        run: python .github/scripts/release_phases.py plan
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: deployment-plan.json
+          path: |
+            deployment-plan.json
+            base-release.json
+            target-release.json
           retention-days: 90
   web-check:
     needs: plan
@@ -77,7 +82,7 @@ jobs:
     needs: plan
     if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/e2e.yml
-  deploy:
+  frontend-prepare:
     needs: [guard, plan, web-check, backend-check, contracts-check, e2e-check]
     if: >-
       always() && needs.guard.result == 'success' && needs.plan.result == 'success' &&
@@ -86,54 +91,144 @@ jobs:
        (needs.web-check.result == 'success' && needs.backend-check.result == 'success' &&
         needs.contracts-check.result == 'success' && needs.e2e-check.result == 'success'))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require deployment activation
+        env:
+          ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+        run: test "$ENABLED" = true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
+      # Frontend release uses only Python standard-library HTTPS requests.
+      - name: Prepare frontend candidate
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TELEMETRY_DISABLED: "1"
+        run: python .github/scripts/release_phases.py prepare-frontend
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            frontend-before.json
+            frontend-deployment.json
+          retention-days: 7
+  backend-apply:
+    needs: [plan, frontend-prepare]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
     steps:
-      # Rollback executes trusted main workflow code, never the old version's scripts.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require deployment configuration
-        env:
-          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
-        run: |
-          test "$ENABLED" = true || { echo 'Enable after the initial source-alignment PR is reviewed.'; exit 1; }
-          test -n "$ROLE" && test -n "$TOKEN"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          node-version: 24
-      # This job can mint the AWS deploy role through OIDC. Never run package install scripts here: a compromised
-      # transitive dependency's postinstall could otherwise request that token (security audit M-2, 2026-11-16).
-      # The CLI only uploads source for a remote Vercel build, so it needs no native build step.
-      - run: npm install --global --ignore-scripts --no-audit --no-fund vercel@65.15.0
+          name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-candidate-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-2
           allowed-account-ids: "659355919826"
-      - name: Deploy or restore a selected release
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TELEMETRY_DISABLED: "1"
-          ROLLBACK_RELEASE: ${{ inputs.release }}
-        run: python .github/scripts/production_release.py
-      - name: Save release record
+      - name: Apply backend release in the isolated cloud job
+        run: python .github/scripts/release_phases.py apply-backend
+      - name: Save backend acknowledgement
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
+          name: backend-applied-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend-applied.json
+            deployment-result.json
+            manifest.json
+          retention-days: 90
+          if-no-files-found: ignore
+  frontend-promote:
+    needs: [plan, backend-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-applied-${{ github.run_id }}-${{ github.run_attempt }}
+      # Frontend release uses only Python standard-library HTTPS requests.
+      - name: Promote frontend or restore its previous version on failure
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TELEMETRY_DISABLED: "1"
+        run: python .github/scripts/release_phases.py promote-frontend
+      - name: Save frontend outcome even when promotion fails
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: frontend-outcome.json
+          retention-days: 90
+          if-no-files-found: ignore
+  finalize:
+    needs: [backend-apply, frontend-promote]
+    if: >-
+      always() && needs.backend-apply.result == 'success' &&
+      (needs.frontend-promote.result == 'success' || needs.frontend-promote.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-applied-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: "659355919826"
+      - name: Commit successful release or recover backend after a known frontend failure
+        run: python .github/scripts/release_phases.py finalize
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
           name: production-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            manifest.json
-            frontend-deployment.json
-            frontend-before.json
-            deployment-result.json
-            target-release.json
-            deployment-plan.json
             production-current.json
+            deployment-result.json
+            frontend-outcome.json
+            deployment-plan.json
           retention-days: 90
           if-no-files-found: ignore

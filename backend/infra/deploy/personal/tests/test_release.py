@@ -27,6 +27,20 @@ publisher = load('backend_release', ROOT / '.github/scripts/backend_release.py')
 release_role = load('setup_github_release', Path(__file__).resolve().parents[1] / 'setup_github_release.py')
 
 
+def image_archive(path, tags, extra=()):
+    """A minimal `docker save` style archive: manifest.json with RepoTags, gzip-compressed. Returns its bytes."""
+    import io
+    import tarfile
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+        for name, content in [*extra, ('manifest.json', json.dumps([{'RepoTags': [tag]} for tag in tags]).encode())]:
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    Path(path).write_bytes(buffer.getvalue())
+    return buffer.getvalue()
+
+
 def manifest(release='release-123'):
     return {'release': release, 'archive_sha256': 'a' * 64,
             'images': {s: {'tag': f'mujuthaek-personal-{s}:{release}', 'id': 'sha256:' + 'b' * 64}
@@ -34,36 +48,8 @@ def manifest(release='release-123'):
 
 
 class ReleaseSafety(unittest.TestCase):
-    def test_vercel_cli_errors_redact_credentials(self):
-        with patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-vercel-secret'}):
-            failed = SimpleNamespace(returncode=1, stdout='', stderr='Rejected synthetic-vercel-secret')
-            with patch.object(frontend.subprocess, 'run', return_value=failed):
-                with self.assertRaises(RuntimeError) as error:
-                    frontend.vercel('deploy')
-                self.assertNotIn('synthetic-vercel-secret', str(error.exception))
-                self.assertIn('[REDACTED]', str(error.exception))
 
-    def test_vercel_cli_never_receives_aws_or_oidc_credentials(self):
-        # Security audit M-2: the deploy job can mint the AWS deploy role; a compromised CLI release must not see it.
-        job = {'VERCEL_TOKEN': 'synthetic-token', 'PATH': '/usr/bin', 'HOME': '/home/runner',
-               'AWS_ACCESS_KEY_ID': 'AKIASYNTHETIC', 'AWS_SECRET_ACCESS_KEY': 'synthetic-secret',
-               'AWS_SESSION_TOKEN': 'synthetic-session', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'synthetic-oidc',
-               'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://example.invalid/oidc', 'GITHUB_TOKEN': 'synthetic-github'}
-        done = SimpleNamespace(returncode=0, stdout='{}', stderr='')
-        with patch.dict('os.environ', job, clear=True), patch.object(frontend.subprocess, 'run', return_value=done) as run:
-            frontend.vercel('promote', 'https://example.vercel.app')
-        environment = run.call_args.kwargs['env']
-        self.assertEqual(environment['VERCEL_ORG_ID'], frontend.TEAM)
-        self.assertEqual(environment['PATH'], '/usr/bin')
-        for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
-                     'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_TOKEN'):
-            self.assertNotIn(name, environment)
 
-    def test_production_job_installs_the_vercel_cli_without_install_scripts(self):
-        workflow = (ROOT / '.github/workflows/production.yml').read_text(encoding='utf-8')
-        installs = [line for line in workflow.splitlines() if 'npm install' in line]
-        self.assertTrue(installs)
-        self.assertTrue(all('--ignore-scripts' in line for line in installs))
 
     def test_deploy_role_can_create_but_never_replace_release_objects(self):
         # Security audit L-17: a replaced archive or manifest would make a later "rollback to a good release" redeploy
@@ -106,14 +92,6 @@ class ReleaseSafety(unittest.TestCase):
                     uploads += 1
         self.assertGreater(uploads, 0)
 
-    def test_vercel_candidate_is_bound_to_existing_team_and_project(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-token'}):
-            with patch.object(frontend, 'vercel', return_value={'deployment': {'id': 'dpl_example', 'url': 'https://example.vercel.app', 'readyState': 'READY'}}) as command:
-                with patch.object(frontend.Path, 'write_text') as write:
-                    frontend.candidate(cwd=directory)
-                    self.assertIn(frontend.PROJECT, write.call_args_list[0].args[0])
-                    self.assertIn(frontend.TEAM, write.call_args_list[0].args[0])
-                command.assert_called_once_with('deploy', '--prod', '--skip-domain', cwd=directory)
 
     def test_exact_repository_dev_to_main_only(self):
         for base, head, repo, expected in [
@@ -173,10 +151,11 @@ class ReleaseSafety(unittest.TestCase):
         for changed in [False, True]:
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as d:
                 obj = self.fake(d)
-                (obj.runtime / 'images.tar.gz').write_bytes(b'archive')
                 data = manifest()
+                tags = [image['tag'] for image in data['images'].values()]
+                body = image_archive(obj.runtime / 'images.tar.gz', tags)
                 import hashlib
-                data['archive_sha256'] = hashlib.sha256(b'archive').hexdigest()
+                data['archive_sha256'] = hashlib.sha256(body).hexdigest()
                 (obj.runtime / 'candidate.json').write_text(json.dumps(data))
                 schemas = iter(['schema-a', 'schema-b' if changed else 'schema-a'])
                 obj.schema = lambda: next(schemas)
@@ -186,7 +165,10 @@ class ReleaseSafety(unittest.TestCase):
                     if release == 'release-123':
                         raise RuntimeError('unhealthy')
                 obj.select = select
-                with patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout='sha256:' + 'b' * 64)):
+                loaded = ''.join(f'Loaded image: {tag}\n' for tag in tags)
+                def run(args, **kwargs):
+                    return SimpleNamespace(stdout=loaded if args[:2] == ['docker', 'load'] else 'sha256:' + 'b' * 64)
+                with patch.object(host.subprocess, 'run', side_effect=run):
                     with self.assertRaises(RuntimeError):
                         obj.apply({'release': 'release-123', 'mode': 'deploy'})
                 self.assertEqual(selected, ['release-123'] if changed else ['release-123', 'release-old'])

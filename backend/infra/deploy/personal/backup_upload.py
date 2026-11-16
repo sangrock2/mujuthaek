@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from release_host import AWS_IMAGE
+
 MAX_SINGLE_PUT = 5 * 1024 ** 3
 
 
@@ -21,7 +23,7 @@ def upload_command(base, path):
     bucket = next(line.split('=', 1)[1] for line in (base / '.env').read_text().splitlines() if line.startswith('S3_BUCKET='))
     return ['docker', 'run', '--rm', '--pull', 'never', '--env-file', str(env),
             '--mount', f'type=bind,src={backup},dst=/backup.dump,readonly',
-            'amazon/aws-cli:2.36.28', 's3api', 'put-object', '--body', '/backup.dump',
+            AWS_IMAGE, 's3api', 'put-object', '--body', '/backup.dump',
             '--bucket', bucket, '--key', 'backups/' + backup.name,
             '--server-side-encryption', 'AES256', '--if-none-match', '*']
 

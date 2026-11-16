@@ -81,6 +81,37 @@ def test_listing_rows_are_rendered_without_door_passwords():
     assert "비밀번호" not in listing.text and "1234*" not in listing.text
 
 
+def test_secret_header_after_intro_and_with_separators_is_removed():
+    rows = [[f"안내{n}", "표 설명"] for n in range(12)]
+    rows += [["주소", "공동현관/비밀번호"], ["서울", "9876#"]]
+    listing = read_xlsx(make_xlsx(rows))
+    assert listing is not None and "서울" in listing.text
+    assert "9876#" not in listing.text and "9876#" not in repr(listing.sheets)
+
+
+def test_inline_secret_is_redacted_in_text_and_structured_rows():
+    listing = read_xlsx(make_xlsx([["주소", "안내"], ["서울", "비밀번호: 9876#"]]))
+    assert listing is not None
+    assert "9876#" not in listing.text and "9876#" not in repr(listing.sheets)
+
+
+def test_sparse_output_is_truncated_before_dense_allocation(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "MAX_OUTPUT_CELLS", 4)
+    monkeypatch.setattr(xlsx_reader, "HEAD_ROWS", 1)
+    rows = "".join(f'<row r="{n}">{inline(f"{letter}{n}", "합성값")}</row>' for n, letter in enumerate("ABC", 1))
+    listing = read_xlsx(raw_xlsx(rows))
+    assert listing is not None and listing.truncated and listing.rows == 3
+    assert listing.sheets == () and "머리 1행만" in listing.text
+
+
+def test_xlsx_structure_rejects_dtd_and_node_overflow(monkeypatch):
+    with pytest.raises(ValueError, match="DTD"):
+        xlsx_reader._xml(b'<!DOCTYPE root [<!ENTITY private "synthetic">]><root>&private;</root>')
+    monkeypatch.setattr(xlsx_reader, "MAX_XML_NODES", 2)
+    with pytest.raises(ValueError, match="structure limit"):
+        xlsx_reader._xml(b"<root><cell/><cell/></root>")
+
+
 def test_unreadable_or_empty_spreadsheet_is_none():
     assert read_xlsx(b"not a zip") is None
     assert read_xlsx(make_xlsx([])) is None
@@ -269,3 +300,18 @@ def test_hidden_rows_and_columns_are_not_handed_over_and_are_counted():
     merged = rows + '</sheetData><mergeCells count="1"><mergeCell ref="A2:A3"/></mergeCells><sheetData>'
     listing = read_xlsx(raw_xlsx(merged))
     assert "| 가람단지 | 102 |" in listing.text and "101" not in listing.text and listing.hidden_rows == 1
+
+
+def test_entry_count_is_checked_before_zipfile_reads_the_directory(monkeypatch):
+    """항목이 많은 zip은 ZipFile이 중앙 디렉터리를 통째로 읽기 전에 끝 레코드로 거절해요(2026-11-16 보안 감사 4장)."""
+    monkeypatch.setattr(xlsx_reader, "MAX_ENTRIES", 3)
+    data = make_xlsx([["주소", "호수"], ["가상 주소", "101"]])
+    assert read_xlsx(data) is None
+
+    def no_zipfile(*args, **kwargs):
+        raise AssertionError("ZipFile을 만들면 안 돼요")
+
+    monkeypatch.setattr(xlsx_reader.zipfile, "ZipFile", no_zipfile)
+    assert read_xlsx(data) is None
+    monkeypatch.undo()
+    assert read_xlsx(data) is not None

@@ -40,7 +40,9 @@ services:
       timeout: 3s
       retries: 30
   rabbitmq:
-    image: rabbitmq:4.1-management
+    # No management plugin: nothing here uses its HTTP API or UI, and rabbitmqctl (policies, definitions export/import,
+    # queue listing) and rabbitmq-diagnostics are part of the core image (security audit section 4).
+    image: rabbitmq:4.1
     hostname: rabbitmq
     restart: unless-stopped
     mem_limit: 320m
@@ -68,6 +70,7 @@ services:
       SERVER_SERVLET_SESSION_COOKIE_SAME_SITE: lax
       # Virtual-thread carriers stay at 4 regardless of ActiveProcessorCount: with 1, one CPU-bound request stalled every request (security audit M-1)
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError -XX:ActiveProcessorCount=1 -Djdk.virtualThreadScheduler.parallelism=4
+      API_QUERY_TIMEOUT: ${API_QUERY_TIMEOUT:-15s}
       API_DB_URL: jdbc:postgresql://postgres:5432/api
       API_DB_PASSWORD: ${API_DB_PASSWORD}
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "8"
@@ -95,6 +98,8 @@ services:
       # Optional so an older host .env keeps working: when empty the API derives its own fallback (security audit L-1, L-15)
       TRAFFIC_IP_SALT: ${TRAFFIC_IP_SALT:-}
       EMAIL_UNSUBSCRIBE_KEY: ${EMAIL_UNSUBSCRIBE_KEY:-}
+      # Bearer token for /actuator/prometheus; optional so an older host .env keeps working (empty: prod answers 404)
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
       # Ops alerts (unhandled errors, dead-lettered messages). Same precedence as the API default; empty disables them (L-24)
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-${EXTRACTION_SLACK_WEBHOOK_URL:-}}
       MUJUTHAEK_ENV: prod
@@ -122,6 +127,7 @@ services:
       NOTIFICATION_MAIL_PROVIDER: ${NOTIFICATION_MAIL_PROVIDER:-log}
       NOTIFICATION_MAIL_FROM: ${NOTIFICATION_MAIL_FROM:-noreply@mujuthaek.store}
       NOTIFICATION_MAIL_FEEDBACK_ADDRESS: ${NOTIFICATION_MAIL_FEEDBACK_ADDRESS:-contact@mujuthaek.store}
+      NOTIFICATION_SES_CONFIGURATION_SET: ${NOTIFICATION_SES_CONFIGURATION_SET:-}
       NOTIFICATION_MAIL_CONSENT_API_URL: http://api:8080
       AWS_REGION: ap-northeast-2
       AWS_ACCESS_KEY_ID: ${NOTIFICATION_AWS_ACCESS_KEY_ID:-}
@@ -130,6 +136,8 @@ services:
       PUSH_VAPID_PUBLIC_KEY: ${PUSH_VAPID_PUBLIC_KEY:-}
       PUSH_VAPID_PRIVATE_KEY: ${PUSH_VAPID_PRIVATE_KEY:-}
       PUSH_VAPID_SUBJECT: ${PUSH_VAPID_SUBJECT:-mailto:contact@mujuthaek.store}
+      # Bearer token for /actuator/prometheus; optional so an older host .env keeps working (empty: prod answers 404)
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
   migrate-collector:
     image: flyway/flyway:11.14
     command: [migrate]
@@ -218,6 +226,7 @@ services:
     ports: ["80:80", "443:443"]
     # No frontend container: the site is served only by Vercel and nginx redirects non-API paths there (security audit L-20)
     depends_on: [api]
+    # Both nginx files are tracked next to this manifest, shipped by package_release.py and tested by test_gateway.py.
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/acme.conf:/etc/nginx/conf.d/acme.conf:ro

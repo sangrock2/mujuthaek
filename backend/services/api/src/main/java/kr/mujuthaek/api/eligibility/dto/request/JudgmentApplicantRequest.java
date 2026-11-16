@@ -45,6 +45,11 @@ public record JudgmentApplicantRequest(
     LoanRequest loan,
     @ReasonableDate YearMonth birthMonth) {
 
+  @Override
+  public String toString() {
+    return "JudgmentApplicantRequest[REDACTED]";
+  }
+
   public record HouseholdRequest(
       Integer size,
       Boolean head,
@@ -58,9 +63,19 @@ public record JudgmentApplicantRequest(
       Boolean dualIncome,
       Long totalAssetWon,
       Long applicantTotalAssetWon,
-      Long carValueWon) {}
+      Long carValueWon) {
+    @Override
+    public String toString() {
+      return "HouseholdRequest[REDACTED]";
+    }
+  }
 
-  public record SubscriptionRequest(Integer months, Integer payments, Long balanceWon) {}
+  public record SubscriptionRequest(Integer months, Integer payments, Long balanceWon) {
+    @Override
+    public String toString() {
+      return "SubscriptionRequest[REDACTED]";
+    }
+  }
 
   public record BusinessRequest(
       ApplicantType applicantType,
@@ -74,10 +89,20 @@ public record JudgmentApplicantRequest(
       @Schema(description = "업종 코드 5자리", pattern = "^\\d{5}$", example = "47190")
           String industryCode,
       @Schema(description = "연도별 매출(원)", example = "{\"2025\": 120000000}") @Size(max = 30)
-          Map<Integer, Long> revenueByYear) {}
+          Map<Integer, Long> revenueByYear) {
+    @Override
+    public String toString() {
+      return "BusinessRequest[REDACTED]";
+    }
+  }
 
   public record BusinessRecordRequest(
-      @ReasonableDate LocalDate openedOn, @ReasonableDate LocalDate closedOn) {}
+      @ReasonableDate LocalDate openedOn, @ReasonableDate LocalDate closedOn) {
+    @Override
+    public String toString() {
+      return "BusinessRecordRequest[REDACTED]";
+    }
+  }
 
   /**
    * 대출용 소득·자산·생애최초 (대출 자격 판정에만 써요). 주택도시기금 상품안내 기준이라 판정의 월소득·총자산과 따로 받아요.
@@ -91,5 +116,10 @@ public record JudgmentApplicantRequest(
       Long annualIncomeWon,
       Long applicantAnnualIncomeWon,
       Long netAssetWon,
-      Boolean firstHomePurchase) {}
+      Boolean firstHomePurchase) {
+    @Override
+    public String toString() {
+      return "LoanRequest[REDACTED]";
+    }
+  }
 }

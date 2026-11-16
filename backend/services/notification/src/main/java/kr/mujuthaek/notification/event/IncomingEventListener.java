@@ -40,6 +40,8 @@ public class IncomingEventListener {
    */
   static final Duration MAX_REQUEST_AGE = Duration.ofDays(7);
 
+  static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(5);
+
   private final JsonMapper json;
   private final JdbcClient jdbc;
   private final NotificationService notifications;
@@ -95,7 +97,7 @@ public class IncomingEventListener {
     }
   }
 
-  /** 일어난 시각이 {@link #MAX_REQUEST_AGE}보다 오래됐으면 true. 시각이 없거나 읽을 수 없으면 false(예전 발행자) */
+  /** 유효한 발생 시각은 봉투 파싱에서 확인하고, 오래된 알림은 중복 기록만 남긴 뒤 발송하지 않아요. */
   private boolean stale(Envelope event) {
     return event.occurredAt() != null
         && event.occurredAt().isBefore(clock.instant().minus(MAX_REQUEST_AGE));
@@ -144,7 +146,12 @@ public class IncomingEventListener {
                 + SCHEMA_VERSION
                 + ")");
       }
-      return new Envelope(eventId, eventType, occurredAt(root), root.path("payload"));
+      Instant occurredAt = occurredAt(root);
+      if ("notification.requested".equals(eventType)
+          && (occurredAt == null || occurredAt.isAfter(clock.instant().plus(MAX_CLOCK_SKEW)))) {
+        throw new IllegalArgumentException("알림 요청에는 유효한 발생 시각이 필요해요");
+      }
+      return new Envelope(eventId, eventType, occurredAt, root.path("payload"));
     } catch (JacksonException | IllegalArgumentException e) {
       throw new AmqpRejectAndDontRequeueException("이벤트 봉투를 읽지 못했어요: " + e.getMessage(), e);
     }

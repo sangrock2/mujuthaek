@@ -38,6 +38,8 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -165,8 +167,17 @@ class SecurityConfig {
           AdminAuthorization admin) {
     return auth.requestMatchers("/api/admin/me")
         .access(admin.admin())
-        .requestMatchers(HttpMethod.GET, "/api/admin/users/names")
-        .access(admin.active())
+        // 처리 기록 화면이 관리자 이름을 찾을 때 써요. 예전에는 권한이 하나도 없는 관리자도 회원 ID로 닉네임·단계를 볼 수 있었어요.
+        // 처리 기록(ACTIVITY)이나 회원 목록을 이미 볼 수 있는 권한만 열어요(2026-11-16 보안 감사 4장)
+        .requestMatchers(readOnly("/api/admin/users/names"))
+        .access(
+            admin.anyOf(
+                ACTIVITY,
+                USERS_VIEW,
+                ADMIN_APPOINT,
+                PERMISSION_GRANT,
+                PERMISSION_REVOKE,
+                USERS_SUSPEND))
         .requestMatchers("/api/admin/super/**")
         .access(admin.superOnly())
         .requestMatchers("/api/admin/users/*/role")
@@ -175,16 +186,16 @@ class SecurityConfig {
         .access(admin.anyOf(PERMISSION_GRANT, PERMISSION_REVOKE))
         .requestMatchers("/api/admin/users/*/suspension")
         .access(admin.anyOf(USERS_SUSPEND))
-        .requestMatchers(HttpMethod.GET, "/api/admin/users/changes")
+        .requestMatchers(readOnly("/api/admin/users/changes"))
         .access(
             admin.anyOf(
                 ACTIVITY, ADMIN_APPOINT, PERMISSION_GRANT, PERMISSION_REVOKE, USERS_SUSPEND))
-        .requestMatchers(HttpMethod.GET, "/api/admin/users")
+        .requestMatchers(readOnly("/api/admin/users"))
         .access(
             admin.anyOf(
                 USERS_VIEW, ADMIN_APPOINT, PERMISSION_GRANT, PERMISSION_REVOKE, USERS_SUSPEND))
         // 검수 대기열은 공고·혜택을 섞어요. 보낸 kinds마다 그 검수 권한을 봐요(아래 /api/admin/reviews/** 보다 먼저)
-        .requestMatchers(HttpMethod.GET, "/api/admin/reviews/queue")
+        .requestMatchers(readOnly("/api/admin/reviews/queue"))
         .access(admin.reviewQueue())
         .requestMatchers("/api/admin/reviews/**")
         .access(admin.anyOf(NOTICE_REVIEW))
@@ -192,7 +203,7 @@ class SecurityConfig {
         .access(admin.anyOf(BENEFIT_REVIEW))
         .requestMatchers("/api/admin/sources/**")
         .access(admin.anyOf(SOURCES))
-        .requestMatchers(HttpMethod.GET, "/api/admin/criteria/*/history")
+        .requestMatchers(readOnly("/api/admin/criteria/*/history"))
         .access(admin.anyOf(CRITERIA, ACTIVITY))
         .requestMatchers("/api/admin/criteria/**", "/api/admin/regulated-areas/**")
         .access(admin.anyOf(CRITERIA))
@@ -212,16 +223,32 @@ class SecurityConfig {
   }
 
   /**
-   * {@code Authorization: Bearer}를 읽는 곳. 재발급·로그아웃({@code /api/auth/**})은 쿠키로만 확인해서 헤더를 읽지 않아요. 프론트가
-   * 만료된 access token을 붙여 보내도 재발급이 401로 막히지 않게요 (헤더가 있으면 필터가 permitAll보다 먼저 검증해서 401을 내요).
+   * 읽기 전용 관리자 규칙의 대상: GET과 HEAD. 스프링 MVC는 GET 핸들러로 HEAD도 받아 실행해요(본문만 버려요). 규칙을 GET에만 걸면 HEAD가 그 규칙을
+   * 지나 아래의 더 넓은 규칙에 걸렸어요 — 예: {@code HEAD /api/admin/reviews/queue?kinds=BENEFIT}가 공고 검수 권한만으로
+   * 실행됐어요(2026-11-16 보안 감사 4장). GET 전용 규칙을 새로 만들 때도 이걸 써 주세요.
+   */
+  static RequestMatcher readOnly(String pattern) {
+    var paths = PathPatternRequestMatcher.withDefaults();
+    return new OrRequestMatcher(
+        paths.matcher(HttpMethod.GET, pattern), paths.matcher(HttpMethod.HEAD, pattern));
+  }
+
+  /**
+   * {@code Authorization: Bearer}를 읽는 곳. 재발급·로그아웃({@code /api/auth/**})은 쿠키로만 확인해서, actuator는 회원
+   * 토큰을 쓰지 않아서 헤더를 읽지 않아요. 프론트가 만료된 access token을 붙여 보내도 재발급이 401로 막히지 않게요 (헤더가 있으면 필터가 permitAll보다
+   * 먼저 검증해서 401을 내요).
    */
   static BearerTokenResolver bearerTokenResolver() {
     var bearer = new DefaultBearerTokenResolver();
     // 경로는 앱 안 경로로 봐요(요청 기록 필터와 같음). 전달 헤더(X-Forwarded-Prefix)가 바꾼 요청 주소로 보면 토큰을 무시하게 만들 수 있었어요(재검토)
-    return request ->
-        UrlPathHelper.rawPathInstance.getPathWithinApplication(request).startsWith("/api/auth/")
-            ? null
-            : bearer.resolve(request);
+    // /actuator/**도 회원 토큰을 쓰지 않아요. 지표(prometheus)는 MetricsAccessFilter가 따로 Bearer 지표 토큰을 보는데, 여기서 그
+    // 값을 JWT로 검증하면 401이 났어요(2026-11-16 보안 감사 4장)
+    return request -> {
+      String path = UrlPathHelper.rawPathInstance.getPathWithinApplication(request);
+      return path.startsWith("/api/auth/") || path.startsWith("/actuator/")
+          ? null
+          : bearer.resolve(request);
+    };
   }
 
   /**

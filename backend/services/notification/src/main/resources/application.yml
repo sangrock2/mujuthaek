@@ -36,6 +36,9 @@ spring:
 notification:
   internal:
     token: ${NOTIFICATION_INTERNAL_TOKEN:}             # api만 부르는 내부 API(/internal/stats) 비밀 값. 비면 같은 컴퓨터 요청만 받아요
+  metrics:                                          # /actuator/prometheus 문지기 (MetricsAccessFilter, 2026-11-16 보안 감사 4장)
+    token: ${METRICS_TOKEN:}                        # 있으면 Authorization: Bearer <값>일 때만 지표를 줘요
+    require-token: false                            # 토큰이 없을 때 지표를 막을지. 로컬·테스트는 열고, 운영(application-prod.yml)은 막아요
   mail:
     provider: ${NOTIFICATION_MAIL_PROVIDER:log}     # log: 보내지 않고 로그만, ses: AWS SES로 보내기 (키는 AWS_PROFILE에서)
     from: ${NOTIFICATION_MAIL_FROM:noreply@localhost}  # SES에서 인증한 보내는 주소
@@ -45,6 +48,7 @@ notification:
     ses:
       region: ${AWS_REGION:ap-northeast-2}
       max-per-second: ${NOTIFICATION_SES_MAX_PER_SECOND:1}  # 샌드박스 한도
+      configuration-set: ${NOTIFICATION_SES_CONFIGURATION_SET:} # SES 반송·신고 이벤트 대상으로 연결한 구성 세트
   push:                                             # 웹 푸시 (contracts/schemas/web-push.draft.md 4장)
     provider: ${NOTIFICATION_PUSH_PROVIDER:log}     # log: 보내지 않고 로그만, webpush: 푸시 서비스로 보내기 (VAPID 키 필요)
     vapid-public-key: ${PUSH_VAPID_PUBLIC_KEY:}     # api와 같은 공개키. 만들기: npx web-push generate-vapid-keys

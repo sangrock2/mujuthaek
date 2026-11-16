@@ -138,6 +138,7 @@ public class NoticeReportService {
     checkText(request);
     // 하루 상한을 먼저 봐요. 예전에는 상한 확인 전에 추출 서비스를 불러서, 상한과 상관없이 내부 요청을 무제한으로 만들 수 있었어요(2026-11-16 보안 감사
     // L-13)
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -186,6 +187,7 @@ public class NoticeReportService {
     if (reports.publishedTitle(noticeId).isEmpty()) {
       throw new CustomException(ErrorCode.NOTICE_NOT_FOUND);
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -225,6 +227,7 @@ public class NoticeReportService {
     if (reports.programTitle(programId).isEmpty()) {
       throw new CustomException(ErrorCode.NOT_FOUND, "창업지원 사업을 찾을 수 없어요");
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -266,6 +269,7 @@ public class NoticeReportService {
       throw new CustomException(
           ErrorCode.VALIDATION_FAILED, "field는 MISSING_NOTICE·WRONG_INFO·APP_ERROR·ETC 중 하나예요");
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {

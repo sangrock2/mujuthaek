@@ -3,7 +3,6 @@
 // 이 기기(브라우저 저장소)에 남는 개인 데이터 정리 (2026-11-16 보안 감사 L-3)
 // 로그아웃·탈퇴하면 지우고, 다른 계정으로 로그인하면 앞 계정이 남긴 값을 지워요. 공용 PC에서 다음 사람의 판정에 쓰이지 않게요.
 // 로그인하지 않은 사람은 지금처럼 이 기기에 저장해요
-import { clearBizProfile } from "@/features/business/profile";
 import { clearConditions } from "@/features/conditions/store";
 import { clearRecentSearches } from "@/features/search/recent";
 
@@ -48,7 +47,6 @@ function clearPersonalData() {
   sweep(() => window.sessionStorage);
   // 화면이 기억해 둔 값(메모리)도 비우고 보고 있는 화면에 알려요
   clearConditions();
-  clearBizProfile();
   clearRecentSearches();
 }
 

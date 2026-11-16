@@ -3,6 +3,7 @@
 // 사업 정보 (사업공간 · 사업 지원 판정 입력). 조건 입력과 같이 이 기기에 저장하고, 매출은 이번 탭에서만 써요
 import { useSyncExternalStore } from "react";
 import { snapshotRegions } from "@/shared/lib/regions";
+import { retainedDeviceValue } from "@/shared/lib/deviceRetention";
 import type { BizStage } from "@/features/business/mocks/business";
 
 /** 이 기기에 저장하는 사업 정보. 매출은 넣지 않아요 */
@@ -176,8 +177,18 @@ function readSnapshot(): BizProfileSnapshot {
   const raw = read(onDevice ? local : session, onDevice ? DEVICE_KEY : SESSION_DEVICE_KEY);
   let profile: BizProfileInput | null = null;
   try {
-    profile = raw ? { ...emptyBizProfile, ...(JSON.parse(raw) as Partial<BizProfileInput>) } : null;
+    if (raw) {
+      const parsed = JSON.parse(raw) as { savedAt?: unknown; data?: Partial<BizProfileInput> };
+      // 예전 평문 profile은 저장 시각이 없어 30일 보관을 보장할 수 없으므로 다시 입력받아요.
+      if (onDevice && (!retainedDeviceValue(parsed.savedAt) || !parsed.data)) {
+        write(local, DEVICE_KEY, null);
+      } else {
+        const value = onDevice ? parsed.data : parsed;
+        profile = { ...emptyBizProfile, ...value } as BizProfileInput;
+      }
+    }
   } catch {
+    write(onDevice ? local : session, onDevice ? DEVICE_KEY : SESSION_DEVICE_KEY, null);
     profile = null;
   }
   let restrictions: string[] | null = null;
@@ -228,10 +239,31 @@ export function saveBizProfile(profile: BizProfileInput, { revenue, restrictions
   write(
     onDevice ? local : session,
     onDevice ? DEVICE_KEY : SESSION_DEVICE_KEY,
-    JSON.stringify(profile),
+    JSON.stringify(onDevice ? { savedAt: Date.now(), data: profile } : profile),
   );
+  write(onDevice ? session : local, onDevice ? SESSION_DEVICE_KEY : DEVICE_KEY, null);
   write(session, REVENUE_KEY, revenue || null);
   write(session, RESTRICTIONS_KEY, restrictions === null ? null : JSON.stringify(restrictions));
+  emit();
+}
+
+/** 공통 저장 설정을 바꿀 때 사업 정보도 옮기고 이전 저장소 사본을 지워요. */
+export function moveBizProfileStorage(onDevice: boolean) {
+  const current = readSnapshot();
+  const profile = current.status === "ready" ? current.profile : null;
+  write(local, DEVICE_KEY, null);
+  write(session, SESSION_DEVICE_KEY, null);
+  if (profile) {
+    write(
+      onDevice ? local : session,
+      onDevice ? DEVICE_KEY : SESSION_DEVICE_KEY,
+      JSON.stringify(onDevice ? { savedAt: Date.now(), data: profile } : profile),
+    );
+  }
+}
+
+/** 주거 저장 설정이 바뀐 뒤 화면의 사업 정보도 갱신해요. */
+export function refreshBizProfile() {
   emit();
 }
 

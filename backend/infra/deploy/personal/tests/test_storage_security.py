@@ -72,11 +72,13 @@ class StorageSecurityTests(unittest.TestCase):
                                    worker_cpu_budget=contextlib.nullcontext)
             with patch.object(workers, 'BASE', base), patch.object(workers, 'compose', side_effect=compose), \
                  patch.object(workers, 'private_file', side_effect=private), patch.object(workers, 'migration_hash', return_value='b' * 64), \
-                 patch.object(workers.subprocess, 'run'), \
+                 patch.object(workers.subprocess, 'run'), patch.object(workers, 'load_images') as load, \
                  patch.object(workers, 'wait_worker', side_effect=[RuntimeError('not healthy'), None, None]):
                 with self.assertRaises(RuntimeError): workers.update(host, 'a' * 40)
             self.assertEqual((base / '.env').read_text(), original)
             self.assertEqual(calls[-2:], [original, original])
+            # Only this commit's two worker tags may come out of the archive (security audit section 4).
+            self.assertEqual(load.call_args.args[1], [f'mujuthaek-personal-{name}:' + 'a' * 40 for name in workers.WORKERS])
 
 
 if __name__ == '__main__':

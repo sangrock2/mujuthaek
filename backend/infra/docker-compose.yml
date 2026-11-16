@@ -64,8 +64,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # 암호는 명령행 인자(프로세스 목록·docker inspect의 Args에 보임)가 아니라 환경 변수로 넘겨요
+    environment:
+      FLYWAY_PASSWORD: ${COLLECTOR_DB_PASSWORD}
     command: >
-      -url=jdbc:postgresql://postgres:5432/${COLLECTOR_DB:-collector} -user=collector_app -password=${COLLECTOR_DB_PASSWORD}
+      -url=jdbc:postgresql://postgres:5432/${COLLECTOR_DB:-collector} -user=collector_app
       -locations=filesystem:/flyway/sql -connectRetries=10 migrate
     volumes:
       - ../services/collector/migrations:/flyway/sql:ro
@@ -78,8 +81,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # 암호는 명령행 인자(프로세스 목록·docker inspect의 Args에 보임)가 아니라 환경 변수로 넘겨요
+    environment:
+      FLYWAY_PASSWORD: ${EXTRACTION_DB_PASSWORD}
     command: >
-      -url=jdbc:postgresql://postgres:5432/extraction -user=extraction_app -password=${EXTRACTION_DB_PASSWORD}
+      -url=jdbc:postgresql://postgres:5432/extraction -user=extraction_app
       -locations=filesystem:/flyway/sql -connectRetries=10 migrate
     volumes:
       - ../services/extraction/migrations:/flyway/sql:ro

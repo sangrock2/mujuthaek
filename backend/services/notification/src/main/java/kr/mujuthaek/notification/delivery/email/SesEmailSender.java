@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.sesv2.model.Destination;
 import software.amazon.awssdk.services.sesv2.model.EmailContent;
 import software.amazon.awssdk.services.sesv2.model.MailFromDomainNotVerifiedException;
 import software.amazon.awssdk.services.sesv2.model.Message;
+import software.amazon.awssdk.services.sesv2.model.MessageHeader;
 import software.amazon.awssdk.services.sesv2.model.MessageRejectedException;
 import software.amazon.awssdk.services.sesv2.model.SendEmailRequest;
 import software.amazon.awssdk.services.sesv2.model.SendingPausedException;
@@ -34,6 +35,7 @@ class SesEmailSender implements EmailSender, AutoCloseable {
   private final SesV2Client ses;
   private final String from;
   private final String feedbackAddress;
+  private final String configurationSet;
   private final long intervalNanos;
   private long nextSendAt = System.nanoTime();
 
@@ -43,6 +45,7 @@ class SesEmailSender implements EmailSender, AutoCloseable {
     this.ses = SesV2Client.builder().region(Region.of(properties.ses().region())).build();
     this.from = properties.from();
     this.feedbackAddress = feedbackAddress;
+    this.configurationSet = properties.ses().configurationSet();
     this.intervalNanos =
         Duration.ofSeconds(1).toNanos() / Math.max(1, properties.ses().maxPerSecond());
   }
@@ -65,20 +68,33 @@ class SesEmailSender implements EmailSender, AutoCloseable {
   }
 
   SendEmailRequest request(EmailMessage message) {
+    var simple =
+        Message.builder()
+            .subject(text(message.subject()))
+            .body(Body.builder().text(text(message.text())).build());
+    String unsubscribeUrl = message.oneClickUnsubscribeUrl();
+    if (unsubscribeUrl != null && !unsubscribeUrl.isBlank()) {
+      // 메일 앱의 「수신 거부」 버튼(RFC 2369·8058). 대량 발송자는 Gmail·Yahoo가 요구해요(2026-11-16 보안 감사 4장)
+      simple.headers(
+          MessageHeader.builder()
+              .name("List-Unsubscribe")
+              .value("<" + EmailChannel.oneLine(unsubscribeUrl) + ">")
+              .build(),
+          MessageHeader.builder()
+              .name("List-Unsubscribe-Post")
+              .value("List-Unsubscribe=One-Click")
+              .build());
+    }
     var request =
         SendEmailRequest.builder()
             .fromEmailAddress(from)
             .destination(Destination.builder().toAddresses(message.to()).build())
-            .content(
-                EmailContent.builder()
-                    .simple(
-                        Message.builder()
-                            .subject(text(message.subject()))
-                            .body(Body.builder().text(text(message.text())).build())
-                            .build())
-                    .build());
+            .content(EmailContent.builder().simple(simple.build()).build());
     if (!feedbackAddress.isBlank()) {
       request.feedbackForwardingEmailAddress(feedbackAddress).replyToAddresses(feedbackAddress);
+    }
+    if (!configurationSet.isBlank()) {
+      request.configurationSetName(configurationSet);
     }
     return request.build();
   }

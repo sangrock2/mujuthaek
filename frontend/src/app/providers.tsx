@@ -22,7 +22,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SessionSync />
+      {/* SessionSync는 주소(usePathname)를 읽어서, 주소가 요청 때 정해지는 화면도 미리 그릴 수 있게 Suspense로 감싸요 */}
+      <Suspense fallback={null}>
+        <SessionSync />
+      </Suspense>
       <ServiceWorkerRegister />
       <OfflineBanner />
       <ServiceHoursBanner />

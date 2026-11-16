@@ -10,13 +10,16 @@ from psycopg.types.json import Jsonb
 from mujuthaek_platform import outbox
 
 MODES = {"legacy", "manual", "verified"}
+# 설정이 없으면 사람이 승인한 결과만 내보내요(실패 시 닫힘). 예전 기본값 legacy는 검수가 필요한 결과도 그대로 공개했고,
+# 이 값을 적지 않은 팀 compose가 그렇게 돌았어요(2026-11-16 보안 감사 4장). legacy는 명시적으로 적을 때만 써요
+DEFAULT_MODE = "manual"
 INITIAL_REVIEW = "운영 초기 표본 확인 전 공개 보류"
 VERIFICATION_REVIEW = "공고 전체 검수가 필요해 공개 보류"
 
 
 class PublicationGate:
     def __init__(self, mode: str | None = None):
-        self.mode = mode if mode is not None else os.getenv("EXTRACTION_PUBLICATION_MODE", "legacy")
+        self.mode = mode if mode is not None else (os.getenv("EXTRACTION_PUBLICATION_MODE") or "").strip() or DEFAULT_MODE
         if self.mode not in MODES:
             raise ValueError("EXTRACTION_PUBLICATION_MODE는 legacy·manual·verified 중 하나여야 합니다")
 

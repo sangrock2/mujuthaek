@@ -40,7 +40,7 @@ KST = timezone(timedelta(hours=9))
 # 신청 방법 낱말. 이메일을 먼저 찾아 지운 뒤 우편을 찾습니다(「전자우편」이 우편으로 읽히지 않게)
 CHANNEL_WORDS = (
     # 「메일로 송부」·전자우편 주소도 이메일입니다(2026-10-24 일곱 번째 채점: 「메일 (gh@…)로 송부」를 못 알아봄)
-    ("EMAIL", re.compile(r"이\s*메일|e\s*-?\s*mail|전자\s*우편|(?<![가-힣])메일|[\w.+-]+@[\w-]+\.[\w.]+", re.IGNORECASE)),
+    ("EMAIL", re.compile(r"이\s*메일|e\s*-?\s*mail|전자\s*우편|(?<![가-힣])메일|[\w.+-]{1,64}@[\w-]{1,63}\.[\w.]{1,253}", re.IGNORECASE)),
     ("FAX", re.compile(r"팩스|팩시밀리|fax", re.IGNORECASE)),
     ("ONLINE", re.compile(r"인터넷|온라인|홈페이지|누리집|모바일|웹\s*사이트|on\s*-?\s*line", re.IGNORECASE)),
     ("ONSITE", re.compile(r"방문|현장|창구|내방")),
@@ -60,11 +60,13 @@ APPLYING_KINDS = {"APPLICATION", "DOCUMENT_SUBMISSION"}
 ONSITE_KINDS = {"CONTRACT", "VIEWING"}
 
 # 시각: 「10:00」「10시」「10시 30분」「오후 6시」「6시 반」. 「24시간」「1시간」 같은 길이는 빼고, 「2026.10.」 뒤 숫자는 보지 않습니다
-TIME = re.compile(r"(오전|오후|아침|낮|저녁|밤)?\s*(?<![\d.])(\d{1,2})\s*(?::\s*(\d{2})|시(?!\s*간)(?:\s*(\d{1,2})\s*분|\s*(반))?)")
+TIME = re.compile(r"(?:(오전|오후|아침|낮|저녁|밤)\s*)?(?<![\d.])(\d{1,2})\s*(?::\s*(\d{2})|시(?!\s*간)(?:\s*(\d{1,2})\s*분|\s*(반))?)")
 EVENING = {"오후", "저녁", "밤"}
 # 「12~13시」처럼 뒤 시각에만 「시」가 붙은 시 단위 범위의 앞 시각(2026-10-24 세 번째 채점: 「점심시간 12~13시 제외」의 12를 시각으로
 # 읽지 못해 맞는 쉬는 시각 12:00~13:00이 지워짐). 「1~2시간」 같은 길이와 날짜(「10.12~13」) 뒤 숫자는 보지 않습니다
-HOUR_RANGE_START = re.compile(r"(오전|오후|아침|낮|저녁|밤)?\s*(?<![\d.:])(\d{1,2})\s*(?=[~∼～〜\-–]\s*(?:오전|오후|아침|낮|저녁|밤)?\s*\d{1,2}\s*시(?!\s*간))")
+HOUR_RANGE_START = re.compile(
+    r"(?:(오전|오후|아침|낮|저녁|밤)\s*)?(?<![\d.:])(\d{1,2})\s*(?=[~∼～〜\-–]\s*(?:오전|오후|아침|낮|저녁|밤)?\s*\d{1,2}\s*시(?!\s*간))"
+)
 DAY_WORDS = {
     "MON": "월",
     "TUE": "화",
@@ -468,12 +470,25 @@ ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 CLUE_FOR_OTHER = "DOCUMENT_CLUE_FOR_OTHER_DOCUMENT"
 EXCLUSION_WORDS = re.compile(r"제외|면제|제출\s*하지\s*않|작성\s*하지\s*않|생략")
 CLAUSE_BREAK = re.compile(r"[.。\n※•▪◦|]|(?<=[다음함])\s")
-NAME_ASIDES = re.compile(r"\([^)]*\)|[‘’'\"“”「」『』]")
+NAME_QUOTES = str.maketrans("", "", "‘’'\"“”「」『』")
+
+
+def _without_name_asides(text: str) -> str:
+    """괄호 뒤 닫힘을 다시 찾지 않고 한 번씩 전진해요. 닫히지 않은 괄호는 원문대로 둡니다."""
+    parts, at = [], 0
+    while (start := text.find("(", at)) >= 0:
+        end = text.find(")", start + 1)
+        if end < 0:
+            break
+        parts.append(text[at:start])
+        at = end + 1
+    parts.append(text[at:])
+    return "".join(parts).translate(NAME_QUOTES)
 
 
 def _name_key(name: str) -> str:
     """서류 이름 비교 열쇠: 괄호 안 설명·따옴표를 빼고 정규화(「금융정보 등 (금융·신용·보험정보) 제공 동의서」 ↔ 「‘금융정보 등 제공 동의서’」)."""
-    return normalize(NAME_ASIDES.sub("", name or ""))
+    return normalize(_without_name_asides(name or ""))
 
 
 def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> str | None:
@@ -483,7 +498,7 @@ def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> st
     own = _name_key(str(document.get("name") or ""))
     keys = [(name, _name_key(name)) for name in others]
     keys = [(name, key) for name, key in keys if len(key) >= 4 and key not in own and own not in key]
-    for clause in CLAUSE_BREAK.split(NAME_ASIDES.sub("", text)):
+    for clause in CLAUSE_BREAK.split(_without_name_asides(text)):
         if not EXCLUSION_WORDS.search(clause):
             continue
         flat = normalize(clause)
@@ -498,7 +513,7 @@ def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> st
 # 날짜–장소 짝(2026-10-24 여섯 번째 채점: 한 표 칸에 「03.25.(수) (14:00~17:00) …주택계약실 | 03.26.(목) … 임대공급운영팀」처럼 날짜·장소가
 # 여럿 섞여 3.25 계약 장소가 3.26 장소로 게시됨). 근거에서 그 일정 날짜 바로 뒤(다음 날짜·칸 구분 전까지)에 장소 낱말이 있는데 결과 장소의
 # 이름 낱말이 그 안에 없고 다른 장소 낱말이 있으면 장소를 비웁니다(틀린 장소보다 빈 장소)
-PLACE_WORD = re.compile(r"[가-힣A-Za-z0-9]+(?:실|팀|지사|센터|본부|사무소|사무실|관리소|접수처|주민센터|세대)")
+PLACE_WORD = re.compile(r"[가-힣A-Za-z0-9]{1,128}(?:실|팀|지사|센터|본부|사무소|사무실|관리소|접수처|주민센터|세대)")
 DATE_TOKEN = re.compile(r"\d{1,4}\s*[./]\s*\d{1,2}\s*[./]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일")
 
 

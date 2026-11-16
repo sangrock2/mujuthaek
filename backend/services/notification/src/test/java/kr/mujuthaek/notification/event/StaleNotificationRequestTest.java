@@ -1,5 +1,6 @@
 package kr.mujuthaek.notification.event;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -18,6 +19,7 @@ import java.util.UUID;
 import kr.mujuthaek.notification.notification.NotificationService;
 import kr.mujuthaek.notification.notification.UserDataCleaner;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -71,5 +73,23 @@ class StaleNotificationRequestTest {
     listener.onMessage(request(NOW.minus(Duration.ofHours(1))));
     listener.onMessage(request(NOW.minus(Duration.ofDays(6))));
     verify(notifications, times(2)).handle(any());
+  }
+
+  @Test
+  void missingInvalidOrFutureTimeCannotBypassTheReplayWindow() {
+    String original = new String(request(NOW).getBody(), StandardCharsets.UTF_8);
+    for (String body :
+        new String[] {
+          original.replace("\"occurredAt\":\"" + NOW + "\",", ""),
+          original.replace(NOW.toString(), "not-a-time"),
+          original.replace(NOW.toString(), NOW.plus(Duration.ofDays(90)).toString())
+        }) {
+      assertThatThrownBy(
+              () ->
+                  listener.onMessage(
+                      new Message(body.getBytes(StandardCharsets.UTF_8), new MessageProperties())))
+          .isInstanceOf(AmqpRejectAndDontRequeueException.class);
+    }
+    verify(notifications, never()).handle(any());
   }
 }

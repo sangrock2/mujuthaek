@@ -21,6 +21,7 @@ public enum ErrorCode {
   CONFLICT(HttpStatus.CONFLICT, "이미 처리된 요청과 겹쳐요"),
   RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 너무 잦아요. 잠시 뒤에 다시 해 주세요"),
   INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "서버 오류가 났어요"),
+  QUERY_TIMEOUT(HttpStatus.SERVICE_UNAVAILABLE, "조회 시간이 오래 걸려 중단했어요. 잠시 뒤 다시 시도해 주세요"),
 
   // notice
   NOTICE_NOT_FOUND(HttpStatus.NOT_FOUND, "공고를 찾을 수 없어요"),

@@ -34,4 +34,9 @@ public record Borrower(
   public Borrower {
     childBirthDates = childBirthDates == null ? null : List.copyOf(childBirthDates);
   }
+
+  @Override
+  public String toString() {
+    return "Borrower[REDACTED]";
+  }
 }

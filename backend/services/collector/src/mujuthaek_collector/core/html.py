@@ -11,6 +11,40 @@ from bs4 import BeautifulSoup, CData, NavigableString, Tag
 
 BLOCK_TAGS = ["p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt"]
 DROPPED_TAGS = ("script", "style")  # 본문 글자에서 통째로 빼는 태그
+MAX_TABLE_ROWS = 10_000
+MAX_TABLE_COLUMNS = 256
+MAX_TABLE_CELLS = 250_000  # 병합 펼치기·빈칸 채우기를 포함한 문서 전체 할당 예산
+MAX_TABLES = 4096
+
+
+class _GridBudget:
+    def __init__(self):
+        self.used = 0
+
+    def reserve(self, count: int) -> None:
+        if count > MAX_TABLE_CELLS - self.used:
+            raise ValueError("HTML table cell budget exceeded")
+        self.used += count
+
+
+def _span(cell: Tag, name: str, remaining_rows: int) -> int:
+    raw = str(cell.get(name, 1) or 1).strip()
+    if not re.fullmatch(r"[0-9]{1,5}", raw):
+        raise ValueError("Invalid HTML table span")
+    count = int(raw)
+    if name == "rowspan":
+        # rowspan=0은 표 끝까지. 존재하지 않는 미래 행을 만들지 않아요.
+        return min(count, remaining_rows) if count else remaining_rows
+    if not 1 <= count <= MAX_TABLE_COLUMNS:
+        raise ValueError("HTML table column limit exceeded")
+    return count
+
+
+def _table_cells(row: Tag, skip: Collection[int] = ()) -> list[Tag]:
+    cells = row.find_all(["td", "th"], recursive=False, limit=MAX_TABLE_COLUMNS + 1)
+    if len(cells) > MAX_TABLE_COLUMNS:
+        raise ValueError("HTML table column limit exceeded")
+    return [cell for cell in cells if id(cell) not in skip]
 
 
 def soup(markup: str) -> BeautifulSoup:
@@ -43,13 +77,16 @@ def js_args(script: str, func: str) -> list[str] | None:
 def table_grid(table: Tag) -> list[list[str]]:
     """표를 격자로. 합쳐진 칸(colspan·rowspan)은 펼쳐서 첫 칸에만 값을 두고 나머지는 빈 칸으로 둬요.
     PDF 표(pdfplumber)와 같은 모양이 돼서 두 줄 머리글·세로 병합 처리를 같은 함수로 할 수 있어요."""
-    rows = [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
-    return _grid([tr.find_all(["td", "th"], recursive=False) for tr in rows], text_of)
+    rows = _table_rows(table, ())
+    return _grid([_table_cells(tr) for tr in rows], text_of)
 
 
-def _grid(rows: list[list[Tag]], value: Callable[[Tag], Any]) -> list[list[Any]]:
+def _grid(rows: list[list[Tag]], value: Callable[[Tag], Any], budget: _GridBudget | None = None) -> list[list[Any]]:
     """table_grid의 격자 만들기. rows는 줄마다 칸(td·th) 태그, value는 칸 하나의 값이에요
     (body_text는 안쪽 표를 품은 칸 조각을 넘겨요)."""
+    if len(rows) > MAX_TABLE_ROWS:
+        raise ValueError("HTML table row limit exceeded")
+    budget = budget or _GridBudget()
     grid: list[list[Any]] = []
     pending: dict[tuple[int, int], str] = {}
     for r, row in enumerate(rows):
@@ -59,8 +96,11 @@ def _grid(rows: list[list[Tag]], value: Callable[[Tag], Any]) -> list[list[Any]]
             while (r, c) in pending:
                 cells.append(pending.pop((r, c)))
                 c += 1
-            colspan = int(cell.get("colspan", 1) or 1)
-            rowspan = int(cell.get("rowspan", 1) or 1)
+            colspan = _span(cell, "colspan", len(rows) - r)
+            rowspan = _span(cell, "rowspan", len(rows) - r)
+            if c + colspan > MAX_TABLE_COLUMNS:
+                raise ValueError("HTML table column limit exceeded")
+            budget.reserve(colspan * rowspan)
             text = value(cell)
             for k in range(colspan):
                 cells.append(text if k == 0 else "")
@@ -72,7 +112,11 @@ def _grid(rows: list[list[Tag]], value: Callable[[Tag], Any]) -> list[list[Any]]
             c += 1
         grid.append(cells)
     width = max((len(row) for row in grid), default=0)
-    return [row + [""] * (width - len(row)) for row in grid]
+    padding = sum(width - len(row) for row in grid)
+    budget.reserve(padding)
+    for row in grid:
+        row.extend([""] * (width - len(row)))
+    return grid
 
 
 def string_kinds(tag: Tag) -> Collection[type]:
@@ -96,9 +140,13 @@ def body_text(node: Tag | None, skip: Collection[int] = ()) -> str:
     if node is None:
         return ""
     tables: dict[int, list[list[Any]]] = {}
-    for table in reversed(node.find_all("table")):  # 앞에서부터 찾은 표를 거꾸로 돌면 안쪽 표가 바깥 표보다 먼저예요
-        rows = [[c for c in tr.find_all(["td", "th"], recursive=False) if id(c) not in skip] for tr in _table_rows(table, skip)]
-        grid = _grid(rows, lambda cell: _cell_parts(cell, tables, skip))
+    source_tables = node.find_all("table", limit=MAX_TABLES + 1)
+    if len(source_tables) > MAX_TABLES:
+        raise ValueError("HTML table count limit exceeded")
+    budget = _GridBudget()
+    for table in reversed(source_tables):  # 앞에서부터 찾은 표를 거꾸로 돌면 안쪽 표가 바깥 표보다 먼저예요
+        rows = [_table_cells(tr, skip) for tr in _table_rows(table, skip)]
+        grid = _grid(rows, lambda cell: _cell_parts(cell, tables, skip), budget)
         tables[id(table)] = [row for row in grid if any(row)]
     text = "".join(_pieces(node, tables, skip)).replace("\xa0", " ")
     return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines() if line.strip())
@@ -115,6 +163,8 @@ def _table_rows(table: Tag, skip: Collection[int]) -> list[Tag]:
         elif isinstance(child, Tag) and child.name != "table" and child.name not in DROPPED_TAGS and id(child) not in skip:
             if child.name == "tr":
                 rows.append(child)
+                if len(rows) > MAX_TABLE_ROWS:
+                    raise ValueError("HTML table row limit exceeded")
             stack.append(iter(child.contents))
     return rows
 

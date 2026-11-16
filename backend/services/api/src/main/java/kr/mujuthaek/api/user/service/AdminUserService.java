@@ -300,16 +300,20 @@ public class AdminUserService {
    * 최상위 관리자 넘기기. 받는 사람은 일반 관리자여야 하고, 넘긴 사람은 모든 권한을 가진 일반 관리자가 돼요 (새 최상위가 나중에 조정). 로그인한 지 10분 안에만.
    */
   @Transactional
-  public AdminUserResponse transfer(UUID userId, UUID actorId) {
+  public AdminUserResponse transfer(UUID userId, UUID actorId, Instant authenticatedAt) {
     requireSuper(actorId);
     notSelf(userId, actorId);
     Instant now = clock.instant();
-    var me = users.find(actorId, now).orElseThrow();
-    if (me.lastLoginAt() == null
-        || me.lastLoginAt().toInstant().isBefore(now.minus(TRANSFER_LOGIN_WINDOW))) {
+    // 다른 기기의 로그인·토큰 회전이 이 세션의 최근 인증 조건을 만족시키면 안 돼요.
+    // auth_time 없는 기존 JWT/기존 refresh 계보는 이 동작에 한해 다시 로그인해야 해요.
+    if (authenticatedAt == null
+        || authenticatedAt.isAfter(now)
+        || authenticatedAt.isBefore(now.minus(TRANSFER_LOGIN_WINDOW))) {
       throw forbidden("최상위 관리자는 로그인한 지 10분 안에만 넘길 수 있어요. 다시 로그인해 주세요");
     }
-    users.lockRole(actorId);
+    if (!"SUPER_ADMIN".equals(users.lockRole(actorId).orElse(null))) {
+      throw forbidden("최상위 관리자만 할 수 있어요");
+    }
     String current =
         users.lockRole(userId).orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
     if (!"ADMIN".equals(current)) {

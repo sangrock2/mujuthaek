@@ -74,6 +74,7 @@ public class AreaReportService {
     if (!reports.hasLocations(noticeId)) {
       throw new CustomException(ErrorCode.NOT_FOUND, "생활권 정보가 있는 공고가 아니에요");
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {

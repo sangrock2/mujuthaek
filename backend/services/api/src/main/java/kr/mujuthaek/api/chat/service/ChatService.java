@@ -197,6 +197,8 @@ public class ChatService {
   @Transactional
   public void report(UUID messageId, UUID userId, ReportRequest request) {
     String detail = checkedDetail(request.detail());
+    messages.lockSender(userId);
+    messages.lockMessage(messageId);
     MessageRow row =
         messages
             .find(messageId, null)
@@ -240,8 +242,8 @@ public class ChatService {
   }
 
   /**
-   * 탈퇴한 회원의 채팅 데이터 줄을 지워요 (요구사항 3-16: 탈퇴 후 데이터 0건). 보고 있는 사람 화면에서도 내려가게 지운 메시지를 방송해요(방송은 커밋 뒤). 탈퇴
-   * 트랜잭션에 함께 들어가요(커밋 직전에 불림, notice·area 제보 지우기와 같아요).
+   * 탈퇴한 회원의 메시지·좋아요와 신고의 개인 정보를 지워요. 신고는 회원 ID·자유 문구 없이 검토 작업으로 남겨, 숨긴 글이 검토 큐에서 사라지지 않게 해요. 보고 있는
+   * 사람 화면에서도 내려가게 지운 메시지를 방송해요(방송은 커밋 뒤). 탈퇴 트랜잭션에 함께 들어가요(커밋 직전에 불림, notice·area 제보 지우기와 같아요).
    */
   @Transactional
   public void forget(UUID userId) {

@@ -1419,7 +1419,11 @@ export function liveUsers(query: string, filter: AdminUserFilter, page: number) 
   return api.get<AdminUsersPage>(`/api/admin/users?${q}`);
 }
 
-/** 이름만 (처리 기록의 관리자 이름). 최대 100명, 관리자 누구나 */
+/**
+ * 이름만 (처리 기록의 관리자 이름). 최대 100명.
+ * 처리 기록·회원 조회·관리자 지정·권한 부여/회수·이용 정지 권한(ACTIVITY·USERS_VIEW·ADMIN_APPOINT·PERMISSION_GRANT·
+ * PERMISSION_REVOKE·USERS_SUSPEND) 가운데 하나가 있어야 해요. 없으면 403이고, 화면은 회원 ID 앞부분으로 보여요
+ */
 export function liveUserNames(ids: string[]) {
   const q = ids.slice(0, 100).map(encodeURIComponent).join(",");
   return api.get<AdminUserName[]>(`/api/admin/users/names?ids=${q}`);

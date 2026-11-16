@@ -1,0 +1,28 @@
+# Explicit opt-in only. Keep compose.prod.yml first and provide the verified activation environment last.
+# service_isolation.py prepares definitions/policies and validates the merged configuration before cutover.
+x-service-isolation: ${SERVICE_ISOLATION_READY:?run the offline service-isolation readiness check first}
+services:
+  api:
+    environment:
+      RABBITMQ_USER: mujuthaek-api
+      RABBITMQ_PASSWORD: ${API_MQ_PASSWORD:?isolated API broker password required}
+      SPRING_RABBITMQ_DYNAMIC: "false"
+      AWS_ACCESS_KEY_ID: ${API_READER_AWS_ACCESS_KEY_ID:?API reader identity required}
+      AWS_SECRET_ACCESS_KEY: ${API_READER_AWS_SECRET_ACCESS_KEY:?API reader secret required}
+  notification:
+    environment:
+      RABBITMQ_USER: mujuthaek-notification
+      RABBITMQ_PASSWORD: ${NOTIFICATION_MQ_PASSWORD:?isolated notification broker password required}
+      SPRING_RABBITMQ_DYNAMIC: "false"
+  collector:
+    environment:
+      RABBITMQ_URL: amqp://mujuthaek-collector:${COLLECTOR_MQ_PASSWORD:?isolated collector broker password required}@rabbitmq:5672/%2F
+      MUJUTHAEK_MANAGED_TOPOLOGY: "true"
+      AWS_ACCESS_KEY_ID: ${COLLECTOR_WRITER_AWS_ACCESS_KEY_ID:?collector writer identity required}
+      AWS_SECRET_ACCESS_KEY: ${COLLECTOR_WRITER_AWS_SECRET_ACCESS_KEY:?collector writer secret required}
+  extraction:
+    environment:
+      RABBITMQ_URL: amqp://mujuthaek-extraction:${EXTRACTION_MQ_PASSWORD:?isolated extraction broker password required}@rabbitmq:5672/%2F
+      MUJUTHAEK_MANAGED_TOPOLOGY: "true"
+      AWS_ACCESS_KEY_ID: ${EXTRACTION_READER_AWS_ACCESS_KEY_ID:?extraction reader identity required}
+      AWS_SECRET_ACCESS_KEY: ${EXTRACTION_READER_AWS_SECRET_ACCESS_KEY:?extraction reader secret required}

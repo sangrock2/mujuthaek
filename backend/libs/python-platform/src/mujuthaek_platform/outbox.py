@@ -50,7 +50,12 @@ def open_channel(connection):
     """
     channel = connection.channel()
     channel.confirm_delivery()
-    channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
+    from mujuthaek_platform.broker import managed_topology
+
+    if managed_topology():
+        channel.exchange_declare(exchange=EXCHANGE, passive=True)
+    else:
+        channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
     return channel
 
 

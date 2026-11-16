@@ -81,7 +81,7 @@ class Source(ABC):
     name: str
     provider: str  # 이벤트의 provider (SH, GH, BMC …)
     boards: list[Board]
-    legacy_tls = False  # 예전 보안 연결만 받는 기관
+    legacy_tls_hosts: tuple[str, ...] = ()  # 예전 보안 연결(TLS SECLEVEL=1)만 받는 호스트. 2026-11-16 기준으로 쓰는 출처는 없어요
     prefer_doc = "pdf"  # 공고문 형식 우선순위
 
     # ── 기관별로 구현 ──────────────────────────────────────────

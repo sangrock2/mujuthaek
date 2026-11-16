@@ -62,6 +62,13 @@ public class NoticeReportRepository {
   }
 
   /** 그 회원이 since 뒤에 낸 제보 수. */
+  public void lockReporter(UUID reporterId) {
+    jdbc.sql("select 1 from pg_advisory_xact_lock(hashtextextended(:key, 0))")
+        .param("key", "report-quota:" + reporterId)
+        .query(Integer.class)
+        .single();
+  }
+
   public int countSince(UUID reporterId, Instant since) {
     return jdbc.sql(
             "select count(*) from notice.notice_reports where reporter_id = :r and created_at >="

@@ -331,6 +331,9 @@ export function ReportPanel({
   const [note, setNote] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
+  // 링크로 넘어온 화면 이름·오류 코드는 숨기지 않고 보여 주고, 빼고 보낼 수도 있어요 (2026-11-16 보안 감사 4장)
+  const [attach, setAttach] = useState(true);
+  const linked = Boolean(screen || context);
   const loggedIn = USE_MOCKS || !!session;
 
   if (!loggedIn && !isPending) return <LoginPrompt what="제보" />;
@@ -346,8 +349,8 @@ export function ReportPanel({
       await sendReport(null, {
         field: kind,
         note: note.trim(),
-        screen: screen ?? "내 정보",
-        currentValue: context,
+        screen: (attach && screen) || "내 정보",
+        currentValue: attach ? context : undefined,
       });
       setState("sent");
       setNote("");
@@ -411,6 +414,23 @@ export function ReportPanel({
               className="rounded-control border-line bg-surface text-text resize-y border border-solid px-[16px] py-[14px] text-[16px] font-medium"
             />
           </label>
+          {linked && attach && (
+            <div className="bg-bg flex flex-wrap items-center gap-x-[12px] gap-y-[4px] rounded-[14px] px-[16px] py-[12px] text-[14px]">
+              <span className="text-text-sub">
+                함께 보내요:{" "}
+                {[screen && `보낸 화면 「${screen}」`, context && `오류 코드 「${context}」`]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAttach(false)}
+                className="text-brand min-h-[32px] cursor-pointer border-0 bg-transparent p-0 text-[14px] font-bold"
+              >
+                빼고 보내기
+              </button>
+            </div>
+          )}
           {error && (
             <span role="alert" className="text-danger-text text-[14px]">
               {error}

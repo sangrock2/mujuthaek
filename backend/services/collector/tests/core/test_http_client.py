@@ -208,3 +208,51 @@ def test_robots_txt_with_stacked_compression_is_unavailable_and_long_one_is_cut(
         assert "공고" in client.text("https://long-robots.example/late/list.do")
         with pytest.raises(BlockedError):
             client.text("https://long-robots.example/early/list.do")
+
+
+def test_legacy_tls_is_limited_to_named_hosts():
+    """낮춘 TLS 설정은 정한 호스트에만 쓰고, 인증서 확인은 켜 둬요(2026-11-16 보안 감사 4장)."""
+    import ssl
+
+    with PoliteClient(legacy_tls_hosts=("old.example.kr",)) as client:
+        legacy = client._client._transport_for_url(httpx.URL("https://old.example.kr/notice"))
+        others = [client._client._transport_for_url(httpx.URL(url)) for url in ("https://files.example.kr/a.pdf", "https://a.old.example.kr/", "http://old.example.kr/")]
+        assert all(other is not legacy for other in others)
+        context = legacy.pool._ssl_context
+        assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+        assert len(context.get_ciphers()) >= len(others[0].pool._ssl_context.get_ciphers())
+    with PoliteClient() as client:
+        assert not client._client._mounts
+
+
+@pytest.mark.parametrize("host", ["*.example.kr", "Old.Example.kr", "old.example.kr:8443", "old.example.kr/path", ""])
+def test_legacy_tls_hosts_must_be_exact_names(host):
+    with pytest.raises(ValueError):
+        PoliteClient(legacy_tls_hosts=(host,))
+
+
+def test_redirect_referer_drops_query_and_cross_host_path():
+    """이동 뒤 Referer에 이전 주소의 쿼리(serviceKey 등)를 싣지 않아요(2026-11-16 보안 감사 5장)."""
+    seen = {}
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if request.url.host == "api.example.kr":
+            return httpx.Response(302, headers={"Location": "https://files.example.kr/list?page=1"})
+        if request.url.path == "/list":
+            seen["cross"] = request.headers.get("Referer")
+            return httpx.Response(302, headers={"Location": "/final"})
+        seen["same"] = request.headers.get("Referer")
+        return httpx.Response(200, text="ok")
+
+    with make_client(handler) as client:
+        assert client.text("https://api.example.kr/v1/items?serviceKey=placeholder-value&page=1") == "ok"
+    assert seen == {"cross": "https://api.example.kr/", "same": "https://files.example.kr/list"}
+
+
+def test_redirect_referer_is_not_sent_on_downgrade():
+    from mujuthaek_collector.core.http_client import redirect_referer
+
+    assert redirect_referer("https://a.example.kr/x?k=v", "http://a.example.kr/y") is None
+    assert redirect_referer("http://a.example.kr/x?k=v#f", "http://a.example.kr/y") == "http://a.example.kr/x"

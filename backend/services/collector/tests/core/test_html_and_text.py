@@ -1,12 +1,34 @@
 import time
 from datetime import date
 
+import pytest
+
+from mujuthaek_collector.core import html as html_tools
 from mujuthaek_collector.core.html import body_text, js_args, parse_date, soup, table_grid
 
 
 def test_table_grid_expands_merged_cells():
     table = soup("<table><tr><th rowspan=2>주택형</th><th colspan=2>임대조건</th></tr><tr><th>보증금</th><th>월임대료</th></tr></table>").table
     assert table_grid(table) == [["주택형", "임대조건", ""], ["", "보증금", "월임대료"]]
+
+
+def test_table_grid_does_not_allocate_nonexistent_future_rows(monkeypatch):
+    monkeypatch.setattr(html_tools, "MAX_TABLE_CELLS", 2)
+    table = soup('<table><tr><td rowspan="99999" colspan="2">안내</td></tr></table>').table
+    assert table_grid(table) == [["안내", ""]]
+
+
+def test_table_grid_rejects_span_before_reading_cell_text():
+    table = soup('<table><tr><td colspan="99999">안내</td></tr></table>').table
+    with pytest.raises(ValueError, match="column limit"):
+        table_grid(table)
+
+
+def test_body_text_has_document_wide_cell_budget(monkeypatch):
+    monkeypatch.setattr(html_tools, "MAX_TABLE_CELLS", 3)
+    table = '<table><tr><td colspan="2">안내</td></tr></table>'
+    with pytest.raises(ValueError, match="cell budget"):
+        body_text(soup("<div>" + table * 2 + "</div>").div)
 
 
 def test_body_text_keeps_table_rows_and_joins_split_spans():

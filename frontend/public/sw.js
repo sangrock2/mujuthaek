@@ -2,17 +2,43 @@
 const CACHE_NAME = "mujuthaek-v1";
 const OFFLINE_URL = "/offline";
 const PRECACHE_URLS = [OFFLINE_URL, "/icons/icon-192.png", "/icons/badge-96.png"];
-// 백엔드 주소 (등록할 때 /sw.js?api=… 로 받아요). 알림을 봤는지·눌렀는지 알릴 때 써요
-const API_BASE = (() => {
-  const api = new URL(self.location.href).searchParams.get("api");
-  return api && /^https?:\/\//.test(api) ? api.replace(/\/$/, "") : null;
-})();
+const LOOPBACK = ["localhost", "127.0.0.1", "[::1]"];
+
+/**
+ * 알림을 봤는지·눌렀는지 알릴 API 주소. 기본은 이 사이트(운영은 같은 주소로 API를 넘겨요).
+ * 등록할 때 /sw.js?api=… 로 다른 주소를 받을 수 있지만, 이 사이트와 워커가 모두 로컬(loopback)일 때만 써요.
+ * 예전에는 아무 출처나 받아서, 스크립트가 끼어들면 알림 ID를 다른 호스트로 계속 보내게 할 수 있었어요 (2026-11-16 보안 감사 4장)
+ */
+function apiBaseFrom(workerHref) {
+  const worker = new URL(workerHref);
+  const value = worker.searchParams.get("api");
+  if (!value) return worker.origin;
+  let api;
+  try {
+    api = new URL(value);
+  } catch {
+    return worker.origin;
+  }
+  if (api.origin === worker.origin) return worker.origin;
+  const local =
+    LOOPBACK.includes(worker.hostname) &&
+    LOOPBACK.includes(api.hostname) &&
+    (api.protocol === "http:" || api.protocol === "https:") &&
+    !api.username &&
+    !api.password;
+  return local ? api.origin : worker.origin;
+}
+const API_BASE = apiBaseFrom(self.location.href);
 
 /** 알림함 줄마다 「떴어요(shown)·눌렀어요(clicked)」를 알려요 (로그인 없이, 실패해도 그냥 넘어가요) */
 function report(ids, event) {
   if (!API_BASE || !Array.isArray(ids) || ids.length === 0) return Promise.resolve();
+  // 「.」「..」은 인코딩해도 경로를 한 칸 위로 줄여서 다른 API를 부르게 돼요
+  const valid = ids.filter(
+    (id) => typeof id === "string" && id !== "" && id !== "." && id !== "..",
+  );
   return Promise.all(
-    ids.map((id) =>
+    valid.map((id) =>
       fetch(`${API_BASE}/api/v1/notifications/${encodeURIComponent(id)}/${event}`, {
         method: "POST",
         credentials: "omit",

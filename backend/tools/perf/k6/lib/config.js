@@ -1,7 +1,9 @@
 // 테스트 종류별 부하 모양과 합격 기준. 문서 「무주택자들 성능 테스트 계획」의 표와 같은 값이에요.
 // 개선 전후를 비교하려면 이 파일을 바꾸지 않아야 해요 (바꾸면 run.sh가 meta.json에 git SHA로 남겨요)
 
-export const BASE_URL = __ENV.BASE_URL || 'http://3.37.131.73';
+// 서버 주소는 저장소에 기본값으로 두지 않아요(tools/perf/.env의 BASE_URL, 2026-11-16 보안 감사 4장)
+export const BASE_URL = __ENV.BASE_URL;
+if (!BASE_URL) throw new Error('BASE_URL을 환경변수로 줘요 (tools/perf/.env)');
 export const TEST = __ENV.TEST || 'smoke';
 
 // API 종류별 응답 시간 목표(ms): 조회 lookup · 목록·검색 search · 판정 judge

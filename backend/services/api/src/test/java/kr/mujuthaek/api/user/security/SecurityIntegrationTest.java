@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -202,6 +203,61 @@ class SecurityIntegrationTest {
                 .param("kinds", ",")
                 .header("Authorization", bearer(claimsAdmin)))
         .andExpect(status().isForbidden());
+
+    jdbc.update("delete from account.admin_permissions where user_id = ?", user.userId());
+    jdbc.update("update account.users set role = 'USER' where id = ?", user.userId());
+  }
+
+  /**
+   * HEAD도 GET 전용 규칙을 따라요. 예전에는 HEAD가 GET 규칙을 지나 /api/admin/reviews/** 규칙에 걸려, 공고 검수 권한만으로 혜택 검수
+   * 대기열이 실행됐어요(2026-11-16 보안 감사 4장).
+   */
+  @Test
+  void headRequestsFollowTheGetOnlyAdminRules() throws Exception {
+    LoginUser user = login("2098");
+    var claimsAdmin = new LoginUser(user.userId(), user.nickname(), "ADMIN");
+    jdbc.update("update account.users set role = 'ADMIN' where id = ?", user.userId());
+    jdbc.update(
+        "insert into account.admin_permissions (user_id, permission) values (?, 'NOTICE_REVIEW')",
+        user.userId());
+
+    mvc.perform(
+            head("/api/admin/reviews/queue")
+                .param("kinds", "BENEFIT")
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            head("/api/admin/reviews/queue")
+                .param("kinds", "NOTICE")
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(result -> assertThat(result.getResponse().getStatus()).isNotEqualTo(403));
+
+    jdbc.update("delete from account.admin_permissions where user_id = ?", user.userId());
+    jdbc.update("update account.users set role = 'USER' where id = ?", user.userId());
+  }
+
+  /** 회원 이름 조회는 처리 기록·회원 목록을 볼 수 있는 관리자만 (2026-11-16 보안 감사 4장). */
+  @Test
+  void userNamesNeedAnActivityOrUserListPermission() throws Exception {
+    LoginUser user = login("2097");
+    var claimsAdmin = new LoginUser(user.userId(), user.nickname(), "ADMIN");
+    jdbc.update("update account.users set role = 'ADMIN' where id = ?", user.userId());
+
+    mvc.perform(
+            get("/api/admin/users/names")
+                .param("ids", user.userId().toString())
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isForbidden());
+
+    jdbc.update(
+        "insert into account.admin_permissions (user_id, permission) values (?, 'ACTIVITY')",
+        user.userId());
+    mvc.perform(
+            get("/api/admin/users/names")
+                .param("ids", user.userId().toString())
+                .header("Authorization", bearer(claimsAdmin)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].id").value(user.userId().toString()));
 
     jdbc.update("delete from account.admin_permissions where user_id = ?", user.userId());
     jdbc.update("update account.users set role = 'USER' where id = ?", user.userId());
