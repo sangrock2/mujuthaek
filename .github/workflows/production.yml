@@ -83,6 +83,7 @@ jobs:
     if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
     uses: ./.github/workflows/e2e.yml
   frontend-prepare:
+    environment: vercel-production
     needs: [guard, plan, web-check, backend-check, contracts-check, e2e-check]
     if: >-
       always() && needs.guard.result == 'success' && needs.plan.result == 'success' &&
@@ -156,6 +157,7 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
   frontend-promote:
+    environment: vercel-production
     needs: [plan, backend-apply]
     runs-on: ubuntu-latest
     timeout-minutes: 15

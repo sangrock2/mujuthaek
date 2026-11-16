@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import re
 import sys
 import tempfile
@@ -96,6 +97,60 @@ def live_hardening(runtime):
 
 
 class BackupSecurityTests(unittest.TestCase):
+    def prepared_issuer(self, issue=None):
+        calls = []
+        def call(service, action, *args):
+            calls.append(action)
+            if action == 'create-access-key' and issue:
+                issue()
+            return {
+                'list-users': {'Users': [{'UserName': backup.BACKUP_USER}]},
+                'get-user': {'User': {'Arn': 'synthetic-user', 'Tags': OWNED}},
+                'list-attached-user-policies': {'AttachedPolicies': []},
+                'list-groups-for-user': {'Groups': []},
+                'list-user-policies': {'PolicyNames': []},
+                'list-access-keys': {'AccessKeyMetadata': []},
+                'create-access-key': {'AccessKey': {'AccessKeyId': 'synthetic-key', 'SecretAccessKey': 'synthetic-secret'}},
+            }.get(action, {})
+        return SimpleNamespace(call=call), calls
+
+    def test_preexisting_empty_file_cannot_receive_new_credentials(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'synthetic.env'
+            path.write_bytes(b'')
+            aws, calls = self.prepared_issuer()
+            with patch.object(backup, 'PRIVATE', path), self.assertRaises(RuntimeError):
+                backup.prepare(aws, {'bucket': 'example-bucket'})
+            self.assertNotIn('create-access-key', calls)
+            self.assertEqual(path.read_bytes(), b'')
+
+    def test_secret_is_written_through_the_original_creation_handle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'synthetic.env'
+            aws, calls = self.prepared_issuer()
+            def create(target):
+                return os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with patch.object(backup, 'PRIVATE', path), patch.object(backup, 'create_private_file', side_effect=create), \
+                    patch.object(Path, 'write_text', side_effect=AssertionError('Must not reopen a secret pathname')):
+                backup.prepare(aws, {'bucket': 'example-bucket'})
+            self.assertIn('synthetic-secret', path.read_text())
+            self.assertNotIn('delete-access-key', calls)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX rename of an open inode')
+    def test_replaced_path_revokes_new_key_without_leaking_secret(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'synthetic.env'
+            original = Path(folder) / 'original.env'
+            def swap():
+                path.rename(original)
+                path.write_bytes(b'')
+            aws, calls = self.prepared_issuer(swap)
+            with patch.object(backup, 'PRIVATE', path), self.assertRaises(RuntimeError):
+                backup.prepare(aws, {'bucket': 'example-bucket'})
+            self.assertIn('delete-access-key', calls)
+            self.assertEqual(path.read_bytes(), b'')
+            self.assertEqual(original.read_bytes(), b'')
+
     def test_backup_identity_cannot_delete_or_access_raw_release_or_operations_objects(self):
         policy = backup.backup_policy('example-bucket')
         objects = [statement for statement in policy['Statement'] if statement['Action'] in ('s3:GetObject', 's3:PutObject')]

@@ -6,6 +6,7 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 import kr.mujuthaek.api.common.alert.OpsAlert;
+import kr.mujuthaek.api.common.logging.LogText;
 import kr.mujuthaek.api.common.logging.SensitiveFields;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +65,11 @@ class GlobalExceptionHandler {
       // 다른 서비스(검수·수집기·알림 서버) 연결 실패 같은 서버 쪽 문제. 코드별로 묶어 알려요
       notify(
           "api.5xx:" + e.errorCode().name(),
-          e.errorCode().name() + " " + request.getMethod() + " " + request.getRequestURI(),
+          e.errorCode().name()
+              + " "
+              + LogText.requestMethod(request)
+              + " "
+              + LogText.requestRoute(request),
           e.errorCode().message());
     }
     return problem(e.errorCode(), e.getMessage(), request);
@@ -132,15 +137,19 @@ class GlobalExceptionHandler {
     jakarta.persistence.QueryTimeoutException.class
   })
   ProblemDetail handleQueryTimeout(Exception e, HttpServletRequest request) {
-    log.warn("조회 예산 초과: {} {}", request.getMethod(), request.getRequestURI());
-    notify("api.query-timeout", "조회 시간 제한", request.getMethod() + " " + request.getRequestURI());
+    log.warn("조회 예산 초과: {} {}", LogText.requestMethod(request), LogText.requestRoute(request));
+    notify(
+        "api.query-timeout",
+        "조회 시간 제한",
+        LogText.requestMethod(request) + " " + LogText.requestRoute(request));
     return problem(ErrorCode.QUERY_TIMEOUT, ErrorCode.QUERY_TIMEOUT.message(), request);
   }
 
   /** 받는 쪽이 먼저 연결을 끊은 비동기 응답(채팅 SSE 등: 탭을 닫거나 화면을 떠남). 보낼 곳이 없어 응답하지 않고, 서버 오류도 아니라 알리지 않아요. */
   @ExceptionHandler(AsyncRequestNotUsableException.class)
   void handleDisconnected(AsyncRequestNotUsableException e, HttpServletRequest request) {
-    log.debug("받는 쪽이 연결을 끊었어요: {} {}", request.getMethod(), request.getRequestURI());
+    log.debug(
+        "받는 쪽이 연결을 끊었어요: {} {}", LogText.requestMethod(request), LogText.requestRoute(request));
   }
 
   @ExceptionHandler(Exception.class)
@@ -154,12 +163,12 @@ class GlobalExceptionHandler {
     // 예외 메시지에 판정 입력 값이 섞여 있을 수 있어서 가린 뒤에 남겨요
     log.error(
         "처리하지 못한 오류: {} {}",
-        request.getMethod(),
-        request.getRequestURI(),
+        LogText.requestMethod(request),
+        LogText.requestRoute(request),
         SensitiveFields.masked(e));
     notify(
         "api.unhandled:" + e.getClass().getName(),
-        "처리하지 못한 오류 " + request.getMethod() + " " + request.getRequestURI(),
+        "처리하지 못한 오류 " + LogText.requestMethod(request) + " " + LogText.requestRoute(request),
         e.getClass().getSimpleName());
     ProblemDetail problem =
         problem(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.message(), request);

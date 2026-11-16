@@ -233,9 +233,6 @@ def validate(data, schema_name):
     return errors + semantic_errors(data, ready)
 
 
-SAFE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,40}")
-
-
 def schema_message(error):
     """스키마 오류 설명. jsonschema 메시지는 잘못된 입력값(URL의 인증 값 등)을 그대로 담으므로 쓰지 않고,
     스키마에 적힌 칸 이름이나 입력의 칸 이름(형식이 칸 이름다울 때만)만 남깁니다. 값은 어떤 경우에도 넣지 않습니다."""
@@ -245,13 +242,25 @@ def schema_message(error):
     if error.validator == "additionalProperties" and isinstance(error.instance, dict):
         allowed = set(error.schema.get("properties", {}))
         extra = [name for name in error.instance if name not in allowed]
-        shown = [name if SAFE_KEY.fullmatch(name) else "<이름 숨김>" for name in extra]
-        return "허용되지 않은 칸 " + ", ".join(shown)
+        # Even a syntactically ordinary field name can itself be an API key or password.
+        return f"허용되지 않은 칸 {len(extra)}개(이름은 남기지 않음)"
     return "값이 형식에 맞지 않습니다(값은 남기지 않음)"
 
 
 def schema_path(error):
-    return "/" + "/".join(str(x).replace("~", "~0").replace("/", "~1") for x in error.absolute_path)
+    return "/" + "/".join(str(x) if isinstance(x, int) else x.replace("~", "~0").replace("/", "~1") if x in schema_property_names() else "<이름 숨김>" for x in error.absolute_path)
+
+
+@cache
+def schema_property_names():
+    """Only schema-authored property names may appear in diagnostic paths."""
+    names = set()
+    for schema in SCHEMAS.values():
+        for _, node in walk(schema):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                names.update(properties)
+    return frozenset(names)
 
 
 def event_errors(payload):

@@ -1,4 +1,6 @@
 import shutil
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -30,6 +32,18 @@ class BackupCrypto(unittest.TestCase):
         transform(self.source, self.output, self.cert, openssl=OPENSSL)
         transform(self.output, self.restored, self.cert, private_key=self.key, openssl=OPENSSL)
         self.assertEqual(self.source.read_bytes(), self.restored.read_bytes())
+        if os.name == 'nt':
+            script = '$a=Get-Acl -LiteralPath $env:TEST_ACL_PATH; @{protected=$a.AreAccessRulesProtected; sids=@($a.Access | ForEach-Object {$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value}); owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value} | ConvertTo-Json -Compress'
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                    env=dict({k: v for k, v in os.environ.items() if k.upper() != 'PSMODULEPATH'},
+                                             TEST_ACL_PATH=str(self.restored)),
+                                    capture_output=True, encoding='utf-8', errors='replace')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            acl = json.loads(result.stdout)
+            self.assertTrue(acl['protected'])
+            self.assertEqual(set(acl['sids']), {acl['owner'], 'S-1-5-18'})
+        else:
+            self.assertEqual(self.restored.stat().st_mode & 0o777, 0o600)
 
     def test_corruption_is_rejected_without_leaving_plaintext(self):
         transform(self.source, self.output, self.cert, openssl=OPENSSL)

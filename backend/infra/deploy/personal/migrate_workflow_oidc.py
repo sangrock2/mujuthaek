@@ -43,7 +43,7 @@ def main():
     if any(run['status'] != 'completed' for run in running):
         raise RuntimeError('Wait for active workflows to finish')
     targets = {RELEASE_ROLE: trust_policy(prefix, ('production.yml', 'workers.yml')),
-               OPERATIONS: trust_policy(prefix, ('operations.yml',))}
+               OPERATIONS: trust_policy(prefix, ('operations.yml',), environment='vercel-production')}
     # Keep deployment disabled until reviewed source and dependency checks are ready.
     gh('variable', 'set', 'PRODUCTION_DEPLOY_ENABLED', '--repo', REPO, '--body', 'false')
     switched = False

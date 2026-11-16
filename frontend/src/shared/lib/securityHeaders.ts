@@ -21,7 +21,7 @@ export type CspOptions = {
 };
 
 // Google이 안내하는 GA4 호스트 (gtag.js 받기·수집 요청·픽셀)
-const GA_SCRIPT = ["https://*.googletagmanager.com"];
+const GA_SCRIPT = ["https://www.googletagmanager.com"];
 const GA_CONNECT = [
   "https://*.google-analytics.com",
   "https://*.analytics.google.com",
@@ -67,7 +67,7 @@ export function contentSecurityPolicy({ dev, apiOrigin, analytics, kakaoMap }: C
     "manifest-src 'self'",
     "frame-src 'none'",
     "object-src 'none'",
-    "base-uri 'self'",
+    "base-uri 'none'",
     "form-action 'self'",
     "frame-ancestors 'none'",
   ].join("; ");
