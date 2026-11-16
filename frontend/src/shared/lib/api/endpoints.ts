@@ -7,6 +7,8 @@ export const endpoints = {
   usersMe: "/api/users/me",
   /** 연락용 이메일 등록·변경(PUT {email, consentVersion}) · 삭제(DELETE). 둘 다 204 */
   usersMeEmail: "/api/users/me/email",
+  /** 가입 필수 동의 기록 (POST {termsVersion, privacyVersion, ageOver14: true} → 204). 동의 전에는 내 정보 API가 403 TERMS_NOT_AGREED */
+  usersMeTerms: "/api/users/me/terms",
   regions: "/api/v1/regions",
   /** 판정 기준값 (기준 소득 월액, 자산·자동차 구간 경계, 순위 요건) */
   eligibilityCriteria: "/api/v1/eligibility/criteria",

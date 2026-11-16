@@ -1,6 +1,7 @@
 // GET /api/v1/notices/{id} 응답 (백엔드 NoticeDetailResponse) → 공고 상세 화면 값
 import { dueText } from "@/features/notice/format";
 import { API_BASE_URL } from "@/shared/lib/api/client";
+import { safeAppPath, safeExternalUrl } from "@/shared/lib/safeUrl";
 import {
   noticeTypeLabel,
   providerName,
@@ -224,20 +225,21 @@ const anchorOf = (items: { evidence: Evidence[] }[]): PdfAnchor | undefined => {
   return e ? { fileId: e.fileId ?? null, quote: e.quote || null } : undefined;
 };
 
-/** 앱 안에서 열 수 있는 원문 PDF (viewUrl이 있는 첨부). 경로는 백엔드 주소를 붙여 써요 */
+/** 앱 안에서 열 수 있는 원문 PDF (viewUrl이 있는 첨부). 경로는 백엔드 주소를 붙여 써요 (「//다른곳」 같은 경로는 빼요) */
 function pdfFilesOf(d: ApiNoticeDetail): NoticePdfFile[] {
-  return d.files.flatMap((f) =>
-    f.id && f.viewUrl
+  return d.files.flatMap((f) => {
+    const viewPath = safeAppPath(f.viewUrl);
+    return f.id && viewPath
       ? [
           {
             id: f.id,
             name: f.name ?? "공고 원문.pdf",
-            pdfUrl: `${API_BASE_URL}${f.viewUrl}`,
+            pdfUrl: `${API_BASE_URL}${viewPath}`,
             pageCount: f.pageCount ?? null,
           },
         ]
-      : [],
-  );
+      : [];
+  });
 }
 
 /**
@@ -432,7 +434,7 @@ function followUpsOf(d: ApiNoticeDetail, today: string): NoticeFollowUp[] {
     id: `follow-up-${i}`,
     title: f.title,
     postedOn: dayOf(f.postedOn),
-    url: f.detailUrl,
+    url: safeExternalUrl(f.detailUrl),
     schedule: schedulesOf(f.schedules, today, `follow-up-${i}-schedule`),
   }));
 }
@@ -449,7 +451,11 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
     .map((g) => g.description)
     .filter(Boolean)
     .join(" ");
-  const applyUrl = guidance.find((g) => g.kind === "APPLICATION_METHOD" && g.url)?.url;
+  // 신청 링크는 http·https 주소만 써요 (수집·AI가 넘긴 값이라 data:·intent: 같은 주소가 올 수 있어요, 2026-11-16 보안 감사 L-4)
+  const applyUrl = guidance
+    .filter((g) => g.kind === "APPLICATION_METHOD")
+    .map((g) => safeExternalUrl(g.url))
+    .find((url) => url !== null);
   const application = d.schedules.find((s) => s.kinds.includes("APPLICATION"));
   const place = application?.places[0];
   const documents = new Map<NoticeDocumentGroup, NoticeDoc["apply"]["documents"][number]>();
@@ -489,7 +495,10 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
       // 우리 저장소에 원문 PDF가 있으면 앱 안에서 열고(근거마다 그 PDF), 없으면(HWP·그림만·이전 결과) 기관 사이트로 보내요
       pdfUrl: pdfFiles[0]?.pdfUrl ?? null,
       pageCount: pdfFiles[0]?.pageCount ?? null,
-      detailUrl: h.detailUrl ?? d.files.find((f) => f.url)?.url ?? "",
+      detailUrl:
+        safeExternalUrl(h.detailUrl) ??
+        d.files.map((f) => safeExternalUrl(f.url)).find((url) => url !== null) ??
+        "",
       files: pdfFiles,
       soleFileId: soleFileIdOf(d, pdfFiles),
     },
@@ -515,7 +524,7 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
       // 안내의 신청 방법 문장 (일정 설명은 일정 칸에 있어서 다시 쓰지 않아요)
       method,
       channel: channelOf[application?.channels[0] ?? ""] ?? null,
-      url: application?.applicationUrl ?? applyUrl ?? undefined,
+      url: safeExternalUrl(application?.applicationUrl) ?? applyUrl ?? undefined,
       place:
         place && (place.name || place.address)
           ? { name: place.name ?? "", address: place.address ?? "" }

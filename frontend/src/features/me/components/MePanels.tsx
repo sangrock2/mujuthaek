@@ -25,6 +25,7 @@ import {
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
+import { safeAppPath } from "@/shared/lib/safeUrl";
 
 /** 2px 테두리 선택 칩 */
 export const outlineChip = (on: boolean) =>
@@ -88,6 +89,8 @@ function FavoriteRow({ f }: { f: Favorite }) {
   const fav = useFavoriteToggle(f.targetType, f.targetId);
   const deadline = deadlineOf(f);
   const gone = !f.title || f.status === "HIDDEN";
+  // 서버가 준 화면 경로는 앱 안 경로일 때만 링크로 써요 (「//다른곳」이면 다른 사이트로 가요, 2026-11-16 보안 감사 L-4)
+  const href = safeAppPath(f.linkPath);
   return (
     <div className="border-line-soft flex flex-wrap items-center gap-[14px] border-b border-solid py-[16px]">
       {gone ? (
@@ -95,9 +98,9 @@ function FavoriteRow({ f }: { f: Favorite }) {
           <span className="text-text-sub text-[17px] font-bold">내려간 공고예요</span>
           <span className="text-text-sub text-[14px]">{typeLabel[f.targetType]}</span>
         </span>
-      ) : (
+      ) : href ? (
         <Link
-          href={f.linkPath}
+          href={href}
           className="text-text hover:text-text flex min-w-0 flex-1 flex-col gap-[3px] no-underline"
         >
           <span className="text-[17px] font-bold">{f.title}</span>
@@ -105,6 +108,13 @@ function FavoriteRow({ f }: { f: Favorite }) {
             {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
           </span>
         </Link>
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <span className="text-[17px] font-bold">{f.title}</span>
+          <span className="text-text-sub text-[14px]">
+            {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
+          </span>
+        </span>
       )}
       {deadline.label && (
         <span
@@ -116,7 +126,7 @@ function FavoriteRow({ f }: { f: Favorite }) {
           {deadline.label}
         </span>
       )}
-      {!gone && f.targetType === "NOTICE" && f.linkPath.startsWith("/notices/") && (
+      {!gone && f.targetType === "NOTICE" && href?.startsWith("/notices/") && (
         <div className="order-last w-full lg:order-none lg:w-auto">
           <PreparationButton noticeId={f.targetId} />
         </div>
@@ -263,11 +273,12 @@ const generalLabel = Object.fromEntries(generalReportKinds.map((k) => [k.key, k.
 function MyReportRow({ r }: { r: MyReport }) {
   const what = r.kind === "GENERAL" ? (generalLabel[r.field] ?? r.field) : r.field;
   const title = r.targetTitle ?? (r.kind === "GENERAL" ? "일반 제보" : reportKindLabel[r.kind]);
+  const href = safeAppPath(r.linkPath);
   return (
     <li className="border-line-soft flex flex-col gap-[6px] border-b border-solid py-[14px]">
       <div className="flex items-center justify-between gap-[10px]">
-        {r.linkPath ? (
-          <Link href={r.linkPath} className="text-text hover:text-text text-[16px] font-bold">
+        {href ? (
+          <Link href={href} className="text-text hover:text-text text-[16px] font-bold">
             {title}
           </Link>
         ) : (

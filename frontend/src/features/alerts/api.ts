@@ -1,6 +1,7 @@
 // 알림함 API (백엔드 notification 모듈)를 화면 모양(AlertsData)으로 바꿔요
 import { api } from "@/shared/lib/api/client";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { pathSegment } from "@/shared/lib/api/path";
 import type {
   AlertGroup,
   AlertIcon,
@@ -105,9 +106,13 @@ export async function liveAlerts(): Promise<AlertsData> {
   };
 }
 
-export const markAlertRead = (id: string) => api.post(`${endpoints.notifications}/${id}/read`);
+// 알림 ID는 경로 한 칸으로 인코딩해 넣어요 (2026-11-16 보안 감사 L-6). 잘못된 값이면 요청 없이 실패해요
+export const markAlertRead = async (id: string) =>
+  api.post(`${endpoints.notifications}/${pathSegment(id)}/read`);
 /** 눌러서 그 화면으로 감 (읽음도 함께, 관리자 알림 지표). 바로 화면을 옮겨도 요청이 끊기지 않게 keepalive */
-export const markAlertClicked = (id: string) =>
-  api.post(`${endpoints.notificationEvents}/${id}/clicked`, undefined, { keepalive: true });
+export const markAlertClicked = async (id: string) =>
+  api.post(`${endpoints.notificationEvents}/${pathSegment(id)}/clicked`, undefined, {
+    keepalive: true,
+  });
 
 export const markAllAlertsRead = () => api.post(`${endpoints.notifications}/read-all`);

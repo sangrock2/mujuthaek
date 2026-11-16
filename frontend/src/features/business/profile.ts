@@ -235,6 +235,15 @@ export function saveBizProfile(profile: BizProfileInput, { revenue, restrictions
   emit();
 }
 
+/** 사업 정보 모두 지우기 (이 기기 + 이번 탭의 매출·신청 제한 사유). 로그아웃·탈퇴 때 불러요 (2026-11-16 보안 감사 L-3) */
+export function clearBizProfile() {
+  write(local, DEVICE_KEY, null);
+  write(session, SESSION_DEVICE_KEY, null);
+  write(session, REVENUE_KEY, null);
+  write(session, RESTRICTIONS_KEY, null);
+  emit();
+}
+
 /** "3,200" → 3200. 비었거나 숫자가 없으면 null */
 export function digits(v: string): number | null {
   const d = v.replace(/\D/g, "");

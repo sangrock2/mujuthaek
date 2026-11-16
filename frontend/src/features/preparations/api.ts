@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSession } from "@/features/auth/session";
+import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError, type Problem } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
@@ -155,7 +155,7 @@ export function usePreparations(status?: PreparationStatus) {
   const session = useSession();
   const query = useQuery({
     queryKey: [...preparationsKey, session.data?.id, "list", status],
-    enabled: !USE_MOCKS && !!session.data,
+    enabled: !USE_MOCKS && isMember(session.data),
 
     queryFn: async () => {
       const items: Preparation[] = [];
@@ -185,7 +185,7 @@ export function usePreparation(id: string) {
 
   const query = useQuery<Preparation>({
     queryKey: key,
-    enabled: !USE_MOCKS && !!session.data,
+    enabled: !USE_MOCKS && isMember(session.data),
     queryFn: () => api.get(preparationPath(id)),
     retry: false,
   });

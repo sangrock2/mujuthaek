@@ -245,7 +245,7 @@ function MApiUnits({
                 <a
                   href={directions}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="bg-brand inline-flex min-h-[44px] items-center justify-center gap-[6px] rounded-sm text-[14px] font-bold text-white no-underline hover:text-white"
                 >
                   <ArrowRight size={16} strokeWidth={2.2} aria-hidden />

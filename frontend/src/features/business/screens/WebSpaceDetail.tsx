@@ -426,7 +426,7 @@ function WebSpaceDetailView({ data, back }: { data: SpaceDetail; back: Back }) {
               <a
                 href={data.sourceUrl ?? "#"}
                 target={data.sourceUrl ? "_blank" : undefined}
-                rel={data.sourceUrl ? "noreferrer" : undefined}
+                rel={data.sourceUrl ? "noopener noreferrer" : undefined}
                 onClick={() => track("notice_source_open", { notice_kind: "space", via: "site" })}
                 className="rounded-control bg-fill text-text hover:text-text flex min-h-[52px] items-center justify-center gap-[6px] text-[16px] font-bold no-underline"
               >

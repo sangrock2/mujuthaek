@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { ContactEmailFields } from "@/features/auth/components/ContactEmailParts";
 import { CheckBox } from "@/features/auth/components/parts";
-import { signupTerms, type useSignupForm } from "@/features/auth/useSignupForm";
+import {
+  signupTerms,
+  type useSignupForm,
+  type useSignupLeave,
+} from "@/features/auth/useSignupForm";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
 
@@ -82,7 +86,9 @@ export function StoredInfo({ className }: { className?: string }) {
           계정에는 간편 로그인 회원번호·닉네임, 적었다면 연락용 이메일, 관심 공고·알림 설정만
           저장하고, 탈퇴하면 바로 지워요. 비밀번호는 받지 않아요
         </li>
-        <li>입력한 조건은 계정과 상관없이 이 기기에만 30일 동안 저장해요</li>
+        <li>
+          입력한 조건과 최근 검색어는 이 기기에만 30일 동안 저장하고, 로그아웃하거나 탈퇴하면 지워요
+        </li>
         <li className="text-brand-strong font-bold">소득·자산은 어디에도 저장하지 않아요</li>
       </ul>
     </section>
@@ -104,7 +110,7 @@ export function SignupEmail({ form, className }: { form: Form; className?: strin
   );
 }
 
-/** 가입 버튼: 필수 약관에 동의하고 이메일(적었다면)이 맞으면 저장한 뒤 가입 완료로 */
+/** 가입 버튼: 필수 약관에 동의하고 이메일(적었다면)이 맞으면 동의를 기록·저장한 뒤 가입 완료로 */
 export function SignupSubmit({ form, className }: { form: Form; className?: string }) {
   const cls = cn(
     "flex w-full items-center justify-center rounded-[16px] border-0 font-extrabold",
@@ -112,13 +118,46 @@ export function SignupSubmit({ form, className }: { form: Form; className?: stri
     className,
   );
   return (
+    <>
+      {form.termsError && (
+        <p role="alert" className="text-danger-text m-0 pb-[8px] text-[14px] font-semibold">
+          {form.termsError}
+        </p>
+      )}
+      <button
+        type="button"
+        aria-disabled={form.ready ? undefined : "true"}
+        onClick={form.submit}
+        className={cls}
+      >
+        {form.submitText}
+      </button>
+    </>
+  );
+}
+
+type Leave = ReturnType<typeof useSignupLeave>;
+
+/** 동의하지 않고 나가기 (PC 헤더 오른쪽). 로그인했으면 로그아웃하고 처음 화면으로 */
+export function SignupLeaveButton({ leave }: { leave: Leave }) {
+  return (
     <button
       type="button"
-      aria-disabled={form.ready ? undefined : "true"}
-      onClick={form.submit}
-      className={cls}
+      onClick={leave.leave}
+      disabled={leave.leaving}
+      className="text-text-sub hover:text-text-sub inline-flex min-h-[44px] cursor-pointer items-center border-0 bg-transparent p-0 text-[15px] font-semibold disabled:opacity-60"
     >
-      {form.submitText}
+      {leave.loggedIn ? "로그아웃" : "나가기"}
     </button>
+  );
+}
+
+/** 로그아웃하지 못했을 때 안내 */
+export function SignupLeaveError({ leave }: { leave: Leave }) {
+  if (!leave.error) return null;
+  return (
+    <p role="alert" className="text-danger-text m-0 text-[14px] font-semibold">
+      {leave.error}
+    </p>
   );
 }

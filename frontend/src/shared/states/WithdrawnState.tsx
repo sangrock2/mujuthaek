@@ -3,15 +3,26 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
+import { consumeWithdrawalMark, forgetDeviceData } from "@/features/auth/deviceData";
 import { sessionKey } from "@/features/auth/session";
-import { authToken } from "@/shared/lib/api/client";
+import { announceSessionEnded, authToken } from "@/shared/lib/api/client";
 import { routes } from "@/shared/lib/routes";
 
-/** 탈퇴를 마친 사람이 이 기기에 남은 로그인 정보(토큰·내 정보 캐시)를 비워요 */
+/**
+ * 탈퇴를 마친 사람이 이 기기에 남은 로그인 정보(토큰·내 정보 캐시)를 비워요.
+ * 이 탭에서 탈퇴를 시작했으면 이 기기에 저장한 조건·사업 정보·최근 검색어도 지우고 다른 탭에도 알려요
+ * (2026-11-16 보안 감사 L-3). 로그인 없이 열리는 화면이라 링크만으로는 기기 데이터를 지우지 않아요
+ */
 function useForgetAccount() {
   const client = useQueryClient();
   useEffect(() => {
     authToken.set(null);
+    if (consumeWithdrawalMark()) {
+      forgetDeviceData();
+      announceSessionEnded();
+    }
+    // clear()로 query를 제거하기 전에 기존 화면의 observer에도 로그아웃을 알려요.
+    client.setQueryData(sessionKey, null);
     client.clear();
     client.setQueryData(sessionKey, null);
   }, [client]);
@@ -19,7 +30,8 @@ function useForgetAccount() {
 
 const text =
   "그동안 무주택자들을 써 주셔서 고마워요. 계정과 관심 공고 · 알림 · 제보를 모두 지웠어요.";
-const note = "이 기기에 저장한 조건은 그대로 있어요. 로그인 없이도 공고를 찾아볼 수 있어요.";
+const note =
+  "이 기기에 저장한 조건과 최근 검색어도 지웠어요. 로그인 없이도 공고를 찾아볼 수 있어요.";
 
 /** 회원 탈퇴 완료 (PC). 백엔드가 탈퇴를 마치고 /withdrawn으로 보내요 */
 export function WebWithdrawnState() {

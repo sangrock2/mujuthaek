@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { consumeWithdrawalMark } from "@/features/auth/deviceData";
 import { providerLabel } from "@/features/auth/session";
 import { goWithdrawal, startWithdrawal } from "@/features/me/api";
+import { ApiError, type Problem } from "@/shared/lib/api/client";
 import { cn } from "@/shared/lib/cn";
 
 /**
@@ -18,6 +20,17 @@ const returned: Record<string, string> = {
   failed: "탈퇴하지 못했어요. 잠시 뒤 다시 해 주세요",
 };
 
+/** 탈퇴 시작 실패 문구. 관리자 계정(409 WITHDRAWAL_ADMIN_NOT_ALLOWED)은 서버가 준 안내를 그대로 보여요 */
+function startError(error: unknown) {
+  if (error instanceof ApiError && error.code === "WITHDRAWAL_ADMIN_NOT_ALLOWED") {
+    return (
+      (error.body as Problem | null)?.detail ??
+      "관리자 계정은 바로 탈퇴할 수 없어요. 먼저 관리자에서 해제해 주세요"
+    );
+  }
+  return "탈퇴를 시작하지 못했어요. 잠시 뒤 다시 해 주세요";
+}
+
 export function WithdrawButton({ className }: { className?: string }) {
   const reason = useSearchParams().get("withdraw");
   const [step, setStep] = useState<"idle" | "confirm" | "going">("idle");
@@ -26,6 +39,10 @@ export function WithdrawButton({ className }: { className?: string }) {
     reason ? (returned[reason] ?? returned.failed) : null,
   );
   const [start, setStart] = useState<Awaited<ReturnType<typeof startWithdrawal>> | null>(null);
+  // 본인 확인에 실패해 돌아왔으면 「이 탭에서 탈퇴를 시작했어요」 표시를 지워요 (탈퇴 완료 화면이 기기 데이터를 지우는 표시예요)
+  useEffect(() => {
+    if (reason) consumeWithdrawalMark();
+  }, [reason]);
 
   const begin = async () => {
     setError(null);
@@ -34,8 +51,8 @@ export function WithdrawButton({ className }: { className?: string }) {
       setStart(s);
       setOthers(s.otherProviders);
       setStep("confirm");
-    } catch {
-      setError("탈퇴를 시작하지 못했어요. 잠시 뒤 다시 해 주세요");
+    } catch (e) {
+      setError(startError(e));
     }
   };
 
@@ -82,7 +99,10 @@ export function WithdrawButton({ className }: { className?: string }) {
           onClick={() => {
             if (!start) return;
             setStep("going");
-            goWithdrawal(start);
+            if (!goWithdrawal(start)) {
+              setStep("idle");
+              setError(returned.failed);
+            }
           }}
           className="bg-danger-text min-h-[44px] cursor-pointer rounded-sm border-0 px-[16px] text-[15px] font-bold text-white disabled:opacity-60"
         >

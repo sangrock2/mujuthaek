@@ -6,6 +6,7 @@ import { mockQuery } from "@/features/mock-query";
 import { api } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 
 type LifeCategory = "TRANSIT" | "SCHOOL" | "PARK" | "CONVENIENCE" | "HOSPITAL";
 
@@ -244,7 +245,8 @@ export function toAreaCriteria(c: ApiAreaCriteria): AreaCriteria {
     sources: c.sources.map((s) => ({
       text: [s.data, s.provider].filter(Boolean).join(" · "),
       license: s.license ?? undefined,
-      licenseUrl: s.licenseUrl ?? undefined,
+      // 출처 안내도 서버 값이라 http·https 주소일 때만 링크로 써요 (2026-11-16 보안 감사 L-4)
+      licenseUrl: safeExternalUrl(s.licenseUrl) ?? undefined,
     })),
   };
 }

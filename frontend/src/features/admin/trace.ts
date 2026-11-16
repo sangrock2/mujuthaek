@@ -8,6 +8,7 @@ import {
   refreshAccessToken,
 } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { apiPath, isUuid } from "@/shared/lib/api/path";
 
 export type TraceToolCall = { name: string | null; args: string | null };
 export type TraceToolResult = { name: string | null; result: string | null; failed: boolean };
@@ -152,14 +153,19 @@ export function traceJobOf(reviewItemId: string): string | null {
   return reviewItemId.startsWith("n:") ? reviewItemId.slice(2) : null;
 }
 
+/**
+ * 작업 하나의 추출 과정. 작업 ID는 주소(?job=)에서 오니 UUID일 때만 부르고 경로에 인코딩해 넣어요
+ * (2026-11-16 보안 감사 L-6: 「..%2Fusers%3F…」 같은 값이 관리자 토큰으로 다른 API를 부르던 문제)
+ */
 export function useExtractionTrace(jobId: string | null) {
+  const valid = isUuid(jobId);
   return useQuery({
     queryKey: ["admin", "extractionTrace", USE_MOCKS ? "mock" : "live", jobId],
     queryFn: () =>
       USE_MOCKS
         ? Promise.resolve(mockTrace)
-        : api.get<ExtractionTrace>(`/api/admin/reviews/${jobId}/trace`),
-    enabled: USE_MOCKS || Boolean(jobId),
+        : api.get<ExtractionTrace>(apiPath`/api/admin/reviews/${jobId ?? ""}/trace`),
+    enabled: USE_MOCKS || valid,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

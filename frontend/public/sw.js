@@ -104,9 +104,19 @@ self.addEventListener("push", (event) => {
   );
 });
 
+/** 알림을 누르면 이 사이트 안의 화면만 열어요. 「//다른곳」·「/\다른곳」 같은 주소가 와도 홈으로 (2026-11-16 보안 감사 M-8) */
+function sameSiteUrl(value) {
+  try {
+    const url = new URL(typeof value === "string" ? value : "/", self.location.origin);
+    return url.origin === self.location.origin ? url.href : new URL("/", self.location.origin).href;
+  } catch {
+    return new URL("/", self.location.origin).href;
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = new URL(event.notification.data?.url ?? "/", self.location.origin).href;
+  const targetUrl = sameSiteUrl(event.notification.data?.url);
 
   event.waitUntil(
     Promise.all([

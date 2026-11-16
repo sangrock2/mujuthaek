@@ -120,7 +120,7 @@ function CriteriaDetails({ web }: { web: boolean }) {
                     (src.licenseUrl ? (
                       <>
                         {" · "}
-                        <a href={src.licenseUrl} target="_blank" rel="noreferrer">
+                        <a href={src.licenseUrl} target="_blank" rel="noopener noreferrer">
                           {src.license}
                         </a>
                       </>

@@ -242,8 +242,9 @@ export function AdminWebChatReports({ head }: { head: React.ReactNode }) {
                   </span>
                 </div>
                 <Link
-                  href={routes.notice(cur.noticeId)}
+                  href={routes.notice(encodeURIComponent(cur.noticeId))}
                   target="_blank"
+                  rel="noopener noreferrer"
                   className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
                 >
                   공고에서 보기

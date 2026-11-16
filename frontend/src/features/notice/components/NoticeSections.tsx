@@ -460,7 +460,7 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
                 <a
                   href={f.url}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="text-text hover:text-text inline-flex items-start gap-[6px] text-[15px] font-bold no-underline"
                 >
                   <span className="min-w-0">{f.title}</span>
@@ -503,7 +503,7 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
             <a
               href={apply.url}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="rounded-control bg-brand inline-flex min-h-[48px] items-center justify-center gap-[6px] self-start px-[18px] text-[15px] font-bold text-white no-underline hover:text-white"
             >
               <ExternalLink size={17} aria-hidden />

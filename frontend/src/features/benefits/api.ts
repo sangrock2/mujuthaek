@@ -9,6 +9,7 @@ import { useCriteria } from "@/features/eligibility/criteria";
 import { formatWon } from "@/features/notice/format";
 import { api } from "@/shared/lib/api/client";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import type {
   Benefit,
   BenefitCategory,
@@ -180,6 +181,9 @@ export function toBenefitDetail(
   const h = d.header;
   const org = h.agency ?? base?.org ?? "기관";
   const source = d.sources[0];
+  // 수집한 기관 주소는 http·https만 링크로 써요 (2026-11-16 보안 감사 L-4). 신청 주소가 이상하면 정책 원문으로
+  const detailUrl = safeExternalUrl(source?.detailUrl) ?? "";
+  const applyUrl = safeExternalUrl(source?.applyUrl) ?? detailUrl;
   const elig: BenefitEligibility[] = e
     ? e.conditions.map((g) => ({
         label: g.items.map((i) => i.label).join(" 또는 "),
@@ -215,9 +219,9 @@ export function toBenefitDetail(
     elig,
     how: d.howToApply ? [d.howToApply] : [],
     docs: d.documents.length ? d.documents.join(", ") : "원문을 확인해 주세요",
-    sourceUrl: source?.detailUrl ?? "",
-    policyUrl: source?.detailUrl ?? "",
-    applyUrl: source?.applyUrl ?? source?.detailUrl ?? "",
+    sourceUrl: detailUrl,
+    policyUrl: detailUrl,
+    applyUrl,
     reason: e?.reason ?? undefined,
   };
 }
