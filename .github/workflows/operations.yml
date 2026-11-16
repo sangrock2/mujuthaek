@@ -42,6 +42,7 @@ jobs:
       - name: Check privately and notify owner on changes
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TOKEN_EXPIRES_AT: ${{ vars.VERCEL_TOKEN_EXPIRES_AT }}
           OPERATIONS_CONFIG: ${{ secrets.OPERATIONS_CONFIG }}
           SEND_REPORT: ${{ inputs.send_report }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
