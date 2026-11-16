@@ -189,7 +189,7 @@ export function WebBizOnboarding() {
               <span className="text-text-sub text-[13px] font-medium">
                 사업자등록증의 업종 코드(한국표준산업분류 5자리)를 넣으면 업종 선택 대신 이 코드로
                 판정해요 ·{" "}
-                <a href="https://kssc.kostat.go.kr" target="_blank" rel="noreferrer">
+                <a href="https://kssc.kostat.go.kr" target="_blank" rel="noopener noreferrer">
                   코드 찾기
                 </a>
                 {draft.industryCode &&

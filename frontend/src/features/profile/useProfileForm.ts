@@ -7,6 +7,7 @@ import {
   saveConditions,
   setSaveOnDevice,
   useConditions,
+  useHasStoredConditions,
 } from "@/features/conditions/store";
 import type { DeviceConditions, SessionConditions } from "@/features/conditions/types";
 import { defaultDevice } from "./defaults";
@@ -62,6 +63,7 @@ type SessionTextKey = "income" | "asset" | "car" | "available";
 
 /** 조건 입력 3단계 상태 (PC/모바일 공통). 처음 값은 이 기기에 저장한 조건에서 가져와요 */
 export function useProfileForm() {
+  const hasStoredConditions = useHasStoredConditions();
   const { data } = useProfileFormData();
   const router = useRouter();
   /** 확인하기 뒤 갈 곳 (?next=/homes). 없으면 홈 */
@@ -156,7 +158,7 @@ export function useProfileForm() {
     estimatedRank: estimateRank(data.rankCriteria, sess.rankChecks),
     saveOnDevice: stored.status === "ready" ? stored.saveOnDevice : true,
     setSaveOnDevice,
-    hasSaved: stored.status === "ready" && stored.device !== null,
+    hasSaved: hasStoredConditions,
     clearSaved: () => {
       clearConditions();
       setDevice(defaultDevice(data));

@@ -1,6 +1,7 @@
 import { pdfSections, sectionTitles } from "@/features/notice/format";
 import type { usePdfViewer } from "@/features/notice/usePdfViewer";
 import type { NoticeDoc, NoticeSectionKey, PdfAnchor } from "@/features/notice/mocks/notice-doc";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 
 /** 근거를 앱 안에서 열 곳: PDF 주소·이름, 쪽, 강조할 문장 */
 export type OriginalPlace = {
@@ -55,9 +56,16 @@ export function noticeOriginal(
 ) {
   const openOriginal = (page?: number, label?: string, anchor?: PdfAnchor) => {
     const place = resolveOriginal(doc, page, anchor);
-    onOpen?.(place ? "pdf" : "site");
-    if (place) pdf.show(place.page, label, { fileId: place.fileId, quote: place.quote });
-    else window.open(doc.source.detailUrl, "_blank", "noreferrer");
+    if (place) {
+      onOpen?.("pdf");
+      pdf.show(place.page, label, { fileId: place.fileId, quote: place.quote });
+      return;
+    }
+    // window.open에는 React의 javascript: 막기도 없어요. 기관 주소는 http·https일 때만 열어요 (2026-11-16 보안 감사 L-4)
+    const site = safeExternalUrl(doc.source.detailUrl);
+    if (!site) return;
+    onOpen?.("site");
+    window.open(site, "_blank", "noopener,noreferrer");
   };
 
   /** 내 자격 「근거 원문」: 판정의 쪽이 섹션 근거 쪽과 같으면 그 근거(PDF·문장)로, 다르면 쪽만 */

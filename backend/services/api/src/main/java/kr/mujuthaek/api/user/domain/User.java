@@ -43,6 +43,15 @@ public class User {
 
   private Instant emailConsentedAt;
 
+  /** 가입 필수 동의(만 14세 이상 확인·이용약관·개인정보 수집·이용) 때 화면이 보여 준 약관 버전. 셋은 같이 있거나 같이 비어요 */
+  @Column(length = 20)
+  private String termsVersion;
+
+  @Column(length = 20)
+  private String privacyVersion;
+
+  private Instant termsAgreedAt;
+
   protected User() {}
 
   private User(String nickname, Instant now) {
@@ -65,6 +74,29 @@ public class User {
     }
     this.lastLoginAt = now;
     this.updatedAt = now;
+  }
+
+  /** 가입 필수 동의를 남겨요 (다시 동의하면 버전·시각을 새로). 검사는 서비스에서 */
+  public void agreeTerms(String termsVersion, String privacyVersion, Instant now) {
+    this.termsVersion = termsVersion;
+    this.privacyVersion = privacyVersion;
+    this.termsAgreedAt = now;
+    this.updatedAt = now;
+  }
+
+  public boolean termsAgreed() {
+    return termsAgreedAt != null;
+  }
+
+  /** 닉네임 바꾸기 (실명일 수 있는 닉네임을 별칭으로 바꿀 때) */
+  public void rename(String nickname, Instant now) {
+    this.nickname = trim(nickname);
+    this.updatedAt = now;
+  }
+
+  /** 저장할 때와 같은 방식으로 다듬은 닉네임 (앞뒤 공백, 50자) */
+  public static String normalizedNickname(String nickname) {
+    return trim(nickname);
   }
 
   /** 연락용 이메일 등록·변경. 동의한 문구 버전과 시각을 같이 남겨요 (검사는 서비스에서) */

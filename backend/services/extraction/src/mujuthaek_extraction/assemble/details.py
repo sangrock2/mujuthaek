@@ -14,20 +14,25 @@ AI가 적은 값은 그 항목의 근거 인용문(원문 글자)에서 확인�
 - 제출 부수(copies): 근거에 「1부」「2통」처럼 그 수가 있어야 합니다
 - 같은 이름·같은 묶음·같은 제출 시점의 서류는 하나로 합칩니다(근거·대상 범위를 합침). 부수·발급 기관은 둘 다 값이 있고 다를 때만 비웁니다
 - 공고 전체 신청 방법(notice.applicationChannels)은 계약 검사기와 같은 규칙으로 프로그램이 계산합니다
+- 안내 주소(guidance.url)·문의 전화(guidance.phone)·일정 신청 주소(applicationUrl): 그 항목 근거 인용이 걸친 원문 줄에 실제로 있어야 해요
+  (2026-11-16 보안 감사 L-5, 아래 link_found·phone_found). 일정 신청 주소는 근거로 확인한 안내 주소와 같아도 남겨요
 
 지운 값의 메모 위치: 일정은 섹션(/schedules)을 가리킵니다. 일정 항목을 가리키는 메모는 그 일정을 접수 기간(applicationWindows)에서
-빼므로(계약 application_items), 값을 비워 안전해진 일정까지 빠지지 않게 합니다. 서류는 그 항목을 가리킵니다.
+빼므로(계약 application_items), 값을 비워 안전해진 일정까지 빠지지 않게 합니다. 서류·안내는 그 항목을 가리킵니다.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from mujuthaek_extraction.assemble.quotes import normalize
 from mujuthaek_extraction.assemble.regions import SIDO_NAMES
 from mujuthaek_extraction.contracts import tools
+from mujuthaek_extraction.links import public_link
 
 CLEARED = "DETAIL_UNVERIFIED_CLEARED"
 KST = timezone(timedelta(hours=9))
@@ -35,7 +40,7 @@ KST = timezone(timedelta(hours=9))
 # 신청 방법 낱말. 이메일을 먼저 찾아 지운 뒤 우편을 찾습니다(「전자우편」이 우편으로 읽히지 않게)
 CHANNEL_WORDS = (
     # 「메일로 송부」·전자우편 주소도 이메일입니다(2026-10-24 일곱 번째 채점: 「메일 (gh@…)로 송부」를 못 알아봄)
-    ("EMAIL", re.compile(r"이\s*메일|e\s*-?\s*mail|전자\s*우편|(?<![가-힣])메일|[\w.+-]+@[\w-]+\.[\w.]+", re.IGNORECASE)),
+    ("EMAIL", re.compile(r"이\s*메일|e\s*-?\s*mail|전자\s*우편|(?<![가-힣])메일|[\w.+-]{1,64}@[\w-]{1,63}\.[\w.]{1,253}", re.IGNORECASE)),
     ("FAX", re.compile(r"팩스|팩시밀리|fax", re.IGNORECASE)),
     ("ONLINE", re.compile(r"인터넷|온라인|홈페이지|누리집|모바일|웹\s*사이트|on\s*-?\s*line", re.IGNORECASE)),
     ("ONSITE", re.compile(r"방문|현장|창구|내방")),
@@ -55,11 +60,13 @@ APPLYING_KINDS = {"APPLICATION", "DOCUMENT_SUBMISSION"}
 ONSITE_KINDS = {"CONTRACT", "VIEWING"}
 
 # 시각: 「10:00」「10시」「10시 30분」「오후 6시」「6시 반」. 「24시간」「1시간」 같은 길이는 빼고, 「2026.10.」 뒤 숫자는 보지 않습니다
-TIME = re.compile(r"(오전|오후|아침|낮|저녁|밤)?\s*(?<![\d.])(\d{1,2})\s*(?::\s*(\d{2})|시(?!\s*간)(?:\s*(\d{1,2})\s*분|\s*(반))?)")
+TIME = re.compile(r"(?:(오전|오후|아침|낮|저녁|밤)\s*)?(?<![\d.])(\d{1,2})\s*(?::\s*(\d{2})|시(?!\s*간)(?:\s*(\d{1,2})\s*분|\s*(반))?)")
 EVENING = {"오후", "저녁", "밤"}
 # 「12~13시」처럼 뒤 시각에만 「시」가 붙은 시 단위 범위의 앞 시각(2026-10-24 세 번째 채점: 「점심시간 12~13시 제외」의 12를 시각으로
 # 읽지 못해 맞는 쉬는 시각 12:00~13:00이 지워짐). 「1~2시간」 같은 길이와 날짜(「10.12~13」) 뒤 숫자는 보지 않습니다
-HOUR_RANGE_START = re.compile(r"(오전|오후|아침|낮|저녁|밤)?\s*(?<![\d.:])(\d{1,2})\s*(?=[~∼～〜\-–]\s*(?:오전|오후|아침|낮|저녁|밤)?\s*\d{1,2}\s*시(?!\s*간))")
+HOUR_RANGE_START = re.compile(
+    r"(?:(오전|오후|아침|낮|저녁|밤)\s*)?(?<![\d.:])(\d{1,2})\s*(?=[~∼～〜\-–]\s*(?:오전|오후|아침|낮|저녁|밤)?\s*\d{1,2}\s*시(?!\s*간))"
+)
 DAY_WORDS = {
     "MON": "월",
     "TUE": "화",
@@ -322,6 +329,82 @@ def _address_found(text: str, address: Any) -> bool:
     return any(normalize(same) + rest in haystack for same in SIDO_NAMES[sido] if same != sido)
 
 
+# 신청·안내 주소와 문의 전화번호 대조(2026-11-16 보안 감사 L-5). 화면은 이 값을 「신청하러 가기」 링크·문의 전화로 써요(frontend notice/detail.ts).
+# 숫자·날짜·이메일·장소처럼 원문과 대조하지 않으면 원문에 숨긴 지시문(프롬프트 인젝션)이나 그림 판독 오류로 다른 주소·번호가 그대로 게시돼요.
+# 값은 그 항목 근거 인용이 걸친 원문 줄(표 행이면 그 행 전체)에 있어야 해요. 다른 세부 값과 달리 앞뒤 줄(nearby)은 보지 않아요
+# (근거 옆 줄에 숨긴 주소를 가져오지 않게). 없으면 비우고 DETAIL_UNVERIFIED_CLEARED를 남겨요(공개는 하되 검수 대기열에 올라요).
+LINK_LEFT = re.compile(r"[a-z0-9_.@/\\-]")  # 주소 바로 앞에 오면 다른 호스트·경로의 일부가 되는 글자(소문자로 바꾼 뒤): notevil.com 안의 evil.com
+# 주소 바로 뒤에 와도 같은 주소인 경우: 끝, 경로·질의·조각의 시작(원문 주소의 앞부분만 적은 값), 문장 끝 마침표, 주소 글자가 아닌 글자
+LINK_RIGHT = re.compile(r"$|[/?#]|\.(?![a-z0-9_~%-])|[^a-z0-9._~%@-]")
+PHONE_RUN = re.compile(r"\d(?:[ \t.\-–()]*\d)*")  # 구분 글자(-·.·빈칸·괄호)만 끼어 이어진 숫자 덩어리
+PHONE_GAP = r"[ \t.\-–()]*"
+MIN_PHONE_DIGITS = 3  # 「126」「1350」 같은 짧은 대표번호까지 봐요. 「~8」(번호 범위)·「내선 12」처럼 더 짧은 덩어리는 견주지 않아요
+SPLIT_DIGITS = 7  # 값에 이만큼 이상 붙여 적은 숫자(「0234107744」)는 원문이 「02-3410-7744」처럼 나눠 적었을 수 있어요
+
+
+def _phone_pattern(run: str) -> str:
+    """값의 숫자 덩어리 → 원문에서 찾을 정규식. 값에 적힌 묶음(「02」「3410」)은 원문에서도 이어져 있어야 하고 묶음 사이에만 구분 글자가
+    끼어도 돼요(「2026. 12. 6.」이 「126」이 되지 않게). SPLIT_DIGITS자리 이상 한 묶음은 숫자 사이마다 구분 글자를 허용해요."""
+    groups = [PHONE_GAP.join(group) if len(group) >= SPLIT_DIGITS else group for group in re.findall(r"\d+", run)]
+    return rf"(?<!\d){PHONE_GAP.join(groups)}(?!\d)"
+
+
+def _flat(text: str) -> str:
+    """주소 견주기용 글: 전각 글자·%인코딩을 풀고 소문자로."""
+    return unquote(unicodedata.normalize("NFKC", text)).lower()
+
+
+def link_key(url: Any) -> str | None:
+    """주소를 견줄 열쇠: scheme·「www.」·끝의 「/」를 뺀 「호스트[:포트]경로?질의#조각」(소문자). 공개 http(s) 주소가 아니면 None."""
+    link = public_link(url)
+    if link is None:
+        return None
+    parts = urlsplit(link)
+    host = (parts.hostname or "").removeprefix("www.")
+    port = f":{parts.port}" if parts.port else ""
+    rest = parts.path + (f"?{parts.query}" if parts.query else "") + (f"#{parts.fragment}" if parts.fragment else "")
+    return _flat(host + port + rest).rstrip("/") or None
+
+
+def link_found(text: str, url: Any) -> bool:
+    """주소가 원문 글 text에 그 주소로 적혀 있는지. 원문은 「apply.lh.or.kr」「(https://www.lh.or.kr/)」처럼 scheme·www.가 없거나 있어도 돼요.
+    값이 원문 주소의 앞부분(경로·질의를 뺀 것)이어도 같은 주소로 봐요. 값이 원문에 없는 경로·호스트를 더했으면 아니에요."""
+    key = link_key(url)
+    if key is None:
+        return False
+    hay = _flat(text)
+    start = hay.find(key)
+    while start >= 0:
+        before = hay[:start].removesuffix("www.")
+        for prefix in ("https://", "http://", "//"):
+            if before.endswith(prefix):
+                before = before[: -len(prefix)]
+                break
+        # 한글 도메인이면 앞 글자가 한글이어도 이어진 이름이에요(「대한국.kr」 안의 「한국.kr」)
+        left = not before or not (LINK_LEFT.match(before[-1]) or (not key[0].isascii() and before[-1].isalnum()))
+        if left and LINK_RIGHT.match(hay, start + len(key)):
+            return True
+        start = hay.find(key, start + 1)
+    return False
+
+
+def phone_found(text: str, phone: Any) -> bool:
+    """전화번호가 원문 글 text에 있는지. 숫자를 견줘요(「(02) 1234-5678」 = 「02-1234-5678」, _phone_pattern): 값의 숫자 덩어리
+    (MIN_PHONE_DIGITS자리 이상)마다 같은 숫자가 앞뒤로 다른 숫자 없이 원문에 있어야 해요. 「02-1234-5678 02-9876-5432」처럼 빈칸으로
+    붙여 적은 번호는 빈칸에서 나눠 다시 봐요. 견줄 숫자 덩어리가 없는 값은 글자 그대로 있어야 해요."""
+    if not isinstance(phone, str) or not phone.strip():
+        return False
+    value, hay = unicodedata.normalize("NFKC", phone), unicodedata.normalize("NFKC", text)
+
+    def written(run: str) -> bool:
+        return len(re.sub(r"\D", "", run)) < MIN_PHONE_DIGITS or bool(re.search(_phone_pattern(run), hay))
+
+    runs = [m[0] for m in PHONE_RUN.finditer(value) if len(re.sub(r"\D", "", m[0])) >= MIN_PHONE_DIGITS]
+    if not runs:
+        return _contains(hay, value)
+    return all(written(run) or all(written(part) for part in run.split()) for run in runs)
+
+
 def table_rows(text: str, start: int, end: int) -> str | None:
     """원문 [start, end) 범위가 걸친 줄들이 모두 표 행(| 줄, 표 읽기 도움 줄 포함)이면 그 줄들 전체, 아니면 None."""
     if not 0 <= start < end <= len(text):
@@ -340,6 +423,7 @@ def table_rows(text: str, start: int, end: int) -> str | None:
 # 다른 일정·서류의 이름이 나오는 줄에서 멈추고(옆 항목의 값을 가져오지 않게), 시각은 그 줄들의 시각이 모두 이 일정의 시각일 때만 인정합니다
 NEAR_LINES = 2
 WEAK_EVIDENCE = {"EVIDENCE_SCATTERED", "EVIDENCE_AMBIGUOUS"}
+LINE_REACH = 200  # 근거 인용 줄(_Checker.lines)로 보는 인용 앞뒤 글자 수 상한
 
 
 def nearby_lines(text: str, start: int, end: int, stop: Any) -> str:
@@ -386,12 +470,25 @@ ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 CLUE_FOR_OTHER = "DOCUMENT_CLUE_FOR_OTHER_DOCUMENT"
 EXCLUSION_WORDS = re.compile(r"제외|면제|제출\s*하지\s*않|작성\s*하지\s*않|생략")
 CLAUSE_BREAK = re.compile(r"[.。\n※•▪◦|]|(?<=[다음함])\s")
-NAME_ASIDES = re.compile(r"\([^)]*\)|[‘’'\"“”「」『』]")
+NAME_QUOTES = str.maketrans("", "", "‘’'\"“”「」『』")
+
+
+def _without_name_asides(text: str) -> str:
+    """괄호 뒤 닫힘을 다시 찾지 않고 한 번씩 전진해요. 닫히지 않은 괄호는 원문대로 둡니다."""
+    parts, at = [], 0
+    while (start := text.find("(", at)) >= 0:
+        end = text.find(")", start + 1)
+        if end < 0:
+            break
+        parts.append(text[at:start])
+        at = end + 1
+    parts.append(text[at:])
+    return "".join(parts).translate(NAME_QUOTES)
 
 
 def _name_key(name: str) -> str:
     """서류 이름 비교 열쇠: 괄호 안 설명·따옴표를 빼고 정규화(「금융정보 등 (금융·신용·보험정보) 제공 동의서」 ↔ 「‘금융정보 등 제공 동의서’」)."""
-    return normalize(NAME_ASIDES.sub("", name or ""))
+    return normalize(_without_name_asides(name or ""))
 
 
 def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> str | None:
@@ -401,7 +498,7 @@ def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> st
     own = _name_key(str(document.get("name") or ""))
     keys = [(name, _name_key(name)) for name in others]
     keys = [(name, key) for name, key in keys if len(key) >= 4 and key not in own and own not in key]
-    for clause in CLAUSE_BREAK.split(NAME_ASIDES.sub("", text)):
+    for clause in CLAUSE_BREAK.split(_without_name_asides(text)):
         if not EXCLUSION_WORDS.search(clause):
             continue
         flat = normalize(clause)
@@ -416,7 +513,7 @@ def clue_for_other(document: dict[str, Any], text: str, others: list[str]) -> st
 # 날짜–장소 짝(2026-10-24 여섯 번째 채점: 한 표 칸에 「03.25.(수) (14:00~17:00) …주택계약실 | 03.26.(목) … 임대공급운영팀」처럼 날짜·장소가
 # 여럿 섞여 3.25 계약 장소가 3.26 장소로 게시됨). 근거에서 그 일정 날짜 바로 뒤(다음 날짜·칸 구분 전까지)에 장소 낱말이 있는데 결과 장소의
 # 이름 낱말이 그 안에 없고 다른 장소 낱말이 있으면 장소를 비웁니다(틀린 장소보다 빈 장소)
-PLACE_WORD = re.compile(r"[가-힣A-Za-z0-9]+(?:실|팀|지사|센터|본부|사무소|사무실|관리소|접수처|주민센터|세대)")
+PLACE_WORD = re.compile(r"[가-힣A-Za-z0-9]{1,128}(?:실|팀|지사|센터|본부|사무소|사무실|관리소|접수처|주민센터|세대)")
 DATE_TOKEN = re.compile(r"\d{1,4}\s*[./]\s*\d{1,2}\s*[./]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일")
 
 
@@ -484,14 +581,35 @@ class _Checker:
                     self.spans[evidence["id"]] = (start, end)
             self.rows[evidence["id"]] = expanded if expanded is not None else evidence["quote"]
         self.notes: list[str] = []
+        self.verified_links: set[str] = set()  # 근거로 확인한 안내 주소의 열쇠(link_key). 일정 신청 주소가 같으면 남겨요
+
+    def weak(self, pointer: str) -> bool:
+        """근거 위치가 불확실한 항목(흩어진 낱말·여러 곳, WEAK_EVIDENCE)인지."""
+        for issue in self.candidate["quality"].get("reviewIssues") or []:
+            target = str(issue.get("target") or "")
+            if issue.get("code") in WEAK_EVIDENCE and (target == pointer or target.startswith(pointer + "/")):
+                return True
+        return False
+
+    def lines(self, item: dict[str, Any], pointer: str) -> str:
+        """항목 근거 인용이 걸친 원문 줄(표 행이면 그 행 전체)과 인용문. 앞뒤 줄은 넣지 않고, 줄이 아주 길면 인용 앞뒤 LINE_REACH자까지만 봐요
+        (줄바꿈 없는 원문이 통째로 한 줄이 되지 않게). 근거 위치가 불확실한 항목은 인용문(표 행)만 봐요."""
+        found = [self.cited(item, rows=True)]
+        if not self.weak(pointer):
+            for i in item.get("evidenceIds") or []:
+                if i in self.spans:
+                    start, end = self.spans[i]
+                    line_end = self.text.find("\n", max(end - 1, start))
+                    first = max(self.text.rfind("\n", 0, start) + 1, start - LINE_REACH)
+                    last = min(len(self.text) if line_end < 0 else line_end, end + LINE_REACH)
+                    found.append(self.text[first:last])
+        return "\n".join(found)
 
     def nearby(self, item: dict[str, Any], own: str, others: list[str], pointer: str) -> str:
         """항목 근거 인용의 앞뒤 줄. 다른 항목 이름(others, 이 항목 이름과 겹치는 이름은 빼고)이 나오는 줄에서 멈춥니다.
         근거 위치가 불확실한 항목(흩어진 낱말·여러 곳)은 앞뒤 줄도 믿을 수 없어 빈 글을 돌려줍니다."""
-        for issue in self.candidate["quality"].get("reviewIssues") or []:
-            target = str(issue.get("target") or "")
-            if issue.get("code") in WEAK_EVIDENCE and (target == pointer or target.startswith(pointer + "/")):
-                return ""
+        if self.weak(pointer):
+            return ""
         mine = normalize(own or "")
         names = [n for n in (normalize(o or "") for o in others) if len(n) >= 3 and n not in mine and mine not in n]
 
@@ -527,9 +645,39 @@ class _Checker:
             self.place_pairs(schedule, f"{self.cited(schedule, rows=True)}\n{near}", label)
             self.channels(schedule, text, label)
             self.email(schedule, text, label)
+            self.application_url(schedule, self.lines(schedule, f"/schedules/{s}"), label)
             self.hours(schedule, text, label, near)
             self.days(schedule, text, label)
             self.minute_bounds(schedule, text, label, near)
+
+    def application_url(self, schedule: dict[str, Any], text: str, label: str) -> None:
+        """일정 신청 주소: 근거 인용 줄에 있거나, 근거로 확인한 안내 주소와 같아야 해요(2026-11-16 보안 감사 L-5).
+        일정 근거는 날짜 줄이라 주소가 다른 줄에 있는 일이 많아요. 지우면 재확인이 주소 줄을 다시 인용해 되찾을 수 있어요(recheck._lost_details)."""
+        url = schedule.get("applicationUrl")
+        if url is None or link_found(text, url) or link_key(url) in self.verified_links:
+            return
+        schedule["applicationUrl"] = None
+        self.clear("/schedules", label, "신청 주소를")
+
+    # 안내
+    def guidance(self) -> None:
+        """안내 주소(url)·문의 전화번호(phone)를 그 항목 근거 인용 줄에서 확인해요(2026-11-16 보안 감사 L-5). 없으면 비우고 그 항목에 메모를 남겨요.
+        안내는 판정에 쓰지 않는 섹션이라 메모가 되고 공고는 공개한 채 검수 대기열에 올라요(verifier NOTE_CODES·DROPPED_VALUE_CODES)."""
+        for g, item in enumerate(self.candidate.get("guidance") or []):
+            if not isinstance(item, dict):
+                continue
+            pointer = f"/guidance/{g}"
+            label = str(item.get("title") or item.get("id"))
+            text = self.lines(item, pointer)
+            if item.get("url") is not None:
+                if link_found(text, item["url"]):
+                    self.verified_links.add(link_key(item["url"]))
+                else:
+                    item["url"] = None
+                    self.clear(pointer, label, "안내 주소를")
+            if item.get("phone") is not None and not phone_found(text, item["phone"]):
+                item["phone"] = None
+                self.clear(pointer, label, "전화번호를")
 
     def own_times(self, schedule: dict[str, Any]) -> set[int]:
         """이 일정이 적은 시각 전부(접수·쉬는 시각, 시작·끝 MINUTE)."""
@@ -887,6 +1035,7 @@ def check_details(candidate: dict[str, Any], text: str | None = None, text_sourc
     text·text_source: 원문 글과 그 문서 id(근거 위치 TEXT_RANGE가 가리키는 글). 주면 장소·발급 기관·부수를 인용문이 걸친 표 행 전체에서 찾습니다.
     지운 값은 후보의 검수 이슈(quality.reviewIssues, 검증기가 표시 메모로 옮김)에 넣고, 작업 메모를 돌려줍니다."""
     checker = _Checker(candidate, text, text_source)
+    checker.guidance()  # 일정보다 먼저: 확인한 안내 주소를 일정 신청 주소 확인에 써요
     checker.schedules()
     checker.documents()
     refresh_application_channels(candidate)

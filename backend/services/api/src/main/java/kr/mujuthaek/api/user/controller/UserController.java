@@ -4,12 +4,14 @@ import jakarta.validation.Valid;
 import java.util.Locale;
 import kr.mujuthaek.api.user.controller.spec.UserApiSpec;
 import kr.mujuthaek.api.user.dto.request.ContactEmailRequest;
+import kr.mujuthaek.api.user.dto.request.TermsAgreementRequest;
 import kr.mujuthaek.api.user.dto.response.MeResponse;
 import kr.mujuthaek.api.user.dto.response.MyReportsResponse;
 import kr.mujuthaek.api.user.dto.response.WithdrawalResponse;
 import kr.mujuthaek.api.user.service.ContactEmailService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.MyReportService;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import kr.mujuthaek.api.user.service.UserService;
 import kr.mujuthaek.api.user.service.WithdrawalService;
 import kr.mujuthaek.api.user.service.WithdrawalStart;
@@ -34,16 +36,28 @@ class UserController implements UserApiSpec {
   private final WithdrawalService withdrawalService;
   private final ContactEmailService contactEmails;
   private final MyReportService myReports;
+  private final TermsAgreementService terms;
 
   UserController(
       UserService userService,
       WithdrawalService withdrawalService,
       ContactEmailService contactEmails,
-      MyReportService myReports) {
+      MyReportService myReports,
+      TermsAgreementService terms) {
     this.userService = userService;
     this.withdrawalService = withdrawalService;
     this.contactEmails = contactEmails;
     this.myReports = myReports;
+    this.terms = terms;
+  }
+
+  @Override
+  @PostMapping("/me/terms")
+  public ResponseEntity<Void> agreeTerms(
+      @AuthenticationPrincipal LoginUser user, @RequestBody TermsAgreementRequest request) {
+    terms.agree(
+        user.userId(), request.termsVersion(), request.privacyVersion(), request.ageOver14());
+    return ResponseEntity.noContent().build();
   }
 
   @Override

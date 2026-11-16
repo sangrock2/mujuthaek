@@ -19,7 +19,9 @@ esac
 echo "== 준비 확인"
 curl -sf "$PROM/-/ready" > /dev/null || { echo "Prometheus가 없어요: docker compose -f tools/perf/docker-compose.yml up -d" >&2; exit 1; }
 curl -sf "$GRAFANA/api/health" > /dev/null || { echo "Grafana가 없어요: docker compose -f tools/perf/docker-compose.yml up -d" >&2; exit 1; }
-curl -sf -o /dev/null http://127.0.0.1:18080/actuator/prometheus || { echo "서버 지표가 안 보여요: 다른 터미널에서 tools/perf/tunnel.sh" >&2; exit 1; }
+# 운영 지표는 지표 토큰이 있어야 열려요(없으면 404). Prometheus도 같은 값을 쓰게 파일에 적어요 (2026-11-16 보안 감사 4장)
+(umask 077 && printf '%s' "${METRICS_TOKEN:-}" > "$PERF_DIR/prometheus/secrets/metrics-token")
+curl -sf -o /dev/null -H "Authorization: Bearer ${METRICS_TOKEN:-}" http://127.0.0.1:18080/actuator/prometheus || { echo "서버 지표가 안 보여요: 다른 터미널에서 tools/perf/tunnel.sh, 운영이면 .env의 METRICS_TOKEN" >&2; exit 1; }
 curl -sf -o /dev/null http://127.0.0.1:19100/metrics || warn "node-exporter가 안 보여요(tools/perf/server.sh exporters-up). 서버 CPU 그래프가 빠져요"
 
 VERSIONS="$(remote_versions)" || { echo "서버에 SSH로 붙지 못했어요 (tools/perf/.env의 SSH_KEY)" >&2; exit 1; }
@@ -37,7 +39,11 @@ fi
 remote_sql < "$PERF_DIR/lib/table_counts.sql" > "$OUT/table_counts.csv" 2>> "$OUT/pg.err" || warn "데이터 양을 못 읽었어요"
 
 MEMBER=false
-[ -n "${JWT_SECRET:-}" ] && [ -n "${TEST_USER_ID:-}" ] && MEMBER=true
+if [ -n "${JWT_SECRET:-}" ] && [ -n "${TEST_USER_ID:-}" ]; then
+  # 운영 JWT_SECRET으로 토큰을 만들지 않아요. 그 값이 노트북에 있으면 어느 회원·관리자 토큰이든 만들 수 있어요(2026-11-16 보안 감사 4장)
+  token_host_allowed "$BASE_URL" || { echo "BASE_URL($BASE_URL)이 로컬·스테이징 주소가 아니라 JWT를 만들지 않아요. tools/perf/.env의 JWT_SECRET을 비워요" >&2; exit 1; }
+  MEMBER=true
+fi
 
 START=$(date +%s)
 set +e

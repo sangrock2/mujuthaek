@@ -1,16 +1,16 @@
 """Prepare a backup-only identity, then restrict app storage only after verified host cutover."""
 import argparse
-import csv
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 
 from aws_personal import AWS, RUNTIME
+from private_files import create_private_file
 
 BACKUP_USER = 'mujuthaek-personal-backup'
 PRIVATE = RUNTIME / '.env.backup-isolated'
+APP_POLICY = 'PersonalBucketOnly'
 
 
 def backup_policy(bucket):
@@ -38,13 +38,8 @@ def app_policy(bucket):
 
 
 def private_file(path):
-    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    descriptor = create_private_file(path)
     os.close(descriptor)
-    if os.name == 'nt':
-        response = subprocess.run(['whoami', '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, check=True)
-        sid = next(csv.reader(response.stdout.strip().splitlines()))[1]
-        subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', f'*{sid}:(F)'],
-                       check=True, capture_output=True)
 
 
 def values(path):
@@ -112,12 +107,12 @@ def finalize(aws, config, receipt):
         raise RuntimeError('Unexpected managed permissions on app identity')
     if aws.call('iam', 'list-groups-for-user', '--user-name', users[0])['Groups']:
         raise RuntimeError('Unexpected group membership on app identity')
-    old = aws.call('iam', 'get-user-policy', '--user-name', users[0], '--policy-name', 'PersonalBucketOnly')['PolicyDocument']
+    old = aws.call('iam', 'get-user-policy', '--user-name', users[0], '--policy-name', APP_POLICY)['PolicyDocument']
     snapshot = RUNTIME / 'app-storage-policy-before-backup-separation.json'
     if not snapshot.exists():
         private_file(snapshot)
         snapshot.write_text(json.dumps(old), encoding='utf-8')
-    aws.call('iam', 'put-user-policy', '--user-name', users[0], '--policy-name', 'PersonalBucketOnly',
+    aws.call('iam', 'put-user-policy', '--user-name', users[0], '--policy-name', APP_POLICY,
              '--policy-document', json.dumps(app_policy(config['bucket'])))
     print('App storage restricted to raw files; backup objects explicitly denied; existing app key retained.')
 

@@ -105,8 +105,9 @@ def main():
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a', encoding='utf-8') as output:
             output.write(f"Release: `{result['release']}`\n\nPrevious: `{base['release']}`\n\nChanged: {', '.join(selected) or 'none'}\n\n")
+            # Host-written values: kept to one line without workflow command markers.
             for service, image in result.get('images', {}).items():
-                output.write(f"{service}: `{image['tag']}`\n\n")
+                output.write(f"{backend.log_safe(service, 32)}: `{backend.log_safe(image['tag'], 120)}`\n\n")
             output.write(f"Frontend source: `{info.get('commit')}`\n\nFrontend: https://mujuthaek.vercel.app\n")
 
 

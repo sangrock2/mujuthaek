@@ -45,6 +45,12 @@ public class UserService {
         user.getRole().name(),
         providers,
         user.getCreatedAt(),
-        user.getEmail());
+        user.getEmail(),
+        user.termsAgreed());
+  }
+
+  /** 가입 필수 동의를 했는지. 없는 회원이면 false (요청마다 회원 기능 앞에서 봐요) */
+  public boolean termsAgreed(UUID userId) {
+    return users.termsAgreed(userId);
   }
 }

@@ -6,6 +6,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import { type QuoteBox, quoteBoxes } from "@/features/notice/pdfQuote";
 import type { PdfTarget } from "@/features/notice/usePdfViewer";
 import { cn } from "@/shared/lib/cn";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 2;
@@ -67,6 +68,8 @@ function PdfViewerPanel({
   const pageEls = useRef(new Map<number, HTMLDivElement>());
   const [quote, setQuote] = useState<QuoteResult | null>(null);
   const fetcher = useRef(fetchData);
+  // 기관 공고 페이지는 http·https 주소일 때만 링크로 보여요 (2026-11-16 보안 감사 L-4)
+  const siteUrl = safeExternalUrl(detailUrl);
 
   // PDF 불러오기 (pdf.js는 브라우저에서만 불러와요)
   useEffect(() => {
@@ -273,7 +276,7 @@ function PdfViewerPanel({
         <a
           href={src}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           aria-label="새 창에서 열기"
           className={iconBtn}
         >
@@ -303,15 +306,15 @@ function PdfViewerPanel({
         {error ? (
           <div className="flex h-full flex-col items-center justify-center gap-[12px] px-[24px] text-center">
             <span className="text-[16px] font-bold">원문을 불러오지 못했어요</span>
-            {detailUrl ? (
+            {siteUrl ? (
               <>
                 <span className="text-text-sub text-[14px]">
                   기관 사이트에서 원문을 확인해 주세요
                 </span>
                 <a
-                  href={detailUrl}
+                  href={siteUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="bg-surface text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[16px] text-[14px] font-bold no-underline"
                 >
                   <ExternalLink size={16} aria-hidden />

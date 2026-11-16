@@ -328,7 +328,7 @@ function BlockUnits({ units, map, more, excel = true, onShowLife, sites }: Block
               <a
                 href={directions}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="bg-brand inline-flex min-h-[46px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold text-white no-underline hover:text-white"
               >
                 <ArrowRight size={17} strokeWidth={2.2} aria-hidden />

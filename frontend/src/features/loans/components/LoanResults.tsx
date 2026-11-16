@@ -13,6 +13,7 @@ import {
 } from "@/features/loans/loan";
 import type { LoanCheck } from "@/features/loans/useLoanCheck";
 import { cn } from "@/shared/lib/cn";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 
 type Props = { calc: LoanCheck; variant: "web" | "mobile" };
 
@@ -66,6 +67,8 @@ function Reasons({ item }: { item: LoanItem }) {
 }
 
 function ItemCard({ item, web }: { item: LoanItem; web: boolean }) {
+  // 상품 안내 원문은 서버 값이라 http·https 주소일 때만 링크로 써요 (2026-11-16 보안 감사 L-4)
+  const source = safeExternalUrl(item.sourceUrl);
   return (
     <li
       className={cn(
@@ -99,11 +102,11 @@ function ItemCard({ item, web }: { item: LoanItem; web: boolean }) {
           <dd className="m-0 min-w-0">{item.rateSummary}</dd>
         </div>
       </dl>
-      {item.sourceUrl && (
+      {source && (
         <a
-          href={item.sourceUrl}
+          href={source}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           className="inline-flex min-h-[40px] items-center gap-[4px] self-start text-[14px] font-bold no-underline"
         >
           상품 안내 원문

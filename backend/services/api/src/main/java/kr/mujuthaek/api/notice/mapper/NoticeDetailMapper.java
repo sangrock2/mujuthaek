@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import kr.mujuthaek.api.common.text.ExternalUrl;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.ApplicationEmail;
 import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse.AreaSummary;
@@ -153,7 +154,7 @@ public final class NoticeDetailMapper {
               starts,
               ends,
               text(s.path("description")),
-              text(s.path("applicationUrl")),
+              ExternalUrl.safe(text(s.path("applicationUrl"))), // http·https만 (보안 감사 L-4)
               NoticeProjection.channels(s.path("channels")),
               places(s.path("places")),
               email(s.path("applicationEmail")),
@@ -268,7 +269,7 @@ public final class NoticeDetailMapper {
               text(g.path("title")),
               text(g.path("description")),
               text(g.path("phone")),
-              text(g.path("url")),
+              ExternalUrl.safe(text(g.path("url"))),
               cite(evidence, g.path("evidenceIds"))));
     }
     return out;
@@ -566,7 +567,7 @@ public final class NoticeDetailMapper {
       }
       JsonNode d = all.get(i);
       String id = text(d.path("id"));
-      String url = text(d.path("originalUrl"));
+      String url = ExternalUrl.safe(text(d.path("originalUrl")));
       boolean view = id != null && noticeId != null && viewable.containsKey(id);
       if (url != null || view) {
         out.add(

@@ -1,6 +1,7 @@
 """Regression checks for burst-starved startup, bounded probes and safe recovery."""
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,10 +15,27 @@ ROOT = BASE.parents[3]
 spec = importlib.util.spec_from_file_location('readiness_host', BASE / 'release_host.py')
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
+gateway_spec = importlib.util.spec_from_file_location('gateway_harness', ROOT / 'backend/infra/security/test_gateway.py')
+gateway = importlib.util.module_from_spec(gateway_spec)
+gateway_spec.loader.exec_module(gateway)
 sys.path.insert(0, str(BASE))
 import install_runtime_update as installer
 sys.path.insert(0, str(ROOT / '.github/scripts'))
 import backend_release as backend
+
+# Variables the live host's .env already has. It gets no new ones before the next deploy, so anything else the
+# manifest reads must have a default.
+LIVE_REQUIRED = {
+    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'S3_BUCKET', 'POSTGRES_PASSWORD', 'API_DB_PASSWORD',
+    'NOTIFICATION_DB_PASSWORD', 'COLLECTOR_DB_PASSWORD', 'EXTRACTION_DB_PASSWORD', 'RABBITMQ_PASSWORD', 'RELEASE',
+    'JWT_SECRET', 'PUBLIC_ORIGIN', 'NOTIFICATION_INTERNAL_TOKEN', 'COLLECTOR_ADMIN_TOKEN', 'EXTRACTION_REVIEW_TOKEN',
+    'TRAFFIC_INGEST_TOKEN', 'API_TLS_CERT_DIR',
+}
+
+
+def service(source, name):
+    match = re.search(r'(?ms)^  ' + re.escape(name) + r':\n(.*?)(?=^  [a-zA-Z][\w-]*:\n|\Z)', source)
+    return match[0] if match else ''
 
 
 class Clock:
@@ -35,6 +53,18 @@ class Readiness(unittest.TestCase):
         self.assertIn('PUSH_VAPID_PRIVATE_KEY: ${PUSH_VAPID_PRIVATE_KEY:-}', result)
         self.assertEqual(result.count('cpus: "0.10"'), 1)
         self.assertEqual(result.count('cpus: "0.15"'), 1)
+
+    def test_virtual_thread_scheduler_is_not_a_single_carrier(self):
+        # 보안 감사 M-1: ActiveProcessorCount=1만 두면 가상 스레드 실행기도 1개라 CPU를 쓰는 요청 하나가 모든 요청을 멈췄어요
+        source = (BASE / 'compose.prod.yml').read_text().replace(' -Djdk.virtualThreadScheduler.parallelism=4', '')
+        result = installer.runtime_manifest(source)
+        self.assertEqual(installer.runtime_manifest(result), result)
+        options = [line for line in result.splitlines() if line.startswith('      JAVA_TOOL_OPTIONS:')]
+        self.assertEqual(len(options), 2)  # api, notification
+        for line in options:
+            self.assertIn('-XX:ActiveProcessorCount=1', line)
+            self.assertEqual(line.count('-Djdk.virtualThreadScheduler.parallelism=4'), 1)
+        self.assertEqual(installer.runtime_manifest((BASE / 'compose.prod.yml').read_text()), installer.runtime_manifest(result))
 
     def test_four_minute_startup_succeeds_within_the_deadline(self):
         obj = host.Host.__new__(host.Host)
@@ -164,3 +194,71 @@ class ResultProtocol(unittest.TestCase):
                     self.assertEqual(put.call_count,1)
             finally:
                 os.chdir(old)
+
+
+class ProductionManifest(unittest.TestCase):
+    def setUp(self):
+        # Other checks read this file with the Windows locale code page, so it must stay ASCII.
+        self.source = (BASE / 'compose.prod.yml').read_text(encoding='ascii')
+
+    def test_an_existing_host_env_still_satisfies_every_required_variable(self):
+        self.assertEqual(set(re.findall(r'\$\{(\w+):\?', self.source)), LIVE_REQUIRED)
+
+    def test_api_gets_private_hash_salt_unsubscribe_key_and_ops_alerts_as_optional_values(self):
+        # Security audit L-1/L-15 (empty: the API derives its own fallback) and L-24 (empty: alerts stay off).
+        api = service(self.source, 'api')
+        for line in ('TRAFFIC_IP_SALT: ${TRAFFIC_IP_SALT:-}', 'EMAIL_UNSUBSCRIBE_KEY: ${EMAIL_UNSUBSCRIBE_KEY:-}',
+                     'SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-${EXTRACTION_SLACK_WEBHOOK_URL:-}}', 'MUJUTHAEK_ENV: prod'):
+            self.assertIn('\n      ' + line + '\n', api)
+        # A separately passed empty EXTRACTION_SLACK_WEBHOOK_URL would never be reached by Spring's fallback.
+        self.assertNotIn('      EXTRACTION_SLACK_WEBHOOK_URL:', api)
+
+    def test_no_stale_server_side_frontend_container(self):
+        # Security audit L-20: Vercel serves the site; nothing on the host routes to an old Next.js container.
+        self.assertEqual(service(self.source, 'frontend'), '')
+        self.assertNotIn('mujuthaek-personal-frontend', self.source)
+        self.assertIn('\n    depends_on: [api]\n', service(self.source, 'nginx'))
+        conf = (BASE / 'nginx/default.conf').read_text(encoding='utf-8')
+        self.assertEqual(set(re.findall(r'proxy_pass\s+(\S+);', conf)), {'http://api:8080'})
+        self.assertIn('location / { return 302 https://mujuthaek.vercel.app$request_uri; }', conf)
+
+    def test_host_manifest_update_keeps_new_settings(self):
+        result = installer.runtime_manifest(self.source)
+        self.assertIn('      MUJUTHAEK_ENV: prod\n', service(result, 'api'))
+        self.assertEqual(service(result, 'frontend'), '')
+
+
+class GatewayLimits(unittest.TestCase):
+    def setUp(self):
+        self.config = (BASE / 'nginx/default.conf').read_text(encoding='utf-8')
+
+    def test_every_proxied_location_has_per_address_and_server_wide_limits(self):
+        self.assertEqual(gateway.limit_gaps(self.config), [])
+        names = [name for name, _ in gateway.locations(self.config)]
+        for name in ('= /actuator/health', '/oauth2/', '/login/oauth2/', '/api/'):
+            self.assertIn(name, names)
+
+    def test_checker_reports_the_audited_gaps(self):
+        # Security audit L-16: health had no limit at all and OAuth start only a per-address one.
+        old = re.sub(r'(?ms)^    location = /actuator/health \{.*?^    \}\n',
+                     '    location = /actuator/health { proxy_pass http://api:8080; }\n', self.config)
+        old = old.replace('        limit_req zone=login_total burst=20 nodelay;\n', '')
+        self.assertEqual(gateway.limit_gaps(old), ['= /actuator/health', '/oauth2/'])
+
+
+class BrokerRetention(unittest.TestCase):
+    def test_personal_data_dead_letter_queues_get_a_seven_day_cap_without_touching_others(self):
+        # Security audit L-14: failed notification messages carry recipients' emails and push keys.
+        command = host.dlq_retention_command()
+        self.assertEqual(command[:9], ('exec', '-T', 'rabbitmq', 'rabbitmqctl', 'set_operator_policy',
+                                       '--priority', '0', '--apply-to', 'queues'))
+        name, pattern, definition = command[9:]
+        self.assertEqual(name, 'mujuthaek-dlq-retention')
+        self.assertEqual(definition, '{"message-ttl":604800000,"max-length":10000}')
+        for queue in ('mujuthaek.notification.dlq', 'mujuthaek.api.push-subscription-expired.dlq'):
+            self.assertRegex(queue, pattern)
+        # Pipeline DLQs may still need reprocessing; a TTL policy would delete their old messages at once.
+        for queue in ('mujuthaek.raw.collected.dlq', 'mujuthaek.raw.policy.dlq', 'mujuthaek.policy.extracted.dlq',
+                      'mujuthaek.area.source-ready.dlq', 'mujuthaek.notification', 'mujuthaek.raw.collected',
+                      'mujuthaek.dlx', 'other.notification.dlq', 'mujuthaek.notification.dlq.archive'):
+            self.assertNotRegex(queue, pattern)

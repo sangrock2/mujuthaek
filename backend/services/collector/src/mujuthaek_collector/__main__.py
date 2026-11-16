@@ -41,7 +41,7 @@ import logging
 import threading
 from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import date, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from mujuthaek_collector.area.sources import SOURCES as AREA_SOURCES
@@ -60,6 +60,7 @@ from mujuthaek_collector.sources.policy.store import PostgresPolicyStore
 from mujuthaek_collector.sources.registry import ORDER, get
 from mujuthaek_platform import broker, outbox
 from mujuthaek_platform import logging as platform_logging
+from mujuthaek_platform.http_server import BoundedHTTPServer
 from mujuthaek_platform.slack import QuietAlerts
 
 log = logging.getLogger("mujuthaek_collector")
@@ -74,7 +75,7 @@ def make_client(source: Source, settings: Settings) -> Fetcher:
     custom = source.make_client(settings)
     if custom is not None:
         return custom
-    return PoliteClient(delay_seconds=settings.delay_seconds, legacy_tls=source.legacy_tls, max_file_bytes=settings.max_file_bytes)
+    return PoliteClient(delay_seconds=settings.delay_seconds, legacy_tls_hosts=source.legacy_tls_hosts, max_file_bytes=settings.max_file_bytes)
 
 
 def make_file_store(settings: Settings) -> S3FileStore:
@@ -373,7 +374,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def serve_health() -> None:
-    server = HTTPServer(("0.0.0.0", HEALTH_PORT), HealthHandler)
+    server = BoundedHTTPServer(("0.0.0.0", HEALTH_PORT), HealthHandler, max_workers=4, request_timeout=15)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
 

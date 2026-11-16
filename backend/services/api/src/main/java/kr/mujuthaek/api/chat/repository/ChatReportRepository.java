@@ -62,6 +62,16 @@ public class ChatReportRepository {
         > 0;
   }
 
+  /** 그 회원이 since 뒤에 낸 신고 수 (하루 신고 상한용). */
+  public int countSince(UUID reporterId, OffsetDateTime since) {
+    Integer count =
+        jdbc.queryForObject(
+            "select count(*) from chat.message_reports where reporter_id = :reporter and created_at >= :since",
+            new MapSqlParameterSource().addValue("reporter", reporterId).addValue("since", since),
+            Integer.class);
+    return count == null ? 0 : count;
+  }
+
   /** 메시지의 검토 전 신고를 모두 검토 결과로 바꾸고 처리한 관리자·시각을 남겨요. */
   public void review(UUID messageId, ReviewStatus result, UUID reviewer, OffsetDateTime at) {
     jdbc.update(

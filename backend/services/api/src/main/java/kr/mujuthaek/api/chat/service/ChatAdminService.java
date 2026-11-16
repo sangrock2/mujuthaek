@@ -76,6 +76,7 @@ public class ChatAdminService {
   @Transactional
   public void review(UUID messageId, ReviewAction action, UUID reviewer) {
     OffsetDateTime now = OffsetDateTime.now(clock);
+    messages.lockMessage(messageId);
     MessageRow row =
         messages
             .find(messageId, null)

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSession } from "@/features/auth/session";
+import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError } from "@/shared/lib/api/client";
 import { Toggle } from "@/shared/ui/Toggle";
 
@@ -35,7 +35,7 @@ export function EmailNotifications() {
   const query = useQuery({
     queryKey: key,
     queryFn: () => api.get<Status>(path),
-    enabled: !!session.data,
+    enabled: isMember(session.data),
     retry: false,
   });
   const [address, setAddress] = useState<string>();

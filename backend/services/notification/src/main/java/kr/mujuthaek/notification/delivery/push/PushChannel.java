@@ -282,9 +282,16 @@ class PushChannel implements NotificationChannel {
     }
     try {
       URI uri = new URI(device.endpoint());
+      // 호스트 부분이 도메인 하나뿐이어야 해요. 「fcm.googleapis.com:」처럼 포트 칸만 빈 주소는 port가 -1이라 통과했는데, VAPID aud가
+      // 「https://fcm.googleapis.com:」가 되어 푸시 서비스가 401로 거절하고 키 문제처럼 기록됐어요(2026-11-16 보안 감사 4장)
       return "https".equals(uri.getScheme())
           && uri.getUserInfo() == null
           && uri.getPort() == -1
+          && uri.getHost() != null
+          && uri.getHost().equals(uri.getRawAuthority())
+          && uri.getRawPath() != null
+          && uri.getRawPath().startsWith("/")
+          && uri.getRawFragment() == null
           && properties.allows(uri.getHost());
     } catch (java.net.URISyntaxException e) {
       return false;

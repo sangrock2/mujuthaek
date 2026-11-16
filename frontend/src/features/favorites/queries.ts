@@ -4,7 +4,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useSession } from "@/features/auth/session";
+import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
@@ -49,7 +49,7 @@ async function fetchAll(): Promise<Favorite[]> {
 
 export function useFavorites() {
   const session = useSession();
-  const loggedIn = !!session.data;
+  const loggedIn = isMember(session.data);
   const q = useQuery({
     queryKey: favoritesKey,
     queryFn: fetchAll,

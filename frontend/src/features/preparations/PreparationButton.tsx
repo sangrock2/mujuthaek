@@ -7,6 +7,7 @@ import { useSession } from "@/features/auth/session";
 import { api } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { pathSegment } from "@/shared/lib/api/path";
 import { routes } from "@/shared/lib/routes";
 import { preparationError, preparationsKey, type Preparation } from "./api";
 
@@ -29,7 +30,7 @@ export function PreparationButton({ noticeId }: { noticeId: string }) {
     setPending(true);
     setError(null);
     try {
-      const p = await api.put<Preparation>(`${endpoints.preparations}/notices/${encodeURIComponent(noticeId)}`);
+      const p = await api.put<Preparation>(`${endpoints.preparations}/notices/${pathSegment(noticeId)}`);
       await Promise.all([
         client.invalidateQueries({ queryKey: preparationsKey }),
         client.invalidateQueries({ queryKey: ["favorites"] }),

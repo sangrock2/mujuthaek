@@ -17,12 +17,23 @@ import {
 import { WithdrawButton } from "@/features/me/components/WithdrawButton";
 import { Toggle } from "@/shared/ui/Toggle";
 import { providerLabel, useLogout, useSession } from "@/features/auth/session";
-import { clearConditions, setSaveOnDevice } from "@/features/conditions/store";
+import {
+  clearConditions,
+  setSaveOnDevice,
+  useHasStoredConditions,
+} from "@/features/conditions/store";
 import { StoredInfoList, saveOnDeviceNote } from "@/features/me/components/StoredInfo";
 import { useConditionSummary } from "@/features/conditions/useConditionSummary";
 import { useFavorites } from "@/features/favorites/queries";
 import { useMyReports } from "@/features/me/api";
-import { meTabs, reportKindParam, type MeTab } from "@/features/me/tabs";
+import {
+  meTabs,
+  reportCodeParam,
+  reportKindParam,
+  reportScreenParam,
+  type MeTab,
+} from "@/features/me/tabs";
+import { AnalyticsConsentSetting } from "@/shared/analytics/Analytics";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
 
@@ -50,6 +61,7 @@ const grayButton =
 
 /** 내 정보 (웹). 탭은 주소의 ?tab=으로도 열려요 (예: /me?tab=reports) */
 export function WebMe({ initialTab }: { initialTab?: MeTab }) {
+  const hasStoredConditions = useHasStoredConditions();
   const { logout, logoutError } = useLogout();
   const router = useRouter();
   const params = useSearchParams();
@@ -277,10 +289,11 @@ export function WebMe({ initialTab }: { initialTab?: MeTab }) {
               </div>
               <ContactEmailCard className="border-line-soft border-b border-solid pb-[16px]" />
               <StoredInfoList />
+              <AnalyticsConsentSetting className="border-line-soft border-t border-solid pt-[16px]" />
               <button
                 type="button"
                 onClick={clearConditions}
-                disabled={!conditions.hasConditions}
+                disabled={!hasStoredConditions}
                 className={cn(
                   grayButton,
                   "disabled:text-text-sub self-start disabled:cursor-default",
@@ -295,8 +308,8 @@ export function WebMe({ initialTab }: { initialTab?: MeTab }) {
           {tab === "reports" && (
             <ReportPanel
               initialKind={reportKindParam(params.get("kind"))}
-              screen={params.get("from") ?? undefined}
-              context={params.get("code") ?? undefined}
+              screen={reportScreenParam(params.get("from"))}
+              context={reportCodeParam(params.get("code"))}
             />
           )}
         </section>

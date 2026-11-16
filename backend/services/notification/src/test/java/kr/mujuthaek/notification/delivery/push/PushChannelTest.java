@@ -46,6 +46,8 @@ class PushChannelTest {
     List<PushDevice> devices = new ArrayList<>();
     devices.add(device("https://evil.example.com/x"));
     devices.add(device("http://fcm.googleapis.com/x"));
+    devices.add(device("https://fcm.googleapis.com:/empty-port")); // 2026-11-16 보안 감사 4장
+    devices.add(device("https://fcm.googleapis.com/x#fragment"));
     devices.add(new PushDevice("https://fcm.googleapis.com/no-keys", " ", "a"));
     devices.add(null);
     for (int i = 0; i < 6; i++) {
@@ -59,7 +61,9 @@ class PushChannelTest {
         .contains("https://fcm.googleapis.com/4")
         .doesNotContain("https://fcm.googleapis.com/5")
         .doesNotContain("evil")
-        .doesNotContain("http://");
+        .doesNotContain("http://")
+        .doesNotContain("empty-port")
+        .doesNotContain("fragment");
   }
 
   @Test

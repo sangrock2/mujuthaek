@@ -158,6 +158,16 @@ public class PushSubscriptionService implements PushDeviceFinder {
       throw invalid("endpoint", "https 푸시 서비스 주소여야 해요");
     }
     String host = uri.getHost();
+    // 주소의 호스트 부분이 도메인 하나뿐이어야 해요. 「fcm.googleapis.com:」처럼 포트 칸만 빈 주소는 port가 -1이라 통과했는데, 알림 서버가 VAPID
+    // aud를 「https://fcm.googleapis.com:」로 만들어 푸시 서비스가 401로 거절하고 키 문제처럼 기록됐어요. 경로가 /로 시작해야 하고 #도 받지
+    // 않아요(2026-11-16 보안 감사 4장)
+    if (host == null
+        || !host.equals(uri.getRawAuthority())
+        || uri.getRawPath() == null
+        || !uri.getRawPath().startsWith("/")
+        || uri.getRawFragment() != null) {
+      throw invalid("endpoint", "https 푸시 서비스 주소여야 해요");
+    }
     if (!properties.allows(host)) {
       throw invalid("endpoint", "지원하는 푸시 서비스 주소가 아니에요");
     }

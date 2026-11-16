@@ -24,6 +24,13 @@ pytestmark = pytest.mark.skipif(not DB_URL, reason="EXTRACTION_TEST_DB_URL이 �
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
 
 
+@pytest.fixture(autouse=True)
+def legacy_publication(monkeypatch):
+    """이 파일은 발행 흐름 자체를 확인해서, 보류 없이 바로 내보내는 legacy로 둬요. 관문 동작은 모드를 직접 정한 시험이 봐요.
+    코드 기본값은 manual(실패 시 닫힘)이에요(2026-11-16 보안 감사 4장)."""
+    monkeypatch.setenv("EXTRACTION_PUBLICATION_MODE", "legacy")
+
+
 @pytest.fixture
 def store():
     import psycopg

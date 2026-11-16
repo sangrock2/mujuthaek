@@ -2,10 +2,12 @@
 
 // 내 정보 화면의 실제 API: 알림 설정 · 관심 조건 · 제보 · 회원 탈퇴
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSession } from "@/features/auth/session";
-import { API_BASE_URL, api, ApiError } from "@/shared/lib/api/client";
+import { markWithdrawalStarted } from "@/features/auth/deviceData";
+import { isMember, useSession } from "@/features/auth/session";
+import { API_BASE_URL, api, ApiError, isTermsNotAgreed } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
+import { safeAppPath } from "@/shared/lib/safeUrl";
 
 /* ── 알림 설정 (GET·PUT /api/users/me/notification-settings) ───────────── */
 
@@ -33,7 +35,7 @@ const settingsKey = ["me", "notification-settings"] as const;
 export function useNotificationSettings() {
   const session = useSession();
   const client = useQueryClient();
-  const loggedIn = !!session.data;
+  const loggedIn = isMember(session.data);
   const q = useQuery({
     queryKey: settingsKey,
     queryFn: () => api.get<NotificationSettings>(endpoints.notificationSettings),
@@ -95,7 +97,7 @@ const EMPTY_INTEREST: Interest = { saved: false, regionCodes: [], includeNationw
 export function useInterest(kind: InterestKind) {
   const session = useSession();
   const client = useQueryClient();
-  const loggedIn = !!session.data;
+  const loggedIn = isMember(session.data);
   const q = useQuery({
     queryKey: interestKey(kind),
     queryFn: () => api.get<Interest>(endpoints.interests(kind)),
@@ -148,6 +150,7 @@ export type ReportBody = {
 
 /** 백엔드 제보 오류 → 안내 문구 */
 export function reportErrorMessage(error: unknown) {
+  if (isTermsNotAgreed(error)) return "약관에 동의하면 제보할 수 있어요. 동의 화면으로 이동해요";
   if (error instanceof ApiError) {
     if (error.status === 401) return "로그인하면 제보할 수 있어요";
     if (error.status === 409) return "같은 칸에 보낸 제보를 아직 확인하고 있어요";
@@ -191,7 +194,7 @@ export type MyReport = {
 
 export function useMyReports() {
   const session = useSession();
-  const loggedIn = !!session.data;
+  const loggedIn = isMember(session.data);
   const q = useQuery({
     queryKey: myReportsKey,
     queryFn: () => api.get<{ items: MyReport[] }>(endpoints.myReports).then((r) => r.items),
@@ -229,11 +232,22 @@ export function startWithdrawal(provider?: string) {
 
 /**
  * 다시 로그인 주소로 이동 → 회원 삭제 → /withdrawn. 백엔드가 준 주소는 서버 주소일 수 있어서(Vercel 뒤)
- * 경로만 써서 API 주소(운영은 이 사이트, 로컬은 NEXT_PUBLIC_API_BASE_URL)로 가요
+ * 경로만 써서 API 주소(운영은 이 사이트, 로컬은 NEXT_PUBLIC_API_BASE_URL)로 가요.
+ * 경로가 「//다른곳」처럼 다른 사이트로 가는 모양이면 이동하지 않고 false예요 (2026-11-16 보안 감사 L-4)
  */
-export function goWithdrawal(start: WithdrawalStart) {
-  const url = new URL(start.reauthUrl, window.location.origin);
+export function goWithdrawal(start: WithdrawalStart): boolean {
+  let path: string | null = null;
+  try {
+    const url = new URL(start.reauthUrl, window.location.origin);
+    path = safeAppPath(`${url.pathname}${url.search}`);
+  } catch {
+    path = null;
+  }
+  if (!path) return false;
+  // 탈퇴 완료 화면이 이 탭에서 시작한 탈퇴인지 알고 기기 데이터를 지우게 표시해요
+  markWithdrawalStarted();
   // 백엔드 OAuth 주소(rewrites로 넘김)라 Next 화면 이동이 아니라 페이지를 새로 열어요
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Next 화면이 아니라 백엔드로 가는 주소예요
-  window.location.href = `${API_BASE_URL}${url.pathname}${url.search}`;
+  window.location.href = `${API_BASE_URL}${path}`;
+  return true;
 }

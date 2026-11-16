@@ -8,6 +8,7 @@ import {
   ConditionTags,
   ConfirmCondButton,
   InterestChips,
+  RegionShareOption,
   SetupProgress,
   setupCard,
 } from "@/features/auth/components/WelcomeParts";
@@ -66,6 +67,7 @@ export function MWelcome() {
             <span className="text-text-sub text-[14px]">여러 개 고를 수 있어요</span>
           </span>
           <InterestChips setup={setup} chipClassName="px-[16px]" />
+          <RegionShareOption setup={setup} />
         </section>
 
         <section

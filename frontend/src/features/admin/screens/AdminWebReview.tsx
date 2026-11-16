@@ -9,6 +9,7 @@ import { decideReview, reviewMeta } from "@/features/admin/api";
 import { useReviewDecided, useReviewDetail, useReviewQueue } from "@/features/admin/queries";
 import { MOCK_TRACE_REVIEW_ID, traceJobOf } from "@/features/admin/trace";
 import { cn } from "@/shared/lib/cn";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import type { ReviewReason, SourcePartKind } from "@/features/admin/mocks/admin";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 
@@ -126,6 +127,8 @@ export function AdminWebReview() {
   };
 
   const reason = REASON[cur.reason];
+  // 원문 주소는 수집한 값이라 http·https일 때만 열어요 (2026-11-16 보안 감사 L-4)
+  const sourceUrl = safeExternalUrl(reviewMeta.get(cur.id)?.detailUrl);
 
   return (
     <>
@@ -248,15 +251,17 @@ export function AdminWebReview() {
                       추출 과정 보기
                     </Link>
                   )}
-                <a
-                  href={reviewMeta.get(cur.id)?.detailUrl ?? "#"}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
-                >
-                  원문 사이트
-                  <ExternalLink size={16} aria-hidden />
-                </a>
+                {sourceUrl && (
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-fill text-text hover:text-text inline-flex min-h-[44px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold no-underline"
+                  >
+                    원문 사이트
+                    <ExternalLink size={16} aria-hidden />
+                  </a>
+                )}
               </div>
             </section>
 

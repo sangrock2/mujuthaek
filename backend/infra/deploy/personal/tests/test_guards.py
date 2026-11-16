@@ -41,7 +41,9 @@ class DeploymentGuards(unittest.TestCase):
                      "../frontend/package.json"]:
             with self.subTest(name=name):
                 self.assertFalse(packager.allowed(name))
-        self.assertTrue(packager.allowed("frontend/Dockerfile"))
+        # Vercel serves the site; the host has no frontend container to build (security audit L-20).
+        self.assertFalse(packager.allowed("frontend/Dockerfile"))
+        self.assertTrue(packager.allowed("backend/services/api/Dockerfile"))
         self.assertTrue(packager.allowed("backend/services/api/src/main/resources/application.yml"))
 
     def test_changed_price_fails_closed(self):

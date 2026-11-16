@@ -17,7 +17,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from mujuthaek_platform.slack import DEFAULT_TIMEOUT_SECONDS, SlackNotifier
+from mujuthaek_platform.slack import DEFAULT_TIMEOUT_SECONDS, SlackNotifier, escape_text
 
 log = logging.getLogger(__name__)
 ALERT_RATIO = 0.8
@@ -47,8 +47,14 @@ def monthly_costs(conn, month: str | None = None, budget_usd: float | None = Non
 
 
 def slack_sender(url: str, timeout: float = SLACK_TIMEOUT_SECONDS) -> Callable[[str], None]:
-    """슬랙 수신 웹훅으로 글 하나를 보내는 함수(공통 SlackNotifier.send). 실패하면 SlackError(주소는 문구에 넣지 않음)."""
-    return SlackNotifier(url, timeout=timeout).send
+    """슬랙 수신 웹훅으로 글 하나를 보내는 함수(공통 SlackNotifier.send). 실패하면 SlackError(주소는 문구에 넣지 않음).
+    경고 글은 서식 없는 글이라 통째로 escape_text를 거쳐요(DB의 분야 이름 등이 <!channel>·링크가 되지 않게, 2026-11-16 보안 감사 L-22)."""
+    notifier = SlackNotifier(url, timeout=timeout)
+
+    def send(text: str) -> None:
+        notifier.send(escape_text(text))
+
+    return send
 
 
 def alert_text(costs: dict[str, Any]) -> str:

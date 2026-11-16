@@ -4,12 +4,15 @@
 # 비밀번호는 infra/.env의 NOTIFICATION_DB_PASSWORD (없으면 앱 기본값과 같은 notification-pass)
 set -euo pipefail
 
-password="${NOTIFICATION_DB_PASSWORD:-notification-pass}"
+# 비밀번호는 psql 인자(프로세스 목록에 보임)가 아니라 환경 변수로 넘기고, psql이 \getenv로 읽어요
+export NOTIFICATION_APP_PASSWORD="${NOTIFICATION_DB_PASSWORD:-notification-pass}"
 role_exists=$(psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -tAc \
   "select 1 from pg_roles where rolname = 'notification_app'")
 if [ "$role_exists" != "1" ]; then
-  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
-    -c "create role notification_app login password '${password}';"
+  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<'SQL'
+\getenv password NOTIFICATION_APP_PASSWORD
+create role notification_app login password :'password';
+SQL
 fi
 db_exists=$(psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -tAc \
   "select 1 from pg_database where datname = 'notification'")

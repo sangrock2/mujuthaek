@@ -84,6 +84,12 @@ def from_manifest(files: FileStore, conn, manifest: Path, resend: bool = False) 
 def declare_receiver(channel) -> None:
     """api area 모듈과 같은 설정의 큐·실패 큐·바인딩 (이미 있으면 그대로)."""
     from mujuthaek_platform.outbox import EXCHANGE
+    from mujuthaek_platform.broker import managed_topology
+
+    if managed_topology():
+        # 격리 모드에서는 api 소유 큐를 선언하거나 읽을 권한이 없어요. 준비 검사가 전체 topology를 먼저 확인해요.
+        channel.exchange_declare(exchange=EXCHANGE, passive=True)
+        return
 
     channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
     channel.exchange_declare(exchange=DLX, exchange_type="topic", durable=True)

@@ -36,12 +36,20 @@ export class ApiError extends Error {
   }
 }
 
+/** 로그인했지만 필수 약관에 아직 동의하지 않은 계정의 요청을 서버가 막을 때(403) 오는 코드 */
+export const TERMS_NOT_AGREED = "TERMS_NOT_AGREED";
+
+/** 필수 약관 동의 전이라 막힌 요청인지 (화면 문구를 고를 때 써요) */
+export const isTermsNotAgreed = (error: unknown) =>
+  error instanceof ApiError && error.status === 403 && error.code === TERMS_NOT_AGREED;
+
 // access token은 메모리에만 둬요. refresh token은 백엔드가 HttpOnly 쿠키로 관리해요
 let accessToken: string | null = null;
 let refreshing: Promise<string | null> | null = null;
 let sessionEpoch = 0;
 let sessionChannel: BroadcastChannel | null = null;
 const sessionListeners = new Set<() => void>();
+const termsListeners = new Set<() => void>();
 
 export const authToken = {
   get: () => accessToken,
@@ -72,6 +80,22 @@ export function subscribeSessionEnded(listener: () => void) {
       sessionChannel?.close();
       sessionChannel = null;
     }
+  };
+}
+
+/** 로그아웃 요청 없이 로그인이 끝났을 때(회원 탈퇴 완료) 다른 탭에도 알려요. 받은 탭은 토큰·캐시·기기 데이터를 비워요 */
+export function announceSessionEnded() {
+  channel()?.postMessage({ type: "logout" });
+}
+
+/**
+ * 어느 요청이든 403 TERMS_NOT_AGREED가 오면 알려요. 화면은 이걸 받아 필수 약관 동의 화면으로 보내요
+ * (2026-11-16 보안 감사 L-2: 동의 전에는 서버가 내 정보·채팅 쓰기·제보를 막아요)
+ */
+export function subscribeTermsRequired(listener: () => void) {
+  termsListeners.add(listener);
+  return () => {
+    termsListeners.delete(listener);
   };
 }
 
@@ -169,7 +193,9 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}) {
   else backendStatus.markUp();
   if (!res.ok) {
     const retryAfter = Number(res.headers.get("Retry-After"));
-    throw new ApiError(res.status, data, retryAfter > 0 ? retryAfter : null);
+    const error = new ApiError(res.status, data, retryAfter > 0 ? retryAfter : null);
+    if (isTermsNotAgreed(error)) for (const notify of termsListeners) notify();
+    throw error;
   }
   return data as T;
 }

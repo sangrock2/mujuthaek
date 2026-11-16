@@ -130,7 +130,7 @@ def main():
             raise ValueError('Worker release must be a full commit ID')
         with (BASE / 'runtime/releases/lock').open('w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            from release_host import Host
+            from release_host import Host, load_images
             host = Host()
             checksum_file = host.download(f'releases/workers/{args.release}/worker-images.sha256', f'workers-{args.release}.sha256')
             checksum = checksum_file.read_text().split()[0]
@@ -140,7 +140,8 @@ def main():
             with archive.open('rb') as stream:
                 if hashlib.file_digest(stream, 'sha256').hexdigest() != checksum:
                     raise RuntimeError('Worker archive checksum mismatch')
-            subprocess.run(['docker', 'load', '-i', str(archive)], check=True, capture_output=True)
+            load_images(archive, [f'mujuthaek-personal-{name}:{args.release}' for name in ('collector', 'extraction')],
+                        timeout=600)
             apply(values, args.release)
             (BASE / 'runtime/worker-current.json').write_text(json.dumps({'commit': args.release, 'archive_sha256': checksum,
                                                                        'publication_mode': 'manual', 'monthly_budget_usd': 50}))

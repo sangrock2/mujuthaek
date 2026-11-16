@@ -1,5 +1,6 @@
 package kr.mujuthaek.api.eligibility.controller;
 
+import jakarta.validation.Valid;
 import kr.mujuthaek.api.eligibility.controller.spec.LoanApiSpec;
 import kr.mujuthaek.api.eligibility.dto.request.LoanEvaluateRequest;
 import kr.mujuthaek.api.eligibility.model.LoanResult;
@@ -24,7 +25,7 @@ class LoanController implements LoanApiSpec {
 
   @Override
   @PostMapping("/loans/evaluate")
-  public ResponseEntity<LoanResult> evaluate(@RequestBody LoanEvaluateRequest request) {
+  public ResponseEntity<LoanResult> evaluate(@Valid @RequestBody LoanEvaluateRequest request) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(loans.judge(request.profile(), request.asOf()));

@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { browserApiOrigin, secureApiOrigin } from "./src/shared/lib/api/origin";
+import { safeGaId, securityHeaders, serviceWorkerPolicy } from "./src/shared/lib/securityHeaders";
 
 /**
  * 백엔드 주소 (서버 전용, Vercel 환경별 HTTPS origin). 있으면 브라우저는 이 사이트 주소만 부르고
@@ -9,15 +10,31 @@ import { browserApiOrigin, secureApiOrigin } from "./src/shared/lib/api/origin";
 const hosted = process.env.VERCEL === "1";
 const API_ORIGIN = secureApiOrigin(process.env.API_ORIGIN, hosted);
 const CANONICAL_WEB_ORIGIN = secureApiOrigin(process.env.CANONICAL_WEB_ORIGIN, hosted);
-browserApiOrigin(process.env.NEXT_PUBLIC_API_BASE_URL, API_ORIGIN, hosted);
+const BROWSER_API_ORIGIN = browserApiOrigin(
+  process.env.NEXT_PUBLIC_API_BASE_URL,
+  API_ORIGIN,
+  hosted,
+);
 secureApiOrigin(process.env.TRAFFIC_INGEST_URL, hosted);
+
+// 화면이 실제로 부르는 곳만 CSP에 넣어요: 이 사이트, 로컬 개발 API, 켠 경우에만 GA·카카오맵 (2026-11-16 보안 감사 4장)
+const CSP_OPTIONS = {
+  dev: process.env.NODE_ENV === "development",
+  apiOrigin: BROWSER_API_ORIGIN,
+  analytics: Boolean(safeGaId(process.env.NEXT_PUBLIC_GA_ID)),
+  kakaoMap: Boolean(process.env.NEXT_PUBLIC_KAKAO_MAP_KEY),
+};
 
 const nextConfig: NextConfig = {
   output: process.env.DEPLOY_TARGET === "standalone" ? "standalone" : undefined,
+  // next/image를 쓰지 않아요. 켜 두면 /_next/image가 이 사이트의 아무 파일이나 변환해 주는 공개 기능이 돼요 (404로 막아요)
+  images: { unoptimized: true },
   cacheComponents: true,
   partialPrefetching: true,
   experimental: {
     useOffline: true,
+    // 빌드한 Next 자산의 무결성을 브라우저도 확인해요. 동적으로 배포되는 외부 SDK까지 고정하는 기능은 아니에요.
+    sri: { algorithm: "sha384" },
   },
   turbopack: {
     rules: {
@@ -60,22 +77,19 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/(.*)",
-        headers: [
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
-          {
-            key: "Content-Security-Policy",
-            value: "object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-          },
-          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-        ],
+        headers: securityHeaders(CSP_OPTIONS),
+      },
+      // 관리자 화면은 검색에 나오지 않게 해요 (메타 태그와 함께, 화면을 그리기 전 응답에도)
+      {
+        source: "/admin/:path*",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
       },
       {
         source: "/sw.js",
         headers: [
           { key: "Content-Type", value: "application/javascript; charset=utf-8" },
           { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
-          { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'" },
+          { key: "Content-Security-Policy", value: serviceWorkerPolicy(BROWSER_API_ORIGIN) },
         ],
       },
     ];

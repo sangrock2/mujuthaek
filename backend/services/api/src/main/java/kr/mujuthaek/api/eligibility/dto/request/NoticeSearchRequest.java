@@ -29,6 +29,10 @@ public record NoticeSearchRequest(
   /**
    * 공개 목록(GET /notices)과 같은 필터. statuses를 비우면 접수예정·접수중이에요.
    *
+   * <p>목록 길이는 상한을 둬요. 상한이 없으면 로그인 없는 1MB 요청 하나로 SQL 파라미터 수 한도(65,535)를 넘기거나 홈 요약(같은 필터로 혜택도 찾아요)이
+   * DB를 오래 붙잡았어요(2026-11-16 보안 감사 H-2).
+   *
+   * @param regionCodes 찾아볼 지역 (50개까지)
    * @param keyword 검색어. 띄어쓰기로 나눈 낱말이 모두 제목에 들어 있는 공고만. 비우면 전부
    */
   public record Filters(
@@ -37,6 +41,7 @@ public record NoticeSearchRequest(
               defaultValue = "HOUSING")
           String field,
       @ArraySchema(schema = @Schema(pattern = "^[0-9]{2}([0-9]{3})?$", example = "11680"))
+          @Size(max = 50)
           List<String> regionCodes,
       @Schema(allowableValues = {"RENT", "BUY"}) String tenure,
       @ArraySchema(
@@ -59,13 +64,15 @@ public record NoticeSearchRequest(
                         "SHOP_RENTAL",
                         "MEETING_ROOM"
                       }))
+          @Size(max = 20)
           List<String> noticeTypes,
-      List<String> providers,
+      @Size(max = 50) List<@Size(max = 100) String> providers,
       @ArraySchema(
               arraySchema = @Schema(description = "비우면 UPCOMING · APPLYING · ALWAYS · UNKNOWN"),
               schema =
                   @Schema(
                       allowableValues = {"UPCOMING", "APPLYING", "CLOSED", "ALWAYS", "UNKNOWN"}))
+          @Size(max = 10)
           List<String> statuses,
       @Size(max = 100) String keyword) {}
 

@@ -11,10 +11,14 @@ COPY contracts contracts
 COPY services/extraction services/extraction
 WORKDIR /app/services/extraction
 # OCR: 두 판독이 같아도 OCR에 없는 숫자는 불일치로(같은 쪽으로 잘못 읽은 값 막기), 남은 불일치는 세 번째 판독(EXTRACTION_IMAGE_THIRD_READING)
-RUN uv sync --no-dev --frozen --extra ocr
+# 바이트코드를 미리 만듭니다: 코드가 읽기 전용이라 실행 중에는 .pyc를 쓸 수 없고, CPU 한도가 낮아 시작마다 다시 컴파일하면 느립니다
+RUN uv sync --no-dev --frozen --extra ocr --compile-bytecode
 ENV PATH="/app/services/extraction/.venv/bin:$PATH" CONTRACTS_DIR=/app/contracts EXTRACTION_REVIEW_HOST=0.0.0.0
+RUN python -m compileall -q /app/libs/python-platform/src /app/services/extraction/src
 
-RUN useradd --create-home extraction && chown -R extraction /app
+# 코드·계약·가상환경은 root 소유(읽기 전용)로 둡니다. 실행 중에 쓰는 곳은 임시 폴더(/tmp)와 자기 홈뿐입니다.
+# EXTRACTION_FORMAT_MEMORY_DIR를 켤 때는 쓰기 가능한 볼륨을 따로 붙입니다(보안 감사 4절)
+RUN useradd --create-home extraction
 USER extraction
 
 EXPOSE 8092

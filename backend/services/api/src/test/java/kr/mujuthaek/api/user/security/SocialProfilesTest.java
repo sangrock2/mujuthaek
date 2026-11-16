@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Map;
+import java.util.Set;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.SocialProfile;
@@ -57,14 +58,17 @@ class SocialProfilesTest {
         .isInstanceOf(CustomException.class);
   }
 
+  /** 구글 이름은 대개 실명이라 닉네임으로 쓰지 않아요 (2026-11-16 보안 감사 L-8). */
   @Test
-  void googleProfileUsesSubAndName() {
+  void googleProfileUsesSubButNotTheRealNameAsNickname() {
     assertThat(
             SocialProfiles.from(
                 "google", Map.of("sub", "1078", "name", "구글이름", "given_name", "이름")))
-        .isEqualTo(new SocialProfile(SocialProvider.GOOGLE, "1078", "구글이름"));
-    assertThat(SocialProfiles.from("google", Map.of("sub", "1078", "given_name", "이름")).nickname())
-        .isEqualTo("이름");
+        .isEqualTo(new SocialProfile(SocialProvider.GOOGLE, "1078", null, Set.of("구글이름", "이름")));
+    var onlyGiven = SocialProfiles.from("google", Map.of("sub", "1078", "given_name", "이름"));
+    assertThat(onlyGiven.nickname()).isNull();
+    assertThat(onlyGiven.realNames()).containsExactly("이름");
+    assertThat(onlyGiven.toString()).doesNotContain("이름");
     assertThatThrownBy(() -> SocialProfiles.from("google", Map.of("name", "x")))
         .isInstanceOf(CustomException.class);
   }

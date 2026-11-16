@@ -1,11 +1,18 @@
 import socket
+import time
 
 import httpcore
 import httpx
 import pytest
 
 from mujuthaek_collector.core.http_client import PoliteClient
-from mujuthaek_collector.core.public_http import PublicHTTPTransport, PublicNetworkBackend, validate_public_url
+from mujuthaek_collector.core.public_http import (
+    MAX_CONNECT_ADDRESSES,
+    PublicHTTPTransport,
+    PublicNetworkBackend,
+    request_deadline,
+    validate_public_url,
+)
 from mujuthaek_collector.errors import BlockedError
 
 
@@ -19,6 +26,7 @@ from mujuthaek_collector.errors import BlockedError
         "http://[::ffff:127.0.0.1]/a",
         "http://[64:ff9b::7f00:1]/a",
         "http://[fd00::1]/a",
+        "http://[fec0::1]/a",  # 폐기된 site-local: ipaddress가 사설로 보지 않아요
         "http://224.0.0.1/a",
         "http://localhost/a",
         "file:///etc/passwd",
@@ -120,6 +128,47 @@ def test_connection_uses_checked_numeric_ip_and_preserves_tls_name_and_host():
     assert network.hosts == ["93.184.216.34"]
     assert network.stream.sni == "public.example"
     assert b"Host: public.example\r\n" in network.stream.written
+
+
+class DrippingStream(RecordingStream):
+    """읽기마다의 시한 안쪽으로 한 바이트씩 아주 천천히 보내는 서버."""
+
+    def __init__(self):
+        super().__init__()
+        self.timeouts = []
+
+    def read(self, max_bytes, timeout=None):
+        self.timeouts.append(timeout)
+        time.sleep(0.05)
+        return b"H"
+
+
+def test_a_server_dripping_bytes_cannot_outlive_the_request_deadline():
+    # 보안 감사 M-7: 읽기마다 시한이 새로 시작해서, 시한 안쪽으로 한 바이트씩 보내면 요청이 끝나지 않았어요
+    network = RecordingBackend()
+    network.stream = DrippingStream()
+    transport = PublicHTTPTransport(network_backend=PublicNetworkBackend(network, lambda *args, **kwargs: [answer("93.184.216.34")]))
+    started = time.monotonic()
+    with httpx.Client(transport=transport, trust_env=False) as client, request_deadline(0.3):
+        with pytest.raises(httpx.ReadTimeout):
+            client.get("http://public.example/slow")
+    assert time.monotonic() - started < 2
+    assert network.stream.timeouts and all(t is not None and t <= 0.3 for t in network.stream.timeouts)
+
+
+def test_only_the_first_dns_answers_are_tried():
+    attempts = []
+
+    class Unreachable(httpcore.NetworkBackend):
+        def connect_tcp(self, host, port, **kwargs):
+            attempts.append(host)
+            raise httpcore.ConnectError("black hole")
+
+    addresses = [f"93.184.216.{n}" for n in range(1, 21)]
+    backend = PublicNetworkBackend(Unreachable(), lambda *args, **kwargs: [answer(ip) for ip in addresses])
+    with pytest.raises(httpcore.ConnectError):
+        backend.connect_tcp("public.example", 443)
+    assert attempts == addresses[:MAX_CONNECT_ADDRESSES]
 
 
 def test_dns_rebinding_is_rechecked_for_new_connections():

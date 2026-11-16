@@ -40,6 +40,7 @@ public class AuthTokenService {
   public static final String ROLE_CLAIM = "role";
   public static final String NICKNAME_CLAIM = "nickname";
   public static final String SESSION_CLAIM = "sid";
+  public static final String AUTH_TIME_CLAIM = "auth_time";
   static final int MAX_ISSUED_PER_MINUTE = 30;
 
   private final JwtEncoder jwtEncoder;
@@ -85,9 +86,9 @@ public class AuthTokenService {
     notSuspended(user.userId(), now);
     checkIssueLimit(user.userId(), now);
     return new TokenPair(
-        accessToken(user, familyId, now),
+        accessToken(user, familyId, now, now),
         props.accessTokenTtl(),
-        newRefreshToken(user.userId(), familyId, now),
+        newRefreshToken(user.userId(), familyId, now, now),
         props.refreshTokenTtl());
   }
 
@@ -124,9 +125,9 @@ public class AuthTokenService {
     notSuspended(user.getId(), now);
     var login = new LoginUser(user.getId(), user.getNickname(), user.getRole().name());
     return new TokenPair(
-        accessToken(login, saved.getFamilyId(), now),
+        accessToken(login, saved.getFamilyId(), saved.getAuthenticatedAt(), now),
         props.accessTokenTtl(),
-        newRefreshToken(user.getId(), saved.getFamilyId(), now),
+        newRefreshToken(user.getId(), saved.getFamilyId(), saved.getAuthenticatedAt(), now),
         props.refreshTokenTtl());
   }
 
@@ -186,7 +187,7 @@ public class AuthTokenService {
     return new CustomException(ErrorCode.INVALID_REFRESH_TOKEN);
   }
 
-  private String accessToken(LoginUser user, UUID familyId, Instant now) {
+  private String accessToken(LoginUser user, UUID familyId, Instant authenticatedAt, Instant now) {
     var claims =
         JwtClaimsSet.builder()
             .issuer(props.issuer())
@@ -196,15 +197,17 @@ public class AuthTokenService {
             .claim(ROLE_CLAIM, user.role())
             .claim(NICKNAME_CLAIM, user.nickname() == null ? "" : user.nickname())
             .claim(SESSION_CLAIM, familyId.toString())
+            .claim(AUTH_TIME_CLAIM, authenticatedAt.getEpochSecond())
             .build();
     var header = JwsHeader.with(MacAlgorithm.HS256).build();
     return jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
   }
 
-  private String newRefreshToken(UUID userId, UUID familyId, Instant now) {
+  private String newRefreshToken(UUID userId, UUID familyId, Instant authenticatedAt, Instant now) {
     String raw = randomToken();
     refreshTokens.save(
-        new RefreshToken(userId, familyId, hash(raw), now.plus(props.refreshTokenTtl()), now));
+        new RefreshToken(
+            userId, familyId, hash(raw), now.plus(props.refreshTokenTtl()), now, authenticatedAt));
     return raw;
   }
 

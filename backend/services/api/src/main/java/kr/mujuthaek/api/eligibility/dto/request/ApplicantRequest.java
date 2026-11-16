@@ -8,12 +8,14 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import kr.mujuthaek.api.common.logging.SensitiveFields;
+import kr.mujuthaek.api.common.validation.ReasonableDate;
 import kr.mujuthaek.api.eligibility.rule.Applicant;
 import kr.mujuthaek.api.eligibility.rule.Bands;
 
@@ -36,20 +38,22 @@ import kr.mujuthaek.api.eligibility.rule.Bands;
  * @param car 자동차가액 구간 (carCutsWon 사이)
  */
 public record ApplicantRequest(
-    @PastOrPresent LocalDate birthDate,
-    @PastOrPresent YearMonth birthMonth,
+    @PastOrPresent @ReasonableDate LocalDate birthDate,
+    @PastOrPresent @ReasonableDate YearMonth birthMonth,
     @Pattern(regexp = "[0-9]{5}") String regionCode,
     Boolean householdHead,
     @Min(1) @Max(20) Integer householdSize,
     @Min(0) @Max(20) Integer dependents,
-    List<@Pattern(regexp = "UNIVERSITY_STUDENT|JOB_SEEKER|YOUTH|NEWLYWED") String> targetGroups,
+    @Size(max = 10)
+        List<@Pattern(regexp = "UNIVERSITY_STUDENT|JOB_SEEKER|YOUTH|NEWLYWED") String> targetGroups,
     @Pattern(regexp = "SINGLE|MARRIED|ENGAGED") String marital,
-    @PastOrPresent YearMonth marriedOn,
+    @PastOrPresent @ReasonableDate YearMonth marriedOn,
     @Min(0) @Max(20) Integer children,
     Boolean homeOwner,
     @Pattern(regexp = "LT_1|1_3|3_5|5_PLUS") String homelessYears,
     @Valid SubscriptionRequest subscription,
-    List<@Pattern(regexp = "BASIC_LIVELIHOOD|NEAR_POOR|SINGLE_PARENT") String> welfareStatuses,
+    @Size(max = 10)
+        List<@Pattern(regexp = "BASIC_LIVELIHOOD|NEAR_POOR|SINGLE_PARENT") String> welfareStatuses,
     @Schema(
             description = "키: MEDIAN_INCOME · URBAN_WORKER_INCOME",
             example = "{\"MEDIAN_INCOME\": {\"gtPct\": 50, \"lePct\": 100, \"year\": 2026}}")
@@ -63,7 +67,7 @@ public record ApplicantRequest(
     @Min(2000) @Max(2200) Integer incomeYear,
     @Valid WonRange assets,
     @Valid WonRange car,
-    List<@Pattern(regexp = "R[23]_[A-Z_]+") String> rankChecks) {
+    @Size(max = 50) List<@Pattern(regexp = "R[23]_[A-Z_]+") String> rankChecks) {
 
   /**
    * @param months 가입 기간: NONE(통장 없음) · LT_6 · 6_12 · 12_24 · 24_PLUS (개월)

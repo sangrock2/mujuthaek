@@ -126,6 +126,17 @@ class GlobalExceptionHandler {
     return problem(ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND.message(), request);
   }
 
+  /** 예산을 넘은 SQL·JPA 조회. SQL·입력값·DB 오류 문구는 응답이나 로그에 싣지 않아요. */
+  @ExceptionHandler({
+    org.springframework.dao.QueryTimeoutException.class,
+    jakarta.persistence.QueryTimeoutException.class
+  })
+  ProblemDetail handleQueryTimeout(Exception e, HttpServletRequest request) {
+    log.warn("조회 예산 초과: {} {}", request.getMethod(), request.getRequestURI());
+    notify("api.query-timeout", "조회 시간 제한", request.getMethod() + " " + request.getRequestURI());
+    return problem(ErrorCode.QUERY_TIMEOUT, ErrorCode.QUERY_TIMEOUT.message(), request);
+  }
+
   /** 받는 쪽이 먼저 연결을 끊은 비동기 응답(채팅 SSE 등: 탭을 닫거나 화면을 떠남). 보낼 곳이 없어 응답하지 않고, 서버 오류도 아니라 알리지 않아요. */
   @ExceptionHandler(AsyncRequestNotUsableException.class)
   void handleDisconnected(AsyncRequestNotUsableException e, HttpServletRequest request) {

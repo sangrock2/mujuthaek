@@ -8,6 +8,7 @@ import { WebHeader } from "@/shared/layout/WebHeader";
 import { MPage, WebPage } from "@/shared/layout/Responsive";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { routes } from "@/shared/lib/routes";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import { preparationError, usePreparation, type DocumentState, type Schedule } from "./api";
 import { preparationButton, ProgressText, statusLabels } from "./PreparationList";
 import { noticeStatusLabels, scheduleTime } from "./format";
@@ -40,6 +41,8 @@ const reasonLabels: Record<string, string> = {
 };
 
 function ScheduleRow({ s, from }: { s: Schedule; from?: string }) {
+  // 수집·AI가 넘긴 기관 주소라 http·https일 때만 링크로 써요 (2026-11-16 보안 감사 L-4)
+  const applicationUrl = safeExternalUrl(s.applicationUrl);
   return (
     <li className="border-line-soft border-b border-solid py-[12px]">
       <strong>{s.label}</strong>
@@ -60,8 +63,8 @@ function ScheduleRow({ s, from }: { s: Schedule; from?: string }) {
       )}
       {s.excludedDays.length > 0 && <p>접수 제외: {s.excludedDays.join(", ")}</p>}
       {s.description && <p>{s.description}</p>}
-      {s.applicationUrl && (
-        <a href={s.applicationUrl} target="_blank" rel="noopener noreferrer">
+      {applicationUrl && (
+        <a href={applicationUrl} target="_blank" rel="noopener noreferrer">
           기관 신청 페이지 열기
         </a>
       )}
@@ -76,6 +79,7 @@ export function PreparationDetail({ id, mobile = false }: { id: string; mobile?:
   const [deleting, setDeleting] = useState(false);
   const Page = mobile ? MPage : WebPage;
   const unavailable = p?.sourceRevision === "unavailable";
+  const noticePage = safeExternalUrl(p?.source.header?.detailUrl);
 
   return (
     <Page>
@@ -314,13 +318,8 @@ export function PreparationDetail({ id, mobile = false }: { id: string; mobile?:
                       <Link className={preparationButton} href={routes.notice(p.noticeId)}>
                         공고와 원문 보기
                       </Link>
-                      {p.source.header?.detailUrl && (
-                        <a
-                          className={preparationButton}
-                          href={p.source.header.detailUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                      {noticePage && (
+                        <a className={preparationButton} href={noticePage} target="_blank" rel="noopener noreferrer">
                           기관 공고 페이지 열기
                         </a>
                       )}

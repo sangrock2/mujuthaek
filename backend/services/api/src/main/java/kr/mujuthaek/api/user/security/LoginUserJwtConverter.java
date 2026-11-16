@@ -21,7 +21,8 @@ class LoginUserJwtConverter implements Converter<Jwt, AbstractAuthenticationToke
           new LoginUser(
               UUID.fromString(jwt.getSubject()),
               nickname == null || nickname.isEmpty() ? null : nickname,
-              jwt.getClaimAsString(AuthTokenService.ROLE_CLAIM));
+              jwt.getClaimAsString(AuthTokenService.ROLE_CLAIM),
+              jwt.getClaimAsInstant(AuthTokenService.AUTH_TIME_CLAIM));
       UUID sessionId = UUID.fromString(jwt.getClaimAsString(AuthTokenService.SESSION_CLAIM));
       return new LoginAuthenticationToken(user, sessionId);
     } catch (IllegalArgumentException | NullPointerException e) {

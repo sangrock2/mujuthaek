@@ -155,7 +155,7 @@ export function MBizOnboarding() {
           />
           <span className="text-text-sub text-[13px] font-medium">
             사업자등록증의 5자리 코드를 넣으면 이 코드로 판정해요 ·{" "}
-            <a href="https://kssc.kostat.go.kr" target="_blank" rel="noreferrer">
+            <a href="https://kssc.kostat.go.kr" target="_blank" rel="noopener noreferrer">
               코드 찾기
             </a>
             {draft.industryCode && !validIndustryCode(draft.industryCode) && " · 5자리 숫자로"}

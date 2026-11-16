@@ -3,6 +3,7 @@ import { ExternalLink, FileText, Landmark, CircleHelp } from "lucide-react";
 import type { Preparation } from "./api";
 import { formatWon } from "@/shared/lib/money";
 import { routes } from "@/shared/lib/routes";
+import { safeAppPath, safeExternalUrl } from "@/shared/lib/safeUrl";
 import { preparationButton } from "./PreparationList";
 
 const channelLabels: Record<string, string> = {
@@ -16,15 +17,22 @@ const channelLabels: Record<string, string> = {
 export function PreparationSourceInfo({ p }: { p: Preparation }) {
   const guidance = p.source.guidance ?? [];
   const methods = guidance.filter((g) => g.kind === "APPLICATION_METHOD");
-  const contacts = guidance.filter((g) => g.kind === "CONTACT");
+  const contacts = guidance.filter((g) => g.kind === "CONTACT").map((g) => ({ ...g, url: safeExternalUrl(g.url) }));
   const cautions = guidance.filter((g) => g.kind !== "APPLICATION_METHOD" && g.kind !== "CONTACT");
   const schedules = [...(p.source.schedules ?? []), ...(p.source.followUps ?? []).flatMap((f) => f.schedules)];
   const channels = [...new Set(schedules.flatMap((s) => s.channels ?? []))];
+  // 신청·문의·첨부 주소는 수집·AI가 넘긴 값이라 http·https(첨부 보기는 이 사이트 경로)일 때만 링크로 써요 (2026-11-16 보안 감사 L-4)
   const urls = [
     ...new Set(
-      [...methods.map((g) => g.url), ...schedules.map((s) => s.applicationUrl)].filter((u): u is string => Boolean(u)),
+      [...methods.map((g) => g.url), ...schedules.map((s) => s.applicationUrl)]
+        .map(safeExternalUrl)
+        .filter((u): u is string => u !== null),
     ),
   ];
+  const files = (p.source.files ?? []).flatMap((f) => {
+    const href = safeAppPath(f.viewUrl) ?? safeExternalUrl(f.url);
+    return href ? [{ ...f, href }] : [];
+  });
 
   return (
     <>
@@ -211,20 +219,18 @@ export function PreparationSourceInfo({ p }: { p: Preparation }) {
           공고 원문과 첨부
         </h2>
         <div className="flex flex-col gap-[8px]">
-          {(p.source.files ?? [])
-            .filter((f) => f.viewUrl || f.url)
-            .map((f) => (
-              <a
-                key={f.id}
-                href={f.viewUrl ?? f.url!}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="border-line text-text flex min-h-[48px] items-center justify-between gap-[10px] rounded-sm border border-solid px-[14px] py-[10px] text-[14px] no-underline"
-              >
-                <span className="break-all">{f.name}</span>
-                <ExternalLink className="text-text-sub flex-none" size={16} aria-hidden />
-              </a>
-            ))}
+          {files.map((f) => (
+            <a
+              key={f.id}
+              href={f.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="border-line text-text flex min-h-[48px] items-center justify-between gap-[10px] rounded-sm border border-solid px-[14px] py-[10px] text-[14px] no-underline"
+            >
+              <span className="break-all">{f.name}</span>
+              <ExternalLink className="text-text-sub flex-none" size={16} aria-hidden />
+            </a>
+          ))}
         </div>
       </section>
     </>

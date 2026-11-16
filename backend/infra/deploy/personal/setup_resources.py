@@ -3,7 +3,26 @@ import json
 import secrets
 from pathlib import Path
 from aws_personal import AWS, INSTANCE, RUNTIME, REGION, STATIC_IP_NAME
-from storage_security import tls_policy, runtime_boundary
+from backup_security import APP_POLICY, app_policy
+from storage_security import BOUNDARY_POLICY, tls_policy, runtime_boundary
+from private_files import write_private_file
+
+# Runtime secrets a fresh host's .env gets. TRAFFIC_IP_SALT keeps stored IP hashes from being reversed with a public
+# default salt; EMAIL_UNSUBSCRIBE_KEY signs unsubscribe links apart from the service token (security audit L-1, L-15).
+# METRICS_TOKEN guards /actuator/prometheus on api and notification (security audit section 4).
+SECRETS = (
+    "POSTGRES_PASSWORD", "API_DB_PASSWORD", "NOTIFICATION_DB_PASSWORD", "COLLECTOR_DB_PASSWORD",
+    "EXTRACTION_DB_PASSWORD", "RABBITMQ_PASSWORD", "JWT_SECRET", "NOTIFICATION_INTERNAL_TOKEN",
+    "COLLECTOR_ADMIN_TOKEN", "EXTRACTION_REVIEW_TOKEN", "TRAFFIC_INGEST_TOKEN", "TRAFFIC_IP_SALT",
+    "EMAIL_UNSUBSCRIBE_KEY", "METRICS_TOKEN",
+)
+
+
+def runtime_policies(bucket):
+    """The app key's final permissions from the first install: raw files only, backups explicitly denied, and no
+    release or operations objects. They match what backup_security finalize and storage_security apply on a live
+    host, so a fresh install or disaster recovery never starts with bucket-wide access (security audit L-19)."""
+    return {APP_POLICY: app_policy(bucket), BOUNDARY_POLICY: runtime_boundary(bucket)}
 
 
 def main():
@@ -56,24 +75,14 @@ def main():
         raise RuntimeError("Runtime environment already exists; do not create or replace access keys")
     username = "mujuthaek-personal-runtime-20261113"
     aws.call("iam", "create-user", "--user-name", username, "--tags", "Key=Project,Value=mujuthaek-personal")
-    policy = {"Version": "2012-10-17", "Statement": [
-        {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": f"arn:aws:s3:::{bucket}"},
-        {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"], "Resource": f"arn:aws:s3:::{bucket}/*"},
-    ]}
-    policy['Statement'].extend(runtime_boundary(bucket)['Statement'])
-    aws.call("iam", "put-user-policy", "--user-name", username, "--policy-name", "PersonalBucketOnly", "--policy-document", json.dumps(policy))
+    for name, policy in runtime_policies(bucket).items():
+        aws.call("iam", "put-user-policy", "--user-name", username, "--policy-name", name, "--policy-document", json.dumps(policy))
     key = aws.call("iam", "create-access-key", "--user-name", username)["AccessKey"]
-    values = {k: secrets.token_hex(32) for k in (
-        "POSTGRES_PASSWORD", "API_DB_PASSWORD", "NOTIFICATION_DB_PASSWORD", "COLLECTOR_DB_PASSWORD",
-        "EXTRACTION_DB_PASSWORD", "RABBITMQ_PASSWORD", "JWT_SECRET", "NOTIFICATION_INTERNAL_TOKEN",
-        "COLLECTOR_ADMIN_TOKEN", "EXTRACTION_REVIEW_TOKEN", "TRAFFIC_INGEST_TOKEN",
-    )}
+    values = {k: secrets.token_hex(32) for k in SECRETS}
     values.update(AWS_ACCESS_KEY_ID=key["AccessKeyId"], AWS_SECRET_ACCESS_KEY=key["SecretAccessKey"],
                   AWS_REGION=REGION, S3_BUCKET=bucket, PUBLIC_ORIGIN=f'https://{ip["ipAddress"]}',
                   API_TLS_CERT_DIR="/opt/mujuthaek-source/backend/infra/deploy/personal/tls")
-    with env_file.open("x", encoding="ascii", newline="\n") as output:
-        output.write("".join(f"{k}={v}\n" for k, v in values.items()))
-    env_file.chmod(0o600)
+    write_private_file(env_file, "".join(f"{k}={v}\n" for k, v in values.items()), encoding="ascii")
     (RUNTIME / "versions.env").write_text("RELEASE=20261113-1\n", encoding="ascii")
     print(json.dumps({"static_ip": ip["ipAddress"], "bucket": bucket, "runtime_user": username, "credentials": "saved locally; not printed"}))
 

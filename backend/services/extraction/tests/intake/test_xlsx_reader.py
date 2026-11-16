@@ -3,7 +3,10 @@
 import builtins
 import copy
 import io
+import struct
 import zipfile
+
+import pytest
 
 from mujuthaek_extraction.intake import InMemorySourceReader, build_intake, xlsx_reader
 from mujuthaek_extraction.intake.xlsx_reader import AI_MAX_ROWS, read_xlsx
@@ -76,6 +79,37 @@ def test_listing_rows_are_rendered_without_door_passwords():
     assert "[엑셀 시트 주택목록]" in listing.text
     assert "| 1 | 대구광역시 남구 안지랑로3길 7 | 105 | 19.68 | 795500 |" in listing.text  # 숫자는 엑셀 저장값 그대로(소수점 꼬리 없음)
     assert "비밀번호" not in listing.text and "1234*" not in listing.text
+
+
+def test_secret_header_after_intro_and_with_separators_is_removed():
+    rows = [[f"안내{n}", "표 설명"] for n in range(12)]
+    rows += [["주소", "공동현관/비밀번호"], ["서울", "9876#"]]
+    listing = read_xlsx(make_xlsx(rows))
+    assert listing is not None and "서울" in listing.text
+    assert "9876#" not in listing.text and "9876#" not in repr(listing.sheets)
+
+
+def test_inline_secret_is_redacted_in_text_and_structured_rows():
+    listing = read_xlsx(make_xlsx([["주소", "안내"], ["서울", "비밀번호: 9876#"]]))
+    assert listing is not None
+    assert "9876#" not in listing.text and "9876#" not in repr(listing.sheets)
+
+
+def test_sparse_output_is_truncated_before_dense_allocation(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "MAX_OUTPUT_CELLS", 4)
+    monkeypatch.setattr(xlsx_reader, "HEAD_ROWS", 1)
+    rows = "".join(f'<row r="{n}">{inline(f"{letter}{n}", "합성값")}</row>' for n, letter in enumerate("ABC", 1))
+    listing = read_xlsx(raw_xlsx(rows))
+    assert listing is not None and listing.truncated and listing.rows == 3
+    assert listing.sheets == () and "머리 1행만" in listing.text
+
+
+def test_xlsx_structure_rejects_dtd_and_node_overflow(monkeypatch):
+    with pytest.raises(ValueError, match="DTD"):
+        xlsx_reader._xml(b'<!DOCTYPE root [<!ENTITY private "synthetic">]><root>&private;</root>')
+    monkeypatch.setattr(xlsx_reader, "MAX_XML_NODES", 2)
+    with pytest.raises(ValueError, match="structure limit"):
+        xlsx_reader._xml(b"<root><cell/><cell/></root>")
 
 
 def test_unreadable_or_empty_spreadsheet_is_none():
@@ -159,8 +193,54 @@ def test_encrypted_or_unsupported_zip_is_unreadable_not_crashing(monkeypatch):
     def broken(*args, **kwargs):
         raise NotImplementedError("That compression method is not supported")
 
-    monkeypatch.setattr(reader.zipfile.ZipFile, "read", broken)
-    assert read_xlsx(make_xlsx(LISTING)) is None
+    data = make_xlsx(LISTING)  # 만들기(writestr)도 open을 쓰므로 바꿔치기 전에 만듭니다
+    monkeypatch.setattr(reader.zipfile.ZipFile, "open", broken)
+    assert read_xlsx(data) is None
+
+
+def recompress(data: bytes, compression: int) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as source, zipfile.ZipFile(out, "w", compression=compression) as target:
+        for entry in source.infolist():
+            target.writestr(entry.filename, source.read(entry))
+    return out.getvalue()
+
+
+def declare_size(data: bytes, size: int) -> bytes:
+    """zip의 지역 헤더·중앙 디렉터리에 적힌 압축 해제 크기를 바꿉니다. 파일을 만든 사람은 이 값을 마음대로 적을 수 있습니다."""
+    out = bytearray(data)
+    for signature, offset in ((b"PK\x03\x04", 22), (b"PK\x01\x02", 24)):
+        start = out.find(signature)
+        while start >= 0:
+            struct.pack_into("<I", out, start + offset, size)
+            start = out.find(signature, start + 4)
+    return bytes(out)
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_bzip2_or_lzma_members_are_refused_before_decompressing(monkeypatch, compression):
+    # 파이썬 zipfile은 BZIP2·LZMA를 출력 상한 없이 푼 뒤 적힌 크기로 잘라서, 적힌 크기를 작게 고치면 크기 검사를 지나 메모리를 다 썼어요
+    data = declare_size(recompress(make_xlsx(LISTING), compression), 100)
+    assert read_xlsx(data) is None
+
+    def no_decompression(*args, **kwargs):
+        raise AssertionError("must refuse the compression method before decompressing")
+
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    monkeypatch.setattr(zipfile.ZipFile, "open", no_decompression)
+    with pytest.raises(ValueError, match="compression"):
+        xlsx_reader._Budget(xlsx_reader.MAX_UNCOMPRESSED_BYTES).read(archive, "xl/workbook.xml")
+
+
+def test_budget_counts_the_bytes_actually_decompressed(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "READ_CHUNK", 1024)
+    data = make_xlsx([["주소"] + ["가" * 50] * 100])
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        size = len(xlsx_reader._Budget(10**9).read(archive, "xl/sharedStrings.xml"))
+        assert size > 1024
+        with pytest.raises(ValueError, match="limit exceeded"):
+            xlsx_reader._Budget(size - 1).read(archive, "xl/sharedStrings.xml")
+    assert read_xlsx(data) is not None
 
 
 def test_merged_cells_repeat_their_value_and_percent_cells_show_percent():
@@ -220,3 +300,18 @@ def test_hidden_rows_and_columns_are_not_handed_over_and_are_counted():
     merged = rows + '</sheetData><mergeCells count="1"><mergeCell ref="A2:A3"/></mergeCells><sheetData>'
     listing = read_xlsx(raw_xlsx(merged))
     assert "| 가람단지 | 102 |" in listing.text and "101" not in listing.text and listing.hidden_rows == 1
+
+
+def test_entry_count_is_checked_before_zipfile_reads_the_directory(monkeypatch):
+    """항목이 많은 zip은 ZipFile이 중앙 디렉터리를 통째로 읽기 전에 끝 레코드로 거절해요(2026-11-16 보안 감사 4장)."""
+    monkeypatch.setattr(xlsx_reader, "MAX_ENTRIES", 3)
+    data = make_xlsx([["주소", "호수"], ["가상 주소", "101"]])
+    assert read_xlsx(data) is None
+
+    def no_zipfile(*args, **kwargs):
+        raise AssertionError("ZipFile을 만들면 안 돼요")
+
+    monkeypatch.setattr(xlsx_reader.zipfile, "ZipFile", no_zipfile)
+    assert read_xlsx(data) is None
+    monkeypatch.undo()
+    assert read_xlsx(data) is not None

@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import re
+import sys
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def load(name, path):
@@ -20,6 +23,22 @@ def load(name, path):
 host = load('release_host', Path(__file__).resolve().parents[1] / 'release_host.py')
 guard = load('pr_direction', ROOT / '.github/scripts/pr_direction.py')
 frontend = load('frontend_release', ROOT / '.github/scripts/frontend_release.py')
+publisher = load('backend_release', ROOT / '.github/scripts/backend_release.py')
+release_role = load('setup_github_release', Path(__file__).resolve().parents[1] / 'setup_github_release.py')
+
+
+def image_archive(path, tags, extra=()):
+    """A minimal `docker save` style archive: manifest.json with RepoTags, gzip-compressed. Returns its bytes."""
+    import io
+    import tarfile
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+        for name, content in [*extra, ('manifest.json', json.dumps([{'RepoTags': [tag]} for tag in tags]).encode())]:
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    Path(path).write_bytes(buffer.getvalue())
+    return buffer.getvalue()
 
 
 def manifest(release='release-123'):
@@ -29,23 +48,50 @@ def manifest(release='release-123'):
 
 
 class ReleaseSafety(unittest.TestCase):
-    def test_vercel_cli_errors_redact_credentials(self):
-        with patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-vercel-secret'}):
-            failed = SimpleNamespace(returncode=1, stdout='', stderr='Rejected synthetic-vercel-secret')
-            with patch.object(frontend.subprocess, 'run', return_value=failed):
-                with self.assertRaises(RuntimeError) as error:
-                    frontend.vercel('deploy')
-                self.assertNotIn('synthetic-vercel-secret', str(error.exception))
-                self.assertIn('[REDACTED]', str(error.exception))
 
-    def test_vercel_candidate_is_bound_to_existing_team_and_project(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-token'}):
-            with patch.object(frontend, 'vercel', return_value={'deployment': {'id': 'dpl_example', 'url': 'https://example.vercel.app', 'readyState': 'READY'}}) as command:
-                with patch.object(frontend.Path, 'write_text') as write:
-                    frontend.candidate(cwd=directory)
-                    self.assertIn(frontend.PROJECT, write.call_args_list[0].args[0])
-                    self.assertIn(frontend.TEAM, write.call_args_list[0].args[0])
-                command.assert_called_once_with('deploy', '--prod', '--skip-domain', cwd=directory)
+
+
+    def test_deploy_role_can_create_but_never_replace_release_objects(self):
+        # Security audit L-17: a replaced archive or manifest would make a later "rollback to a good release" redeploy
+        # whatever a stolen deploy token stored there.
+        statements = release_role.release_policy()['Statement']
+        puts = [statement for statement in statements if statement['Action'] == 's3:PutObject']
+        create_only = [statement for statement in puts if 'Condition' in statement]
+        self.assertEqual([statement['Resource'] for statement in create_only],
+                         [release_role.BUCKET + '/deployments/releases/*'])
+        self.assertEqual(create_only[0]['Condition'], {'StringEquals': {'s3:if-none-match': '*'}})
+        replaceable = [resource for statement in puts if 'Condition' not in statement for resource in statement['Resource']]
+        # Exactly the pointers the release scripts rewrite; nothing else is replaceable.
+        self.assertEqual(replaceable, [release_role.BUCKET + '/deployments/' + key for key in publisher.MUTABLE])
+        self.assertNotIn('Delete', json.dumps(statements))
+
+    def test_release_publisher_refuses_to_replace_anything_but_the_pointers(self):
+        with patch.object(publisher, 'aws') as command:
+            publisher.put('releases/release-123/manifest.json', 'manifest.json', immutable=True)
+            self.assertEqual(command.call_args.args[-2:], ('--if-none-match', '*'))
+            publisher.put('releases/current.json', 'production-current.json')
+            publisher.put('desired.json', 'desired.json')
+            for key in ('releases/release-123/manifest.json', 'releases/release-123/images.tar.gz', 'states/current.json'):
+                with self.assertRaises(ValueError):
+                    publisher.put(key, 'manifest.json')
+            self.assertEqual(command.call_count, 3)
+
+    def test_workflows_upload_release_objects_only_as_create_only_puts(self):
+        uploads = 0
+        for path in sorted((ROOT / '.github/workflows').glob('*.yml')):
+            text = path.read_text(encoding='utf-8').replace('\\\n', ' ')
+            for line in text.splitlines():
+                if 'deployments/releases/' not in line or line.strip().startswith('#'):
+                    continue
+                if re.search(r'\bs3api\s+(head-object|get-object)\b', line):
+                    continue  # reads only (a re-run keeps an already stored pair)
+                with self.subTest(workflow=path.name, line=line.strip()):
+                    self.assertNotRegex(line, r'\baws\s+s3\s+(cp|mv|sync)\b')
+                    self.assertIn('s3api put-object', line)
+                    self.assertIn("--if-none-match '*'", line)
+                    uploads += 1
+        self.assertGreater(uploads, 0)
+
 
     def test_exact_repository_dev_to_main_only(self):
         for base, head, repo, expected in [
@@ -105,10 +151,11 @@ class ReleaseSafety(unittest.TestCase):
         for changed in [False, True]:
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as d:
                 obj = self.fake(d)
-                (obj.runtime / 'images.tar.gz').write_bytes(b'archive')
                 data = manifest()
+                tags = [image['tag'] for image in data['images'].values()]
+                body = image_archive(obj.runtime / 'images.tar.gz', tags)
                 import hashlib
-                data['archive_sha256'] = hashlib.sha256(b'archive').hexdigest()
+                data['archive_sha256'] = hashlib.sha256(body).hexdigest()
                 (obj.runtime / 'candidate.json').write_text(json.dumps(data))
                 schemas = iter(['schema-a', 'schema-b' if changed else 'schema-a'])
                 obj.schema = lambda: next(schemas)
@@ -118,7 +165,10 @@ class ReleaseSafety(unittest.TestCase):
                     if release == 'release-123':
                         raise RuntimeError('unhealthy')
                 obj.select = select
-                with patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout='sha256:' + 'b' * 64)):
+                loaded = ''.join(f'Loaded image: {tag}\n' for tag in tags)
+                def run(args, **kwargs):
+                    return SimpleNamespace(stdout=loaded if args[:2] == ['docker', 'load'] else 'sha256:' + 'b' * 64)
+                with patch.object(host.subprocess, 'run', side_effect=run):
                     with self.assertRaises(RuntimeError):
                         obj.apply({'release': 'release-123', 'mode': 'deploy'})
                 self.assertEqual(selected, ['release-123'] if changed else ['release-123', 'release-old'])

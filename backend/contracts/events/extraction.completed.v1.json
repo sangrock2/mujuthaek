@@ -171,7 +171,9 @@
             "null"
           ],
           "format": "uri",
-          "description": "정책(STARTUP_SUPPORT·SPACE_RECRUITMENT)만, 반드시 넣음(공고 분야에는 넣지 않음): 사람이 열어볼 정책 원문 주소(raw.policy.collected의 detailUrl). http(s) 주소가 아니거나 인증 값·사용자 정보가 든 주소(PRIVATE_URL)면 null. 판정 목록에서 공고 상세 API로 찾을 수 없는 정책을 이 주소로 보냅니다"
+          "maxLength": 2000,
+          "pattern": "^https?://[^\\s/?#@\\\\]+(?:[/?#]\\S*)?$",
+          "description": "정책(STARTUP_SUPPORT·SPACE_RECRUITMENT)만, 반드시 넣음(공고 분야에는 넣지 않음): 사람이 열어볼 정책 원문 주소(raw.policy.collected의 detailUrl). http(s) 주소가 아니거나 인증 값·사용자 정보가 든 주소(PRIVATE_URL)면 null. 판정 목록에서 공고 상세 API로 찾을 수 없는 정책을 이 주소로 보냅니다. 패턴·길이 상한은 2026-11-16 보안 감사 L-4(http(s)·호스트 있음·@·빈칸·역슬래시 없음, 2,000자까지)"
         },
         "applyAlways": {
           "type": "boolean",
@@ -233,14 +235,18 @@
                 "string",
                 "null"
               ],
-              "description": "신청 주소 (http(s)만)"
+              "maxLength": 2000,
+              "pattern": "^https?://[^\\s/?#@\\\\]+(?:[/?#]\\S*)?$",
+              "description": "신청 주소 (http(s)만. 호스트가 있고 @·빈칸·역슬래시가 없으며 2,000자까지, 2026-11-16 보안 감사 L-4)"
             },
             "guideUrl": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "사업 안내 주소 (http(s)만)"
+              "maxLength": 2000,
+              "pattern": "^https?://[^\\s/?#@\\\\]+(?:[/?#]\\S*)?$",
+              "description": "사업 안내 주소 (http(s)만. 호스트가 있고 @·빈칸·역슬래시가 없으며 2,000자까지, 2026-11-16 보안 감사 L-4)"
             },
             "amountText": {
               "type": [

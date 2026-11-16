@@ -4,6 +4,7 @@ import { CheckAction } from "@/shared/ui/CheckAction";
 import { FilterChip } from "@/shared/ui/Chip";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import type {
   SpaceItem,
   SpaceRule,
@@ -11,11 +12,13 @@ import type {
   SupportStatus,
 } from "@/features/business/mocks/business";
 
-/** 공간 카드 링크: 상세 화면이 없는 공간(모집 정책)은 원문을 새 탭으로 */
-export const spaceLink = (it: SpaceItem) =>
-  it.externalUrl
-    ? { href: it.externalUrl, target: "_blank", rel: "noreferrer" }
+/** 공간 카드 링크: 상세 화면이 없는 공간(모집 정책)은 원문을 새 탭으로 (http·https 주소일 때만, 2026-11-16 보안 감사 L-4) */
+export const spaceLink = (it: SpaceItem) => {
+  const external = safeExternalUrl(it.externalUrl);
+  return external
+    ? { href: external, target: "_blank", rel: "noopener noreferrer" }
     : { href: routes.space(it.id) };
+};
 
 export const spaceIcon: Record<SpaceType, LucideIcon> = {
   startup: Building,
@@ -185,7 +188,7 @@ export function AboutSection({
               <dt className="text-text-sub">{r.label}</dt>
               <dd className="m-0 font-bold whitespace-pre-line">
                 {r.href ? (
-                  <a href={r.href} target="_blank" rel="noreferrer">
+                  <a href={r.href} target="_blank" rel="noopener noreferrer">
                     {r.value}
                   </a>
                 ) : (

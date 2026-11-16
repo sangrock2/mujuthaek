@@ -39,13 +39,13 @@ class TransientFailureTest {
     String body =
         """
         {"eventId":"%s","eventType":"notification.requested","schemaVersion":1,
-         "occurredAt":"2026-10-24T00:00:00Z","producer":"api",
+         "occurredAt":"%s","producer":"api",
          "payload":{"type":"CORRECTED","dedupKey":"NOTICE:R:CORRECTED:2",
           "target":{"type":"NOTICE","id":"%s"},"title":"정정: 재시도","body":"본문",
           "linkPath":"/notices/r","recipients":[{"userId":"%s","email":"me@example.com",
           "quietEnabled":false}]}}
         """
-            .formatted(eventId, UUID.randomUUID(), UUID.randomUUID());
+            .formatted(eventId, java.time.Instant.now(), UUID.randomUUID(), UUID.randomUUID());
     MessageProperties props = new MessageProperties();
     props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
     rabbit.send(

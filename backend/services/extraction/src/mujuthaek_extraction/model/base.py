@@ -78,12 +78,13 @@ class ModelRequest:
     # 한 차례에 도구 여럿을 부를 수 있게(에이전트 방식: 쪽 여러 개를 한 차례에 읽어 차례 수를 줄임). 재확인 에이전트는 하나씩
     parallel_tools: bool = False
 
-    def tool_chars(self) -> int:
-        """도구 설명·앞선 차례가 입력에 더하는 글자 수(비용 상한 계산용)."""
-        specs = sum(len(t.name) + len(t.description) + len(json.dumps(t.parameters, ensure_ascii=False)) for t in self.tools)
-        turns = sum(len(c.name) + len(c.arguments) for turn in self.turns for c in turn.calls) + sum(len(r) for turn in self.turns for r in turn.results)
-        notes = sum(len(turn.note or "") for turn in self.turns)
-        return specs + turns + notes
+    def tool_texts(self) -> list[str]:
+        """도구 설명·앞선 차례가 입력에 더하는 글들(비용 상한 계산용). 토큰 상한은 model/pricing.py의 input_token_ceiling이 셉니다."""
+        specs = [text for t in self.tools for text in (t.name, t.description, json.dumps(t.parameters, ensure_ascii=False))]
+        calls = [text for turn in self.turns for c in turn.calls for text in (c.name, c.arguments)]
+        results = [r for turn in self.turns for r in turn.results]
+        notes = [turn.note or "" for turn in self.turns]
+        return [*specs, *calls, *results, *notes]
 
 
 @dataclass(frozen=True)

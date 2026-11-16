@@ -1,4 +1,8 @@
-"""Install main-only operations OIDC using an owner-only configuration file."""
+"""Install main-only operations OIDC using an owner-only configuration file.
+
+Trust is pinned to operations.yml on main through workflow_ref in the OIDC subject; setup_github_release.py
+switches the repository subject template once every project role accepts it (security audit section 4).
+"""
 import argparse
 import json
 import subprocess
@@ -7,8 +11,10 @@ from pathlib import Path
 
 from aws_personal import AWS
 import operations_monitor as settings
+from setup_github_release import PROVIDER, subject_prefix, trust_policy
 
 ROLE = 'mujuthaek-github-operations'
+WORKFLOWS = ('operations.yml',)
 REPO = 'sangrock2/mujuthaek'
 
 
@@ -29,6 +35,11 @@ def policy():
     ]}
 
 
+def operations_trust(prefix):
+    provider = PROVIDER.replace('659355919826', settings.ACCOUNT)
+    return trust_policy(prefix, WORKFLOWS, provider=provider)
+
+
 def secret(name, value):
     subprocess.run(['gh', 'secret', 'set', name, '--repo', REPO], input=value,
                    check=True, capture_output=True, text=True, timeout=60)
@@ -37,6 +48,8 @@ def secret(name, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True, help='Owner-only Git-ignored JSON file')
+    parser.add_argument('--update-trust', action='store_true',
+                        help='Re-pin the existing project role to the workflow-scoped subject (after review)')
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding='utf-8'))
     settings.configure(config)
@@ -50,19 +63,16 @@ def main():
         raise RuntimeError('Expected owner budget subscriptions are missing')
     oidc = json.loads(subprocess.run(['gh', 'api', f'repos/{REPO}/actions/oidc/customization/sub'],
                                      capture_output=True, text=True, check=True, timeout=60).stdout)
-    prefix = oidc.get('sub_claim_prefix', f'repo:{REPO}')
-    if not oidc.get('use_default') or prefix not in ('repo:sangrock2/mujuthaek', 'repo:sangrock2@59195181/mujuthaek@1445740935'):
-        raise RuntimeError('Unexpected repository OIDC identity')
-    trust = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow',
-             'Principal': {'Federated': f'arn:aws:iam::{settings.ACCOUNT}:oidc-provider/token.actions.githubusercontent.com'},
-             'Action': 'sts:AssumeRoleWithWebIdentity', 'Condition': {'StringEquals': {
-                 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-                 'token.actions.githubusercontent.com:sub': prefix + ':ref:refs/heads/main'}}}]}
+    trust = operations_trust(subject_prefix(oidc))
     roles = aws.call('iam', 'list-roles')['Roles']
     if any(role['RoleName'] == ROLE for role in roles):
         existing = aws.call('iam', 'get-role', '--role-name', ROLE)['Role']
-        if {'Key': 'Project', 'Value': 'mujuthaek-personal'} not in existing.get('Tags', []) or existing['AssumeRolePolicyDocument'] != trust:
-            raise RuntimeError('Existing role ownership/trust differs; no changes made')
+        if {'Key': 'Project', 'Value': 'mujuthaek-personal'} not in existing.get('Tags', []):
+            raise RuntimeError('Existing role ownership differs; no changes made')
+        if existing['AssumeRolePolicyDocument'] != trust:
+            if not args.update_trust:
+                raise RuntimeError('Existing role trust differs; review it, then rerun with --update-trust')
+            aws.call('iam', 'update-assume-role-policy', '--role-name', ROLE, '--policy-document', json.dumps(trust))
         arn = existing['Arn']
     else:
         arn = aws.call('iam', 'create-role', '--role-name', ROLE, '--assume-role-policy-document', json.dumps(trust),

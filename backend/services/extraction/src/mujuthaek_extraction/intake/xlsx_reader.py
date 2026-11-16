@@ -20,15 +20,28 @@ from __future__ import annotations
 
 import io
 import re
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from datetime import date, timedelta
 from xml.etree import ElementTree
 
+from mujuthaek_platform.archives import check_zip_bytes
+
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024  # 압축 폭탄 방지
+MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024  # 압축 폭탄 방지 (실제로 푼 바이트의 합)
+MAX_ENTRIES = 2048  # zip 항목 수. 공급주택목록 엑셀은 수십 개예요
+# 엑셀이 쓰는 압축만 받아요. 파이썬 zipfile은 archive.read()로 DEFLATE도 항목당 1GiB까지, BZIP2·LZMA는 상한 없이 푼 뒤
+# zip에 적힌 크기로 잘라서, 크기를 작게 적은 408KB 엑셀 하나로 830MiB를 썼어요(2026-11-16 보안 감사 H-6)
+SAFE_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+READ_CHUNK = 64 * 1024
 MAX_ROWS = 10_000  # 시트당 읽는 한도
+MAX_SOURCE_CELLS = 250_000  # 숨긴 칸·병합으로 채운 칸을 포함, 밀집화 전에 제한합니다
+MAX_OUTPUT_CELLS = 250_000  # 행 × 사용 열의 합. 적은 sparse 셀이 큰 배열로 바뀌지 않게 해요
+MAX_OUTPUT_COLUMNS = 256
+MAX_MERGE_VISITS = 500_000
+MAX_XML_NODES = 500_000
 AI_MAX_ROWS = 3_000  # 원문에 붙이는 행 한도(파일 전체). 넘으면 머리 행만. 실측 최대 570행·8.4만 자(2026-10-20)
 AI_MAX_CHARS = 400_000  # 원문에 붙이는 글자 한도(입력은 원문 캐시로 읽혀 싸지만 모델 입력 한도 안에 두려고)
 HEAD_ROWS = 5
@@ -43,7 +56,12 @@ SECRET_HEADER_MAX_CHARS = 20  # 머리글 칸 길이 한도. 긴 안내문 칸(�
 
 def is_secret_header(cell: str) -> bool:
     """비밀번호 열의 머리글 칸인지. 짧은 칸만 봅니다(실측: 부산 행복주택 입주 유의사항이 한 칸으로 읽힌 표가 통째로 빠졌음)."""
-    return len(cell) <= SECRET_HEADER_MAX_CHARS and bool(SECRET_HEADER.search(cell)) and "/" not in cell
+    folded = unicodedata.normalize("NFKC", cell)
+    # 「도어락 / 인터폰」은 편의시설 목록입니다. 슬래시 자체를 제외하지 않고, 실제 번호·비밀값을 가리키는지 구분해요.
+    if any(separator in folded for separator in "/\\|") and not re.search(r"비밀|비번|번호|코드|키", folded):
+        return False
+    normalized = re.sub(r"[\s/\\|:：·ㆍ_-]+", "", folded)
+    return len(normalized) <= SECRET_HEADER_MAX_CHARS and bool(SECRET_HEADER.search(normalized))
 
 
 def redact_secret_values(text: str) -> str:
@@ -79,17 +97,63 @@ PERCENT_FORMATS = {9, 10}
 MERGE_REPEAT_COLUMNS = 6  # 이 열 수 이하로 가로 병합된 칸만 값을 되풀이합니다
 
 
+class _Budget:
+    """zip 항목을 조금씩 풀며 실제로 나온 바이트를 셉니다. zip에 적힌 크기는 파일을 만든 사람이 고칠 수 있어 믿지 않습니다."""
+
+    def __init__(self, limit: int):
+        self.remaining = limit
+
+    def read(self, archive: zipfile.ZipFile, name: str) -> bytes:
+        info = archive.getinfo(name)
+        if info.compress_type not in SAFE_COMPRESSION:
+            raise ValueError("Unsupported spreadsheet compression")
+        chunks = []
+        with archive.open(info) as source:
+            while chunk := source.read(READ_CHUNK):
+                self.remaining -= len(chunk)
+                if self.remaining < 0:
+                    raise ValueError("Spreadsheet decompression limit exceeded")
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+
+class _XmlBuilder(ElementTree.TreeBuilder):
+    """ZIP 바이트 한도와 별도로 XML 노드·중첩·선언을 제한해요."""
+
+    def __init__(self):
+        super().__init__()
+        self.nodes = self.depth = 0
+
+    def start(self, tag, attrs):
+        self.nodes += 1
+        self.depth += 1
+        if self.nodes > MAX_XML_NODES or self.depth > 128:
+            raise ValueError("Spreadsheet XML structure limit exceeded")
+        return super().start(tag, attrs)
+
+    def end(self, tag):
+        self.depth -= 1
+        return super().end(tag)
+
+    def doctype(self, *args):
+        raise ValueError("Spreadsheet DTD is not allowed")
+
+
+def _xml(data: bytes) -> ElementTree.Element:
+    return ElementTree.fromstring(data, parser=ElementTree.XMLParser(target=_XmlBuilder()))
+
+
 @dataclass(frozen=True)
 class _Styles:
     dates: frozenset[int] = frozenset()  # 날짜 서식인 셀 스타일 번호(cellXfs의 순서)
     percents: frozenset[int] = frozenset()  # % 서식(0.7을 70%로 보여 주는 칸)
 
 
-def _styles(archive: zipfile.ZipFile) -> _Styles:
+def _styles(archive: zipfile.ZipFile, budget: _Budget) -> _Styles:
     """styles.xml에서 날짜·% 서식인 셀 스타일 번호를 모읍니다. 파일이 없으면 빈 서식표를 돌려줍니다."""
     if "xl/styles.xml" not in archive.namelist():
         return _Styles()
-    root = ElementTree.fromstring(archive.read("xl/styles.xml"))
+    root = _xml(budget.read(archive, "xl/styles.xml"))
     custom_dates, custom_percents = set(), set()
     for fmt in root.iterfind("m:numFmts/m:numFmt", NS):
         code = re.sub(r'"[^"]*"|\[[^]]*]|\\.', "", fmt.get("formatCode") or "").lower()  # 따옴표 글자·[색]·이스케이프 제외
@@ -166,10 +230,10 @@ def _cell(cell: ElementTree.Element, shared: list[str], styles: _Styles = NO_STY
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _sheets(archive: zipfile.ZipFile) -> list[tuple[str, str]]:
+def _sheets(archive: zipfile.ZipFile, budget: _Budget) -> list[tuple[str, str]]:
     """(시트 이름, zip 안 경로) — 통합 문서에 적힌 순서대로."""
-    workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-    rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    workbook = _xml(budget.read(archive, "xl/workbook.xml"))
+    rels = _xml(budget.read(archive, "xl/_rels/workbook.xml.rels"))
     targets = {r.get("Id"): r.get("Target") for r in rels}
     out = []
     for sheet in workbook.iterfind("m:sheets/m:sheet", NS):
@@ -233,20 +297,25 @@ def _title_line(rows: list[list[str]], start: int, end: int) -> str:
 def read_xlsx(data: bytes) -> XlsxList | None:
     """시트마다 [엑셀 시트 이름] 다음에 표 행을 적은 글자. 읽을 수 없거나 값이 하나도 없으면 None."""
     try:
+        # ZipFile은 만들 때 중앙 디렉터리를 통째로 읽어서, 끝 레코드로 항목 수·디렉터리 크기를 먼저 봐요(2026-11-16 보안 감사 4장)
+        check_zip_bytes(data, max_entries=MAX_ENTRIES)
         archive = zipfile.ZipFile(io.BytesIO(data))
-        if sum(info.file_size for info in archive.infolist()) > MAX_UNCOMPRESSED_BYTES:
+        infos = archive.infolist()
+        if len(infos) > MAX_ENTRIES or sum(info.file_size for info in infos) > MAX_UNCOMPRESSED_BYTES:
             return None
+        budget = _Budget(MAX_UNCOMPRESSED_BYTES)  # 적힌 크기 검사는 빠른 거절일 뿐, 실제 한도는 푼 바이트로 봅니다
         shared = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            root = _xml(budget.read(archive, "xl/sharedStrings.xml"))
             shared = [_text(item) for item in root.iterfind("m:si", NS)]
-        styles = _styles(archive)
+        styles = _styles(archive, budget)
         sheets: list[tuple[str, list[list[str]], int]] = []
-        hidden_total = hidden_row_total = 0
-        for name, path in _sheets(archive):
+        hidden_total = hidden_row_total = source_cells = output_cells = merge_visits = 0
+        forced_truncated = False
+        for name, path in _sheets(archive, budget):
             if path not in archive.namelist():
                 continue
-            sheet = ElementTree.fromstring(archive.read(path))
+            sheet = _xml(budget.read(archive, path))
             by_number: dict[int, dict[int, str]] = {}
             counted, number, uncached = 0, 0, 0
             # 숨긴 행(필터로 가린 행 포함)·열은 넘기지 않아요: 기관이 이번 공고가 아닌 호실을 지우지 않고 숨긴 채 첨부하면, 숨긴 호실이
@@ -259,6 +328,9 @@ def read_xlsx(data: bytes) -> XlsxList | None:
                 cells: dict[int, str] = {}
                 column = 0
                 for cell in row.iterfind("m:c", NS):
+                    source_cells += 1
+                    if source_cells > MAX_SOURCE_CELLS:
+                        raise ValueError("Spreadsheet source cell budget exceeded")
                     column = _column_index(cell.get("r"), column)
                     value = _cell(cell, shared, styles)
                     if value and column in hidden_columns:
@@ -284,23 +356,41 @@ def read_xlsx(data: bytes) -> XlsxList | None:
                 if value:
                     last_column = c2 if c2 - c1 < MERGE_REPEAT_COLUMNS else c1
                     for r in by_number:
+                        merge_visits += 1
+                        if merge_visits > MAX_MERGE_VISITS:
+                            raise ValueError("Spreadsheet merge work budget exceeded")
                         if r1 <= r <= r2:
                             for c in range(c1, last_column + 1):
+                                if c not in by_number[r]:
+                                    source_cells += 1
+                                    if source_cells > MAX_SOURCE_CELLS:
+                                        raise ValueError("Spreadsheet source cell budget exceeded")
                                 by_number[r].setdefault(c, value)
             hidden_total += hidden_rows + len(hidden_values)
             hidden_row_total += hidden_rows
             rows = [by_number[n] for n in sorted(by_number)]
             if not rows:
                 continue
-            secret = {column for cells in rows[:10] for column, value in cells.items() if is_secret_header(value)}
+            # 안내문이 여러 줄 앞에 올 수 있어 모든 저장 행에서 민감 머리글을 찾아요.
+            secret = {column for cells in rows for column, value in cells.items() if is_secret_header(value)}
             # 값이 없는 열·비밀번호 열·숨긴 열(병합 칸 채우기로 들어온 값도)은 뺍니다
             used = sorted({column for cells in rows for column in cells} - secret - hidden_columns)
-            sheets.append((name, [[cells.get(column, "") for column in used] for cells in rows], counted, uncached))
+            if len(used) > MAX_OUTPUT_COLUMNS:
+                raise ValueError("Spreadsheet output column limit exceeded")
+            # 축약을 결정한 다음 배열을 만듭니다. 먼저 밀집화하면 truncated가 메모리 사용을 막지 못해요.
+            if len(rows) * len(used) > MAX_OUTPUT_CELLS - output_cells:
+                rows = rows[:HEAD_ROWS]
+                forced_truncated = True
+            output_cells += len(rows) * len(used)
+            if output_cells > MAX_OUTPUT_CELLS:
+                raise ValueError("Spreadsheet output cell budget exceeded")
+            dense = [[redact_secret_values(cells.get(column, "")) for column in used] for cells in rows]
+            sheets.append((redact_secret_values(name), dense, counted, uncached))
         total = sum(sheet[2] for sheet in sheets)
         if not total:
             return None
         full = sum(len(" | ".join(row)) + 4 for _, rows, _, _ in sheets for row in rows)
-        truncated = total > AI_MAX_ROWS or full > AI_MAX_CHARS
+        truncated = forced_truncated or total > AI_MAX_ROWS or full > AI_MAX_CHARS
         lines: list[str] = []
         for name, rows, counted, uncached in sheets:
             lines.append(f"[엑셀 시트 {name}]")
@@ -318,6 +408,6 @@ def read_xlsx(data: bytes) -> XlsxList | None:
         if hidden_total:
             lines.append(f"(숨긴 행·열 {hidden_total}개는 이번 공급 목록이 아닐 수 있어 넘기지 않았습니다.)")
         shown_sheets = () if truncated else tuple((name, tuple(tuple(row) for row in rows)) for name, rows, _, _ in sheets)
-        return XlsxList("\n".join(lines), total, truncated, shown_sheets, hidden_total, hidden_row_total)
+        return XlsxList(redact_secret_values("\n".join(lines)), total, truncated, shown_sheets, hidden_total, hidden_row_total)
     except Exception:  # 깨진 zip·암호·지원 안 하는 압축(Deflate64)·이상한 XML 등: 공고문에서 읽도록 None
         return None

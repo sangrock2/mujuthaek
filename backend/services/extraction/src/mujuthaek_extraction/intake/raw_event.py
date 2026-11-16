@@ -25,7 +25,12 @@ SOURCE_CODE = re.compile(r"[a-z][a-z0-9_]*")  # 예: sh, lh_myhome (팀 이벤�
 REGION_CODE = re.compile(r"[0-9]{5}")
 UUID_TEXT = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 # 첨부 칸 (팀 문서 「공고 원본 파일 S3 저장 구조와 전달 흐름」, 2026-10-19 계약에 필수로 추가)
-S3_KEY = re.compile(r"raw/[a-z]+/.+")  # raw/{출처}/{글 키}/v{버전}/{순번}-{파일명}
+# S3 키 조각: 빈 조각·`.`·`..`·역슬래시·제어 문자를 받지 않아요. 예전에는 `raw/lh/../area/x`처럼 다른 영역을 가리키는 키도
+# 통과했고 textKey는 형식을 보지 않았어요(2026-11-16 보안 감사 4장)
+_KEY_SEGMENT = r"(?!\.{1,2}(?:/|$))[^/\\\x00-\x1f\x7f]+"
+S3_KEY = re.compile(rf"raw/[a-z]+/{_KEY_SEGMENT}(?:/{_KEY_SEGMENT})*")  # raw/{출처}/{글 키}/v{버전}/{순번}-{파일명}
+TEXT_KEY = re.compile(rf"text/[a-z][a-z0-9_]*/{_KEY_SEGMENT}(?:/{_KEY_SEGMENT})*\.txt")  # text/{출처}/{글 키}/v{버전}.txt
+MAX_KEY_BYTES = 1024  # S3 키 길이 한도(UTF-8)
 FILE_TYPES = {"pdf", "hwp", "hwpx", "xlsx", "xlsm", "xls"}
 FILE_ROLES = {"NOTICE_DOC", "UNIT_LIST"}
 FILE_EXT = re.compile(r"\.([0-9a-z]+)\s*$", re.IGNORECASE)  # fileType 칸이 없는 이전 형식 이벤트에서 이름으로 형식을 읽을 때만 씁니다
@@ -50,6 +55,14 @@ def _str(data: Mapping[str, Any], key: str, path: str, *, nullable: bool = False
         return None
     if not isinstance(value, str) or (pattern is not None and not pattern.fullmatch(value)):
         raise InvalidRawEvent(f"{path}/{key}", "문자열 형식이 맞지 않습니다.")
+    return value
+
+
+def _s3_key(data: Mapping[str, Any], key: str, path: str, pattern: re.Pattern[str]) -> str | None:
+    """S3 키 칸(null 허용): 정해진 앞부분·조각 형식이고 UTF-8로 1024바이트 이하여야 해요."""
+    value = _str(data, key, path, nullable=True, pattern=pattern)
+    if value is not None and len(value.encode("utf-8", errors="surrogatepass")) > MAX_KEY_BYTES:
+        raise InvalidRawEvent(f"{path}/{key}", "S3 키가 너무 깁니다.")
     return value
 
 
@@ -165,7 +178,7 @@ def parse_raw_event(event: Any) -> RawNoticeCollected:
         detail_url=_str(payload, "detailUrl", p, nullable=True),
         supersedes_post_id=_uuid(payload, "supersedesPostId", p, nullable=True),
         text=_str(payload, "text", p),
-        text_key=_str(payload, "textKey", p, nullable=True),
+        text_key=_s3_key(payload, "textKey", p, TEXT_KEY),
         units=tuple(copy.deepcopy(dict(u)) for u in units),
         files=tuple(_file(f, i) for i, f in enumerate(files)),
         reprocess=reprocess,
@@ -200,6 +213,6 @@ def _file(value: Any, index: int) -> RawFile:
         sha256=_str(value, "sha256", path, pattern=SHA256),
         file_type=file_type,
         role=role,
-        s3_key=_str(value, "s3Key", path, nullable=True, pattern=S3_KEY) if "s3Key" in value else None,
+        s3_key=_s3_key(value, "s3Key", path, S3_KEY) if "s3Key" in value else None,
         s3_key_given="s3Key" in value,
     )

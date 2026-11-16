@@ -72,6 +72,34 @@ export function InterestChips({ setup, chipClassName }: { setup: Setup; chipClas
   );
 }
 
+/**
+ * 사는 지역(이 기기에만 저장한 값)을 관심 지역으로 계정에 저장할지 묻는 칸. 기본은 꺼져 있어요.
+ * 켜야만 서버에 올라가고, 끄면 지역 없이(전국) 저장해요 (2026-11-16 보안 감사 4장)
+ */
+export function RegionShareOption({ setup, className }: { setup: Setup; className?: string }) {
+  if (!setup.deviceRegion) return null;
+  return (
+    <label className={cn("flex items-start gap-[8px] text-[14px] leading-[1.6]", className)}>
+      <input
+        type="checkbox"
+        checked={setup.shareRegion}
+        onChange={(e) => setup.setShareRegion(e.target.checked)}
+        className="mt-[4px]"
+      />
+      <span className="flex flex-col">
+        <span className="font-bold">
+          사는 지역({setup.deviceRegionLabel || "이 기기에 저장한 지역"})도 관심 지역으로 저장할게요
+        </span>
+        <span className="text-text-sub text-[13px]">
+          사는 지역은 지금 이 기기에만 있어요. 켜면 내 계정의 관심 조건에 저장돼 새 공고 알림에
+          쓰이고, 내 정보 → 관심 조건에서 언제든 바꾸거나 지울 수 있어요. 끄면 지역 없이 전국 공고로
+          받아요.
+        </span>
+      </span>
+    </label>
+  );
+}
+
 export function ConditionTags({ items, className }: { items: string[]; className?: string }) {
   return (
     <div className="flex flex-wrap gap-[6px]">

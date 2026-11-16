@@ -5,9 +5,12 @@
 
 import copy
 import dataclasses
+import time
+
+import pytest
 
 from mujuthaek_extraction.assemble.assembler import assemble
-from mujuthaek_extraction.assemble.missing_prices import ISSUE_CODE, fill_missing_prices
+from mujuthaek_extraction.assemble.missing_prices import AMOUNT, ANY_AMOUNT, ISSUE_CODE, fill_missing_prices
 from mujuthaek_extraction.verify.claims import check_claims
 from mujuthaek_extraction.verify.model import SourceBundle
 from tests.support.helpers import ai_part, example, source_for
@@ -109,6 +112,31 @@ def test_amounts_written_with_eok_and_man_are_read_and_announced_or_attached_pri
     groups = [copy.deepcopy(group)]
     made = fill_missing_prices(groups, text, "text1", [], {"/supplyGroups/0/prices/0/sourceAmount": "TO_BE_ANNOUNCED"})
     assert groups[0]["prices"][0]["amountKrw"] is None and made.filled == [] and made.issues == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["(일반) 또는 9,000천원(청년)", ",9,000천원", "1.5,000만원", "1억 2,000만원", ".5만원", "12,000", "x원", "1,2,3", ",,,,", "12,000 / 150", ""],
+)
+def test_any_amount_finds_an_amount_exactly_when_amount_does(text):
+    """2026-11-16 M-6: 「금액이 또 있는지」는 숫자 덩어리 첫머리에서만 찾아요. 있는지 없는지는 AMOUNT.search와 같아야 합니다."""
+    assert bool(ANY_AMOUNT.search(text)) == bool(AMOUNT.search(text))
+
+
+def unit_7():
+    price = {"id": "unit-7.deposit", "kind": "DEPOSIT", "amountKrw": None, "sourceAmount": None, "sourceUnit": None, "scope": {"targetGroups": []}}
+    return {"id": "unit-7", "itemKind": "HOUSING_UNIT", "unitLabel": "7호", "housingTypeCode": None, "counts": [], "prices": [price]}
+
+
+def test_filling_stays_fast_on_long_numbers_and_many_amounts():
+    """2026-11-16 M-6: 금액 뒤 긴 숫자(2만 4천 자리 20초)와 한 줄의 「보증금 1원」 4만 번(2.3초)에서 제곱으로 느려졌어요.
+    추출 일꾼이 묶여 있는 동안 RabbitMQ 연결 유지·점유 연장이 멈춰 같은 공고를 두 번 처리할 수 있었어요."""
+    for text, amount in (("7호 임대보증금 : 12,000천원 " + "1" * 24_000 + "\n", "12,000"), ("7호 " + "보증금 1원 " * 40_000 + "\n", "1")):
+        groups = [unit_7()]
+        started = time.perf_counter()
+        made = fill_missing_prices(groups, text, "text1", [])
+        assert time.perf_counter() - started < 1
+        assert groups[0]["prices"][0]["sourceAmount"] == amount and made.issues == []
 
 
 def test_missing_price_issue_does_not_trigger_a_paid_recheck_call():

@@ -11,6 +11,7 @@ import {
   type ApiSupportSearch,
 } from "@/features/business/api";
 import { toListing, type SearchResponse } from "@/features/homes/search";
+import { readRecent, rememberRecent, subscribeRecent } from "@/features/search/recent";
 import { api } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
@@ -35,19 +36,8 @@ export const resultHref = (r: SearchResult) =>
       ? routes.benefit(r.id)
       : routes.homes);
 
-const RECENT_KEY = "mujuthaek.search.recent";
-const RECENT_MAX = 8;
 /** 종류마다 한 번에 받는 수 (서버 최대). 넘으면 검색어로 좁혀 달라고 해요 */
 const SIZE = 100;
-
-function readRecent(): string[] {
-  try {
-    const v = JSON.parse(window.localStorage.getItem(RECENT_KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((s) => typeof s === "string").slice(0, RECENT_MAX) : [];
-  } catch {
-    return [];
-  }
-}
 
 const badgeOf = (overall: "ELIGIBLE" | "NEEDS_INPUT" | "INELIGIBLE"): SearchBadge =>
   overall === "ELIGIBLE"
@@ -72,6 +62,8 @@ export function useSearch() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (q) setQuery(q);
     setRecent(readRecent());
+    // 로그아웃·탈퇴로 지우면(이 탭이든 다른 탭이든) 화면의 목록도 비워요
+    return subscribeRecent(() => setRecent(readRecent()));
   }, []);
 
   const keyword = useDeferredValue(query.trim());
@@ -202,17 +194,10 @@ export function useSearch() {
       };
 
   const queries = [notices, spaces, benefits, supports];
-  /** 고른 검색어를 최근 검색어 맨 앞에 둬요 (이 기기에만) */
+  /** 고른 검색어를 최근 검색어 맨 앞에 둬요 (이 기기에만 30일, 최대 8개) */
   const remember = (q = query) => {
-    const t = q.trim();
-    if (!t || USE_MOCKS) return;
-    const next = [t, ...recent.filter((r) => r !== t)].slice(0, RECENT_MAX);
-    setRecent(next);
-    try {
-      window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-    } catch {
-      // 저장을 못 해도 검색은 돼요
-    }
+    if (!q.trim() || USE_MOCKS) return;
+    setRecent(rememberRecent(q));
   };
 
   return {

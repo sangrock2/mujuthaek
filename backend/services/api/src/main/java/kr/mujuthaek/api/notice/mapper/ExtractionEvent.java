@@ -3,6 +3,7 @@ package kr.mujuthaek.api.notice.mapper;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.UUID;
+import kr.mujuthaek.api.common.text.ExternalUrl;
 import kr.mujuthaek.api.notice.domain.ReviewStatus;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
@@ -51,6 +52,12 @@ public record ExtractionEvent(
 
   /** 봉투와 payload에서 값을 꺼내요. 필수 칸이 없거나 형식이 틀리면 InvalidEventException. */
   public static ExtractionEvent from(JsonNode envelope) {
+    // 정책 링크 칸이 계약 모양이 아니면 그 칸만 비우고 받아요 (보안 감사 L-4: 예전 추출 서비스가 보낸 이벤트가 통째로 거절되지 않게)
+    ExternalUrl.clearOffContract(
+        envelope,
+        "/payload/detailUrl",
+        "/payload/policyInfo/applyUrl",
+        "/payload/policyInfo/guideUrl");
     NoticeContract.validate(envelope);
     if (!EVENT_TYPE.equals(text(envelope, "eventType"))) {
       throw new InvalidEventException("eventType이 " + EVENT_TYPE + "가 아니에요");

@@ -85,11 +85,8 @@ class AWS:
         key = runtime / "ssh-key"
         if key.exists():
             key.unlink()
-        key.write_text(details["privateKey"], encoding="ascii")
-        key.chmod(0o600)
-        if os.name == "nt":
-            username = subprocess.run(["whoami"], capture_output=True, text=True, check=True).stdout.strip()
-            subprocess.run(["icacls", str(key), "/inheritance:r", "/grant:r", f"{username}:(R)"], capture_output=True, check=True)
+        from private_files import write_private_file
+        write_private_file(key, details["privateKey"], encoding="ascii")
         (runtime / "ssh-key-cert.pub").write_text(details["certKey"] + "\n", encoding="ascii")
         (runtime / "known_hosts").write_text("".join(
             f'{details["ipAddress"]} {k["algorithm"]} {k["publicKey"]}\n' for k in details["hostKeys"]

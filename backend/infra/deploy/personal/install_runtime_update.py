@@ -22,11 +22,19 @@ def runtime_manifest(source):
         match = re.search(r'(?ms)^  ' + service + r':\n(.*?)(?=^  [a-zA-Z][\w-]*:\n|\Z)', source)
         if not match:
             raise RuntimeError('Application service not found')
-        section = re.sub(r'(?m)^      JAVA_TOOL_OPTIONS: ([^\n]+)$',
-                         lambda value: value[0] if '-XX:ActiveProcessorCount=' in value[0]
-                         else value[0] + ' -XX:ActiveProcessorCount=1', match[0])
+        section = re.sub(r'(?m)^      JAVA_TOOL_OPTIONS: ([^\n]+)$', java_options, match[0])
         source = source[:match.start()] + section + source[match.end():]
     return source
+
+
+def java_options(value):
+    """JVM은 CPU 1개처럼 쓰되(버스트 크레딧 보호) 가상 스레드 실행기는 4개로 둬요. 1개면 CPU를 오래 쓰는 요청 하나가 모든 요청을 멈췄어요(보안 감사 M-1)."""
+    line = value[0]
+    if '-XX:ActiveProcessorCount=' not in line:
+        line += ' -XX:ActiveProcessorCount=1'
+    if '-Djdk.virtualThreadScheduler.parallelism=' not in line:
+        line += ' -Djdk.virtualThreadScheduler.parallelism=4'
+    return line
 
 
 def main():

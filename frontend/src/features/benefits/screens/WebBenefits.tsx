@@ -133,7 +133,7 @@ function BenefitDetail({ b }: { b: Benefit }) {
               href={b.sourceUrl}
               target="_blank"
               onClick={() => track("notice_source_open", { notice_kind: "benefit", via: "site" })}
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] items-center text-[14px] font-bold no-underline"
             >
               근거 원문
@@ -192,7 +192,7 @@ function BenefitDetail({ b }: { b: Benefit }) {
             <a
               href={b.policyUrl}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               onClick={() => track("notice_source_open", { notice_kind: "benefit", via: "site" })}
               className="rounded-control bg-fill text-text hover:text-text inline-flex min-h-[52px] items-center px-[18px] text-[15px] font-bold no-underline"
             >
@@ -203,7 +203,7 @@ function BenefitDetail({ b }: { b: Benefit }) {
             <a
               href={applyHref(b)}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="rounded-control bg-brand inline-flex min-h-[52px] items-center gap-[6px] px-[20px] text-[16px] font-extrabold text-white no-underline hover:text-white"
             >
               신청하러 가기

@@ -9,6 +9,7 @@ import { useAdminPolicyDuplicates, useSetAdminCounts } from "@/features/admin/qu
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import type {
   DuplicateItem,
   DuplicateSide,
@@ -37,9 +38,11 @@ const when = (iso: string) =>
 
 const day = (iso: string | null) => (iso ? iso.slice(5).replace("-", ".") : null);
 
-/** 우리 서비스 상세 주소 (사업 지원 · 입주 모집) */
+/** 우리 서비스 상세 주소 (사업 지원 · 입주 모집). ID는 인코딩해서 다른 경로로 새지 않게 해요 */
 const hrefOf = (s: DuplicateSide) =>
-  s.field === "STARTUP_SUPPORT" ? `${routes.bizSupport}/${s.id}` : routes.space(s.id);
+  s.field === "STARTUP_SUPPORT"
+    ? `${routes.bizSupport}/${encodeURIComponent(s.id)}`
+    : routes.space(encodeURIComponent(s.id));
 
 const keyOf = (d: DuplicateItem) => `${d.later.id}:${d.earlier.id}`;
 
@@ -178,6 +181,8 @@ function SideCard({
   strong?: boolean;
 }) {
   const period = [day(side.applyStart), day(side.applyEnd)].filter(Boolean).join(" ~ ");
+  // 출처 원문 주소는 수집한 값이라 http·https일 때만 링크로 써요 (2026-11-16 보안 감사 L-4)
+  const sourceUrl = safeExternalUrl(side.detailUrl);
   return (
     <div
       className={cn(
@@ -203,16 +208,16 @@ function SideCard({
         <a
           href={hrefOf(side)}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           className="inline-flex items-center gap-[4px]"
         >
           서비스 화면 <ExternalLink size={13} aria-hidden />
         </a>
-        {side.detailUrl && (
+        {sourceUrl && (
           <a
-            href={side.detailUrl}
+            href={sourceUrl}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-[4px]"
           >
             출처 원문 <ExternalLink size={13} aria-hidden />

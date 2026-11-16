@@ -43,7 +43,8 @@ public interface AdminUserApiSpec {
       summary = "회원 이름만",
       description =
           "처리 기록에서 관리자 이름을 찾을 때 써요. ID·닉네임·단계(role)만 줘요. 겹친 ID는 하나로 보고 앞에서 100명까지만 찾아요. 없는 ID는 빠져요. "
-              + "지금 관리자 화면을 쓸 수 있는 관리자 누구나.")
+              + "권한 ACTIVITY·USERS_VIEW·ADMIN_APPOINT·PERMISSION_GRANT·PERMISSION_REVOKE·USERS_SUSPEND 중 하나"
+              + "(처리 기록이나 회원 목록을 볼 수 있는 관리자).")
   @ApiResponse(responseCode = "200", description = "찾은 회원 이름")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED — ids가 없거나 UUID가 아닌 값이 있어요")
   List<AdminUserResponse.Name> names(@Parameter(description = "찾을 회원 ID (쉼표로 이어요)") List<UUID> ids);
@@ -125,7 +126,7 @@ public interface AdminUserApiSpec {
       summary = "최상위 관리자 넘기기",
       description =
           "최상위 관리자만. userId의 일반 관리자를 최상위로 바꾸고, 넘긴 나는 모든 권한을 가진 일반 관리자가 돼요(새 최상위가 나중에 조정해요). "
-              + "로그인한 지 10분 안에만 넘길 수 있어요(지났으면 403이라 다시 로그인해야 해요). 응답은 새 최상위 관리자예요.")
+              + "현재 로그인 세션이 소셜 인증을 마친 지 10분 안에만 넘길 수 있어요(지났거나 인증 시각이 없는 기존 세션은 403이라 다시 로그인해야 해요). 토큰 연장이나 다른 기기의 로그인은 이 시간을 갱신하지 않아요. 응답은 새 최상위 관리자예요.")
   @ApiResponse(responseCode = "200", description = "새 최상위 관리자")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED — userId가 없어요")
   @ApiResponse(responseCode = "404", description = "NOT_FOUND — 없는 회원이에요")

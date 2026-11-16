@@ -11,3 +11,8 @@ docs/reviews/
 
 # Root-level Vercel CLI project link
 .vercel/
+
+# Local environment files anywhere (e.g. `vercel env pull` writes .env.local at the linked root). Examples stay tracked.
+.env*
+!.env.example
+!*.example

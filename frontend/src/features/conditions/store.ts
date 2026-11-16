@@ -4,6 +4,13 @@ import { useSyncExternalStore } from "react";
 import { snapshotRegions } from "@/shared/lib/regions";
 import type { ConditionsSnapshot, DeviceConditions, SessionConditions } from "./types";
 import { track } from "@/shared/lib/analytics";
+import { DEVICE_DATA_TTL_MS, retainedDeviceValue } from "@/shared/lib/deviceRetention";
+import {
+  clearBizProfile,
+  moveBizProfileStorage,
+  refreshBizProfile,
+  useBizProfileInput,
+} from "@/features/business/profile";
 
 const DEVICE_KEY = "mujuthaek:conditions:v1";
 const SAVE_PREF_KEY = "mujuthaek:save-on-device";
@@ -11,7 +18,7 @@ const SESSION_DEVICE_KEY = "mujuthaek:conditions:device-session";
 const SESSION_KEY = "mujuthaek:conditions:session";
 
 /** 이 기기에 저장한 조건은 30일 뒤 지워요 */
-export const DEVICE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const DEVICE_TTL_MS = DEVICE_DATA_TTL_MS;
 
 const LOADING: ConditionsSnapshot = { status: "loading" };
 
@@ -99,7 +106,7 @@ function readSnapshot(): ConditionsSnapshot {
 
   if (saveOnDevice) {
     const stored = parse<Stored>(read(local, DEVICE_KEY));
-    if (stored && Date.now() - stored.savedAt > DEVICE_TTL_MS) {
+    if (stored && (!retainedDeviceValue(stored.savedAt) || !stored.data)) {
       write(local, DEVICE_KEY, null);
     } else if (stored) {
       device = stored.data;
@@ -150,6 +157,17 @@ export function useConditions(): ConditionsSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, () => LOADING);
 }
 
+/** 주거 정보가 없어도 사업 정보만 남아 있으면 전체 삭제 버튼을 사용할 수 있어요. */
+export function useHasStoredConditions() {
+  const conditions = useConditions();
+  const business = useBizProfileInput();
+  return (
+    (conditions.status === "ready" && (!!conditions.device || !!conditions.session)) ||
+    (business.status === "ready" &&
+      (!!business.profile || !!business.session.revenue || business.session.restrictions !== null))
+  );
+}
+
 export function saveConditions(device: DeviceConditions, sessionValues: SessionConditions) {
   track("conditions_complete"); // 방문 통계: 값은 보내지 않아요
   const saveOnDevice = read(local, SAVE_PREF_KEY) !== "false";
@@ -171,6 +189,8 @@ export function saveConditions(device: DeviceConditions, sessionValues: SessionC
 export function setSaveOnDevice(on: boolean) {
   const current = getSnapshot();
   const device = current.status === "ready" ? current.device : null;
+  // 이전 저장 방식으로 읽은 뒤 옮겨야 기존 사업 정보가 사라지거나 사본으로 남지 않아요.
+  moveBizProfileStorage(on);
   write(local, SAVE_PREF_KEY, on ? null : "false");
   if (on) {
     if (device) {
@@ -186,6 +206,7 @@ export function setSaveOnDevice(on: boolean) {
     if (device) write(session, SESSION_DEVICE_KEY, JSON.stringify(device));
   }
   emit();
+  refreshBizProfile();
 }
 
 /** 저장한 조건 모두 지우기 (이 기기 + 이번 탭) */
@@ -193,5 +214,6 @@ export function clearConditions() {
   write(local, DEVICE_KEY, null);
   write(session, SESSION_DEVICE_KEY, null);
   write(session, SESSION_KEY, null);
+  clearBizProfile();
   emit();
 }

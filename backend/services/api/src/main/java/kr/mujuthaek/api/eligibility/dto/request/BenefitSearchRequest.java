@@ -23,13 +23,16 @@ public record BenefitSearchRequest(
     @Schema(defaultValue = "20") @Min(1) @Max(100) Integer size) {
 
   /**
-   * @param regionCodes 찾아볼 지역 (시도 2자리 · 시군구 5자리). 비우면 전체, 있으면 전국 혜택 + 그 지역 혜택
+   * 목록 길이는 상한을 둬요. 지역 목록은 혜택 줄마다 모든 값과 비교해서, 상한이 없으면 로그인 없는 1MB 요청 하나가 DB를 수십 초 붙잡았어요(2026-11-16 보안
+   * 감사 H-2).
+   *
+   * @param regionCodes 찾아볼 지역 (시도 2자리 · 시군구 5자리, 50개까지). 비우면 전체, 있으면 전국 혜택 + 그 지역 혜택
    * @param categories HOUSING · ASSET · TRANSPORT. 비우면 전체
    * @param keyword 검색어. 띄어쓰기로 나눈 낱말이 모두 이름·기관에 들어 있는 혜택만. 비우면 전부
    */
   public record Filters(
-      List<@Pattern(regexp = "[0-9]{2}|[0-9]{5}") String> regionCodes,
-      List<@Pattern(regexp = "HOUSING|ASSET|TRANSPORT") String> categories,
+      @Size(max = 50) List<@Pattern(regexp = "[0-9]{2}|[0-9]{5}") String> regionCodes,
+      @Size(max = 10) List<@Pattern(regexp = "HOUSING|ASSET|TRANSPORT") String> categories,
       @Size(max = 100) String keyword) {}
 
   public List<String> regionCodes() {

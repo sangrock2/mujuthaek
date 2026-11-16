@@ -36,4 +36,25 @@ public record PushProperties(
     return host != null
         && allowedHosts.stream().anyMatch(h -> host.equals(h) || host.endsWith("." + h));
   }
+
+  /**
+   * 레코드 기본 toString은 VAPID 개인키를 그대로 넣어요. 설정 바인딩 오류·디버그 로그로 새지 않게 개인키는 있는지만 보여요(2026-11-16 보안 감사
+   * 4장).
+   */
+  @Override
+  public String toString() {
+    return "PushProperties[provider="
+        + provider
+        + ", vapidPublicKey="
+        + vapidPublicKey
+        + ", vapidPrivateKey="
+        + (vapidPrivateKey == null || vapidPrivateKey.isBlank() ? "(없음)" : "***")
+        + ", vapidSubject="
+        + vapidSubject
+        + ", allowedHosts="
+        + allowedHosts
+        + ", timeout="
+        + timeout
+        + "]";
+  }
 }

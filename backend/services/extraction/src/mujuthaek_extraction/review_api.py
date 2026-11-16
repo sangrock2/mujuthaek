@@ -36,6 +36,9 @@
 인증(검토 2026-10-16): EXTRACTION_REVIEW_TOKEN이 있으면 /health 밖의 모든 요청에 'Authorization: Bearer <토큰>'이 필요합니다.
 토큰이 없으면 같은 컴퓨터(127.0.0.1·::1)에서 온 요청만 받습니다 — Docker처럼 0.0.0.0에 열어도 밖에서는 못 씁니다.
 승인할 후보는 그 작업의 원본·버전·분야와 같아야 합니다(다른 공고의 결과를 발행하지 못하게).
+고친 후보 전체(candidate)로 승인해도 잠근 칸(LOCKED_ROOTS: 원본·근거·품질 기록)은 저장된 결과의 값을 씁니다(2026-11-16 보안 감사 4장).
+reviewer는 토큰을 가진 호출자(api)가 적어 보내는 처리자 표시일 뿐 이 서버가 확인한 신원이 아니라서, 정해진 글자(REVIEWER)만 받아
+그대로 처리 기록에 남깁니다. api는 로그인한 관리자 ID를 넣습니다.
 대체된(SUPERSEDED) 건은 승인·반려하면 409와 함께 대체한 버전을 알려 줍니다(store.py 검수 대기 건 대체).
 """
 
@@ -50,16 +53,18 @@ import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from mujuthaek_extraction.assemble.details import upgrade_stored
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.extraction_stats import MAX_DAYS as MAX_STATS_DAYS
+from mujuthaek_extraction.links import public_link
 from mujuthaek_extraction.publish import approved_payload, source_files
 from mujuthaek_extraction.store import REVIEW_REASON_SQL, SUPERSEDED, superseded_message
 from mujuthaek_extraction.trace_view import trace_view
+from mujuthaek_platform.http_server import BoundedHTTPServer
 
 log = logging.getLogger(__name__)
 CANDIDATE_SCHEMA = "schemas/extracted-notice.v1.json"
@@ -79,6 +84,21 @@ REVIEW_LIST_STATUSES = ("PENDING", "APPROVED", "REJECTED", SUPERSEDED)
 MAX_EDITS = 200
 # 칸별 수정으로 바꾸지 못하는 칸: 어느 공고·버전인지와 자동 검증 기록·근거 원문(바꾸면 다른 공고 결과를 발행하거나 근거가 흔들림)
 LOCKED_ROOTS = frozenset({"schemaVersion", "target", "input", "sourceReferences", "documents", "evidence", "quality"})
+# 처리자 표시(api는 관리자 회원 ID). 줄바꿈·꺾쇠 같은 글자로 처리 기록 화면·로그를 꾸미지 못하게 짧은 글자만 받아요
+REVIEWER = re.compile(r"[0-9A-Za-z가-힣._:@-]{1,64}")
+CHUNK_SIZE = re.compile(rb"[0-9A-Fa-f]{1,8}")  # 조각 크기(16진수). 음수·부호·공백은 받지 않아요
+MAX_CHUNKS = 8192
+MAX_TRAILER_LINES = 32
+MAX_TRAILER_BYTES = 8192
+
+
+def _index(token: str) -> int | None:
+    """목록 칸 번호(ASCII 숫자만). '²'·'١' 같은 글자는 isdigit()이 참이어도 int()에서 오류가 나 500이 됐어요(2026-11-16 보안 감사 4장)."""
+    return int(token) if token.isascii() and token.isdecimal() else None
+
+
+def _reviewer_ok(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and REVIEWER.fullmatch(value) is not None)
 
 
 def _pointer_tokens(path: str) -> list[str] | None:
@@ -113,9 +133,9 @@ def apply_edits(candidate: dict[str, Any], edits: Any, locked: frozenset[str] = 
         if isinstance(parent, dict) and last in parent:
             before = parent[last]
             parent[last] = edit["value"]
-        elif isinstance(parent, list) and last.isdigit() and int(last) < len(parent):
-            before = parent[int(last)]
-            parent[int(last)] = edit["value"]
+        elif isinstance(parent, list) and (index := _index(last)) is not None and index < len(parent):
+            before = parent[index]
+            parent[index] = edit["value"]
         else:
             return None, f"{edit['path']}에 해당하는 칸이 없습니다(새 칸은 추가하지 않습니다)."
         applied.append({"path": edit["path"], "before": before, "after": edit["value"]})
@@ -125,8 +145,8 @@ def apply_edits(candidate: dict[str, Any], edits: Any, locked: frozenset[str] = 
 def _child(node: Any, token: str) -> Any:
     if isinstance(node, dict):
         return node.get(token)
-    if isinstance(node, list) and token.isdigit() and int(token) < len(node):
-        return node[int(token)]
+    if isinstance(node, list) and (index := _index(token)) is not None and index < len(node):
+        return node[index]
     return None
 
 
@@ -148,7 +168,8 @@ def _list_limit(raw: str | None) -> int | None:
     """목록 limit 칸: 비우면 최대값, 1~MAX_LIST_LIMIT 정수가 아니면 None(400)."""
     if raw is None or raw == "":
         return MAX_LIST_LIMIT
-    return int(raw) if raw.isdigit() and 1 <= int(raw) <= MAX_LIST_LIMIT else None
+    value = _index(raw)
+    return value if value is not None and 1 <= value <= MAX_LIST_LIMIT else None
 
 
 def _list_after(at: str | None, item_id: str | None) -> tuple[str, str] | None | str:
@@ -166,6 +187,9 @@ def _list_after(at: str | None, item_id: str | None) -> tuple[str, str] | None |
 def _page(items: list[dict[str, Any]], size: int) -> tuple[list[dict[str, Any]], bool]:
     """size+1건을 받아 size건과 더 있는지를 나눠요."""
     return items[:size], len(items) > size
+
+
+BAD_BODY = "본문은 5MB 이하의 JSON 객체여야 하고, note는 글자, reviewer는 64자 이하의 글자·숫자·._:@-여야 합니다."
 
 
 class ReviewService:
@@ -296,11 +320,25 @@ class ReviewService:
                 return 409, {"error": f"이미 {item['reviewStatus']} 처리된 항목입니다."}
             if body.get("candidate") is not None and body.get("edits") is not None:
                 return 422, {"error": "고친 후보 전체(candidate)와 칸별 수정(edits)은 함께 보낼 수 없습니다."}
-            candidate = body.get("candidate") or item["candidate"]
-            if candidate is None:
+            if item["candidate"] is None:
+                # 저장된 결과가 없으면 잠근 칸(근거·품질)을 가져올 곳이 없어 고친 후보 전체로도 승인하지 않습니다
                 return 409, {"error": "추출 결과가 없어 승인할 수 없습니다. 원본 자료를 고친 뒤 다시 처리하세요."}
             # 2026-10-23 이전에 저장한 후보는 일정·서류의 새 칸과 정해진 신청 방법 값으로 옮긴 뒤 검사합니다(새 형식이면 그대로)
-            candidate = upgrade_stored(copy.deepcopy(candidate))
+            stored = upgrade_stored(copy.deepcopy(item["candidate"]))
+            candidate = stored
+            if body.get("candidate") is not None:
+                if not isinstance(body["candidate"], dict):
+                    return 422, {"error": "candidate는 표준 공고 객체여야 합니다."}
+                candidate = upgrade_stored(copy.deepcopy(body["candidate"]))
+                raw = (item["rawEvent"] or {}).get("payload") or {}
+                if not _same_notice(candidate, raw):
+                    return 422, {"error": "후보의 원본·버전·분야가 이 검수 작업의 공고와 다릅니다."}
+                # 잠근 칸은 저장된 결과의 값으로 되돌립니다. 고친 후보 전체로 근거·품질 기록을 바꾸면 칸별 수정의 잠금을 우회했어요
+                for root in LOCKED_ROOTS:
+                    if root in stored:
+                        candidate[root] = copy.deepcopy(stored[root])
+                    else:
+                        candidate.pop(root, None)
             edits = None
             if body.get("edits") is not None:
                 edits, problem = apply_edits(candidate, body["edits"])
@@ -410,6 +448,10 @@ class ReviewService:
                 payload["relevant"] = False
                 payload["relevanceReason"] = REJECTED_RELEVANCE_REASON
             payload["reprocess"] = True
+            if isinstance(payload.get("source"), dict):
+                # 링크 검사(2026-11-16 보안 감사 L-4) 전에 쌓인 결과도 계약 패턴에 맞게 걸러요. source는 잠근 칸이라 검수자가 고칠 수 없어요
+                for key in ("detailUrl", "applyUrl"):
+                    payload["source"][key] = public_link(payload["source"].get(key))
             quality = payload["quality"]
             quality["needsReview"] = False
             # 검수 전 결과가 같은 버전으로 이미 나가 있어, 표시가 없으면 api가 같은 버전이라 버렸습니다(2026-11-10 코드 검토)
@@ -444,19 +486,30 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.close_connection = True
             self.end_headers()
             self.wfile.write(data)
 
         def _body(self) -> dict[str, Any] | None:
             """요청 본문을 JSON 객체로 읽습니다. 본문이 없으면 빈 객체, 길이·형식이 맞지 않거나 note가 글자가 아니면 None입니다.
             조각 전송(Transfer-Encoding: chunked)도 읽습니다(2026-10-25: api 서버가 길이 없이 보내 본문이 빈 것으로 읽혀 승인·반려가 400이 됨)."""
-            if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            encodings = self.headers.get_all("Transfer-Encoding") or []
+            lengths = self.headers.get_all("Content-Length") or []
+            if len(encodings) > 1 or len(lengths) > 1 or encodings and lengths:
+                return None
+            if encodings:
+                if encodings[0].lower() != "chunked":
+                    return None
                 raw = self._chunked()
                 if raw is None:
                     return None
             else:
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
+                    length_text = lengths[0] if lengths else "0"
+                    if not re.fullmatch(r"[0-9]{1,8}", length_text):
+                        return None
+                    length = int(length_text)
                 except ValueError:
                     return None
                 if length == 0:
@@ -464,33 +517,47 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
                 if not 0 < length <= MAX_BODY:  # 음수 길이는 끝까지 읽어 버리므로 거절합니다
                     return None
                 raw = self.rfile.read(length)
+                if len(raw) != length:
+                    return None
             if not raw.strip():
                 return {}
             try:
                 value = json.loads(raw)
             except ValueError:
                 return None
-            if not isinstance(value, dict) or not isinstance(value.get("note"), str | None) or not isinstance(value.get("reviewer"), str | None):
+            if not isinstance(value, dict) or not isinstance(value.get("note"), str | None) or not _reviewer_ok(value.get("reviewer")):
                 return None
             return value
 
         def _chunked(self) -> bytes | None:
             """조각 전송 본문을 이어 붙입니다. MAX_BODY를 넘거나 형식이 틀리면 None."""
-            data = b""
-            while True:
-                line = self.rfile.readline(64).strip()
-                try:
-                    size = int(line.split(b";")[0], 16)
-                except ValueError:
+            data = bytearray()
+            for _ in range(MAX_CHUNKS):
+                line = self.rfile.readline(64)
+                if not line.endswith(b"\r\n"):
                     return None
+                digits = line[:-2].split(b";", 1)[0]
+                # int(…, 16)은 '-10'도 받아 rfile.read(음수)가 끝까지 읽었어요(2026-11-16 보안 감사 5장)
+                if not CHUNK_SIZE.fullmatch(digits):
+                    return None
+                size = int(digits, 16)
                 if size == 0:
-                    while self.rfile.readline(1024).strip():  # 끝 머리말(trailer)은 버림
-                        pass
-                    return data
+                    trailer_bytes = 0
+                    for _ in range(MAX_TRAILER_LINES):
+                        trailer = self.rfile.readline(1024)
+                        trailer_bytes += len(trailer)
+                        if not trailer.endswith(b"\r\n") or trailer_bytes > MAX_TRAILER_BYTES:
+                            return None
+                        if trailer == b"\r\n":
+                            return bytes(data)
+                    return None
                 if len(data) + size > MAX_BODY:
                     return None
-                data += self.rfile.read(size)
-                self.rfile.readline(4)  # 조각 끝 CRLF
+                chunk = self.rfile.read(size)
+                if len(chunk) != size or self.rfile.read(2) != b"\r\n":
+                    return None
+                data.extend(chunk)
+            return None
 
         def _job_id(self, match: re.Match[str]) -> str | None:
             try:
@@ -555,7 +622,7 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
             if urlparse(self.path).path in ("/reviews/reopen", "/benefit-reviews/reopen"):
                 body = self._body()
                 if body is None:
-                    return self._send(400, {"error": "본문은 5MB 이하의 JSON 객체여야 하고, note·reviewer는 글자여야 합니다."})
+                    return self._send(400, {"error": BAD_BODY})
                 reopen = service.reopen if urlparse(self.path).path == "/reviews/reopen" else service.benefit_reopen
                 return self._send(*reopen(body))
             benefit = BENEFIT_REVIEW_PATH.match(urlparse(self.path).path)
@@ -565,7 +632,7 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
                     return self._send(400, {"error": "검수 ID 형식이 아닙니다."})
                 body = self._body()
                 if body is None:
-                    return self._send(400, {"error": "본문은 5MB 이하의 JSON 객체여야 하고, note·reviewer는 글자여야 합니다."})
+                    return self._send(400, {"error": BAD_BODY})
                 return self._send(*service.benefit_decide(review_id, "APPROVED" if benefit[2] == "approve" else "REJECTED", body))
             match = REVIEW_PATH.match(urlparse(self.path).path)
             if not match or not match[2]:
@@ -575,7 +642,7 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
                 return self._send(400, {"error": "작업 ID 형식이 아닙니다."})
             body = self._body()
             if body is None:
-                return self._send(400, {"error": "본문은 5MB 이하의 JSON 객체여야 하고, note·reviewer는 글자여야 합니다."})
+                return self._send(400, {"error": BAD_BODY})
             action = service.approve if match[2] == "approve" else service.reject
             self._send(*action(job_id, body))
 
@@ -585,8 +652,8 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
     return Handler
 
 
-def serve(service: ReviewService, host: str, port: int, token: str | None = None, health: Any = None) -> ThreadingHTTPServer:
+def serve(service: ReviewService, host: str, port: int, token: str | None = None, health: Any = None) -> BoundedHTTPServer:
     if not token and host not in LOOPBACK and host != "localhost":
         log.warning("검수 API 토큰(EXTRACTION_REVIEW_TOKEN)이 없어 같은 컴퓨터에서 온 요청만 받습니다", extra={"host": host})
-    server = ThreadingHTTPServer((host, port), handler_for(service, token, health))
+    server = BoundedHTTPServer((host, port), handler_for(service, token, health))
     return server

@@ -1,87 +1,57 @@
-"""Use only the personal Vercel project; keep token values out of command output."""
+"""Release the fixed Vercel project through the standard-library REST client."""
 import argparse
 import json
 import os
 import re
-import shutil
-import tempfile
 import subprocess
-import urllib.request
 from pathlib import Path
 
-PROJECT = 'prj_TgaOO5IH8i8ETBXwM5bv2n7gtkj8'
-TEAM = 'team_BpOTTz4f6CcMVITAdEzieKXr'
+import vercel_rest as rest
 
-
-def vercel(*args, cwd=None):
-    environment = dict(os.environ, VERCEL_ORG_ID=TEAM, VERCEL_PROJECT_ID=PROJECT)
-    result = subprocess.run(['vercel', *args, '--scope', TEAM, '--yes', '--json', '--token', environment['VERCEL_TOKEN']], cwd=cwd,
-                            capture_output=True, text=True, env=environment)
-    if result.returncode:
-        detail = (result.stderr or result.stdout)[-1800:]
-        for name in ('VERCEL_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'):
-            secret = environment.get(name)
-            if secret:
-                detail = detail.replace(secret, '[REDACTED]')
-        raise RuntimeError('Vercel operation failed: ' + detail.strip())
-    return json.loads(result.stdout)
+PROJECT, TEAM = rest.PROJECT, rest.TEAM
 
 
 def remember_current():
-    url = f'https://api.vercel.com/v9/projects/{PROJECT}?teamId=team_BpOTTz4f6CcMVITAdEzieKXr'
-    request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['VERCEL_TOKEN']})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        project = json.load(response)
-    if project['id'] != PROJECT:
-        raise RuntimeError('Wrong Vercel project')
-    current = project['targets']['production']
+    current = rest.project()['targets']['production']
     Path('frontend-before.json').write_text(json.dumps({k: current[k] for k in ('id', 'url')}))
 
 
 def restore_before():
     old = json.loads(Path('frontend-before.json').read_text())
-    vercel('promote', old['url'])
+    rest.promote(old['id'])
 
 
-def candidate(cwd=None):
-    link = Path(cwd or Path.cwd()) / '.vercel'
-    link.mkdir(exist_ok=True)
-    (link / 'project.json').write_text(json.dumps({'projectId': PROJECT, 'orgId': TEAM, 'projectName': 'mujuthaek'}))
-    data = vercel('deploy', '--prod', '--skip-domain', cwd=cwd)
-    deployment = data.get('deployment', data)
-    if deployment.get('readyState') != 'READY':
-        raise RuntimeError('Vercel build is not ready')
-    Path('frontend-deployment.json').write_text(json.dumps({k: deployment[k] for k in ('id', 'url')}))
+def candidate(cwd=None, commit=None):
+    if commit is None:
+        commit = os.environ.get('GITHUB_SHA') or subprocess.run(
+            ['git', 'rev-parse', 'HEAD'], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    value = rest.candidate(commit)
+    Path('frontend-deployment.json').write_text(json.dumps({k: value[k] for k in ('id', 'url')}))
 
 
 def restore_candidate():
     data = json.loads(Path('target-release.json').read_text())
-    # A snapshot may have inherited its frontend from an earlier source commit.
     commit = (data.get('frontend') or {}).get('commit', data.get('commit'))
     if commit and re.fullmatch('[0-9a-f]{40}', commit):
         subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'origin/main'], check=True)
-        with tempfile.TemporaryDirectory() as directory:
-            archive = subprocess.run(['git', 'archive', '--format=tar', commit], check=True, capture_output=True)
-            subprocess.run(['tar', '-xf', '-', '-C', directory], input=archive.stdout, check=True)
-            shutil.copyfile('.vercelignore', Path(directory) / '.vercelignore')
-            candidate(cwd=directory)
+        candidate(commit=commit)
     elif data.get('frontend'):
-        # Initial local deployment has no Git SHA; promotion may be plan-limited.
         Path('frontend-deployment.json').write_text(json.dumps(data['frontend']))
     else:
         raise RuntimeError('This historical release has no frontend source/deployment record')
 
 
 def promote():
-    data = json.loads(Path('frontend-deployment.json').read_text())
-    vercel('promote', data['url'])
+    value = json.loads(Path('frontend-deployment.json').read_text())
+    rest.promote(value['id'])
     print('Promoted the selected personal frontend deployment')
 
 
 if __name__ == '__main__':
-    p = argparse.ArgumentParser()
-    p.add_argument('action', choices=('candidate', 'promote', 'restore-candidate', 'remember', 'restore-before'))
-    action = p.parse_args().action
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=('candidate', 'promote', 'restore-candidate', 'remember', 'restore-before'))
+    action = parser.parse_args().action
     if not os.environ.get('VERCEL_TOKEN'):
         raise SystemExit('Configure the VERCEL_TOKEN repository secret first')
-    {'candidate': candidate, 'promote': promote, 'restore-candidate': restore_candidate, 'remember': remember_current, 'restore-before': restore_before}[action]()
+    {'candidate': candidate, 'promote': promote, 'restore-candidate': restore_candidate,
+     'remember': remember_current, 'restore-before': restore_before}[action]()

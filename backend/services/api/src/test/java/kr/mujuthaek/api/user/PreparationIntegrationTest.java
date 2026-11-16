@@ -14,6 +14,7 @@ import kr.mujuthaek.api.notice.service.internal.NoticeIngestionService;
 import kr.mujuthaek.api.notice.service.internal.NoticeMergeService;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.*;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +39,7 @@ import tools.jackson.databind.node.ObjectNode;
 class PreparationIntegrationTest {
   @Autowired PreparationService service;
   @Autowired SocialLoginService login;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired FavoriteService favorites;
   @Autowired NoticeIngestionService ingestion;
@@ -54,7 +56,10 @@ class PreparationIntegrationTest {
     jdbc.sql(
             "truncate account.users, notice.notices, notice.extraction_results, common.processed_events cascade")
         .update();
-    user = login.login(new SocialProfile(SocialProvider.KAKAO, "preparation-test", "준비 테스트"));
+    user =
+        TermsFixture.agreed(
+            terms,
+            login.login(new SocialProfile(SocialProvider.KAKAO, "preparation-test", "준비 테스트")));
     try (var in = getClass().getResourceAsStream("/contracts/examples/extraction.completed.json")) {
       event = (ObjectNode) json.readTree(new String(in.readAllBytes(), StandardCharsets.UTF_8));
     }
@@ -187,7 +192,9 @@ class PreparationIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"SUBMITTED\"}"))
         .andExpect(status().isBadRequest());
-    var other = login.login(new SocialProfile(SocialProvider.KAKAO, "other", "다른 회원"));
+    var other =
+        TermsFixture.agreed(
+            terms, login.login(new SocialProfile(SocialProvider.KAKAO, "other", "다른 회원")));
     String token = "Bearer " + tokens.issue(other).accessToken();
     mvc.perform(get("/api/users/me/preparations/" + p.id()).header("Authorization", token))
         .andExpect(status().isNotFound());
@@ -217,7 +224,9 @@ class PreparationIntegrationTest {
         service.addTask(user.userId(), preparation.id(), "내 비공개 할 일", null, preparation.revision());
     var task = owned.tasks().getFirst();
     var other =
-        login.login(new SocialProfile(SocialProvider.KAKAO, "security-other-member", "다른 회원"));
+        TermsFixture.agreed(
+            terms,
+            login.login(new SocialProfile(SocialProvider.KAKAO, "security-other-member", "다른 회원")));
     String token = "Bearer " + tokens.issue(other).accessToken();
     String base = "/api/users/me/preparations/";
     String path = base + owned.id() + "/tasks/" + task.id();
@@ -470,7 +479,9 @@ class PreparationIntegrationTest {
                 .content("{\"title\":\" \",\"dueOn\":null,\"expectedRevision\":0}"))
         .andExpect(status().isBadRequest());
     var withTask = service.addTask(user.userId(), p.id(), "내가 정한 할 일", null, p.revision());
-    var other = login.login(new SocialProfile(SocialProvider.KAKAO, "tasks-other", "다른 회원"));
+    var other =
+        TermsFixture.agreed(
+            terms, login.login(new SocialProfile(SocialProvider.KAKAO, "tasks-other", "다른 회원")));
     assertThatThrownBy(
             () ->
                 service.updateTask(

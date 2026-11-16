@@ -4,8 +4,8 @@
 
 ```
 노트북                                         운영 EC2 (127.0.0.1에만 열림)
- k6 ──────── http://3.37.131.73 (nginx) ────▶ api
- Prometheus ◀─ SSH 터널(tunnel.sh) ─────────── api·notification /actuator/prometheus, node-exporter, cAdvisor
+ k6 ──────── BASE_URL (nginx) ──────────────▶ api
+ Prometheus ◀─ SSH 터널(tunnel.sh) ─────────── api·notification /actuator/prometheus, node-exporter
  Grafana(3300) + 이미지 렌더러                  RDS ◀─ server.sh가 서버 안에서 psql (pg_stat_statements)
 ```
 
@@ -15,10 +15,10 @@
 |---|---|---|
 | 지금 | AWS 보안 그룹: 내 IP에서 EC2 22·80 열려 있는지 | |
 | 지금 | EC2 크레딧 모드(Standard·Unlimited) 확인 | Standard면 테스트 사이 30분 쉬기 |
-| 지금 | `cp tools/perf/.env.example tools/perf/.env` 후 SSH 키·인스턴스 id 채우기 | `tools/perf/.env`는 커밋되지 않아요 |
+| 지금 | `cp tools/perf/.env.example tools/perf/.env` 후 서버 주소(BASE_URL·EC2_HOST)·SSH 키·인스턴스 id 채우기 | `tools/perf/.env`는 커밋되지 않아요. 서버 주소는 저장소에 적지 않아요 |
 | 지금 | `tools/perf/server.sh version` 으로 SSH·버전 확인 | |
 | 지금(권장) | RDS **api DB**에 `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` (마스터 계정) | `shared_preload_libraries`에 없으면 파라미터 그룹 수정 + 재부팅. `tools/perf/server.sh check`로 확인 |
-| 지금(선택) | 테스트 계정: 소셜 로그인으로 가입 → 회원 id를 `TEST_USER_ID`에, 운영 `JWT_SECRET`을 `tools/perf/.env`에 | 비우면 로그인 흐름(15%)을 판정 흐름으로 돌려요. **나중에 넣으면 baseline을 다시 재야 해요** |
+| 지금(선택) | 로그인 흐름은 **로컬·스테이징 api에서만**: 테스트 계정 회원 id를 `TEST_USER_ID`에, 그 환경의 `JWT_SECRET`을 `tools/perf/.env`에 | 운영 `JWT_SECRET`은 노트북에 두지 않아요(그 값이면 어느 회원·관리자 토큰이든 만들 수 있어요, 2026-11-16 보안 감사 4장). BASE_URL이 localhost·*.localhost·*.test·staging.·dev.·test.·qa. 주소가 아니면 `run.sh`와 k6가 토큰을 만들지 않고 멈춰요. 비우면 로그인 흐름(15%)을 판정 흐름으로 돌려요. **넣고 빼면 baseline을 다시 재야 해요** |
 | 배포 | 이 브랜치(지표 노출)가 prod에 배포돼 있어야 해요 | `/actuator/prometheus`가 있어야 서버 쪽 숫자가 나와요 |
 | 테스트 날 | 운영 슬랙 알림 채널에 공지(스트레스·스파이크에서 5xx 알림이 몰려요), 팀에 시간 공지(RDS를 dev와 같이 써요) | |
 
@@ -26,7 +26,7 @@
 
 ```bash
 docker compose -f tools/perf/docker-compose.yml up -d   # Prometheus·Grafana (http://localhost:3300)
-tools/perf/server.sh exporters-up                        # 서버에 node-exporter·cAdvisor
+tools/perf/server.sh exporters-up                        # 서버에 node-exporter
 tools/perf/tunnel.sh                                     # ← 다른 터미널에 켜 두기
 
 tools/perf/run.sh smoke                                  # 먼저 스모크로 결과 폴더가 다 차는지 확인

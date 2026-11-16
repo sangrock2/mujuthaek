@@ -1,8 +1,10 @@
 package kr.mujuthaek.notification.event;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.UUID;
-import kr.mujuthaek.notification.delivery.email.VerificationMailer;
 import kr.mujuthaek.notification.notification.NotificationRequest;
 import kr.mujuthaek.notification.notification.NotificationService;
 import kr.mujuthaek.notification.notification.UserDataCleaner;
@@ -32,23 +34,31 @@ public class IncomingEventListener {
   /** 받는 봉투 버전. 바뀌면 새 버전을 받는 코드를 같이 넣어요. */
   static final int SCHEMA_VERSION = 1;
 
+  /**
+   * 이보다 오래된 알림 요청은 보내지 않고 버려요(처리 기록만 남겨요). 실패 큐에 오래 남은 메시지를 나중에 다시 넣으면, 탈퇴 기록(90일 보관)이 지워진 뒤라 탈퇴한
+   * 사람에게 알림이 갈 수 있었어요(2026-11-16 보안 감사 L-14). 실패 큐 보관 기간(7일)과 같아요.
+   */
+  static final Duration MAX_REQUEST_AGE = Duration.ofDays(7);
+
+  static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(5);
+
   private final JsonMapper json;
   private final JdbcClient jdbc;
   private final NotificationService notifications;
-  private final VerificationMailer verificationMailer;
   private final UserDataCleaner cleaner;
+  private final Clock clock;
 
   public IncomingEventListener(
       JsonMapper json,
       JdbcClient jdbc,
       NotificationService notifications,
-      VerificationMailer verificationMailer,
-      UserDataCleaner cleaner) {
+      UserDataCleaner cleaner,
+      Clock clock) {
     this.json = json;
     this.jdbc = jdbc;
     this.notifications = notifications;
-    this.verificationMailer = verificationMailer;
     this.cleaner = cleaner;
+    this.clock = clock;
   }
 
   @RabbitListener(queues = EventQueueConfig.QUEUE)
@@ -68,12 +78,16 @@ public class IncomingEventListener {
     }
     switch (event.eventType()) {
       case "notification.requested" -> {
-        int created = notifications.handle(payload(event, NotificationRequest.class));
+        NotificationRequest request = payload(event, NotificationRequest.class);
+        if (stale(event)) {
+          log.warn(
+              "오래된 알림 요청이라 보내지 않아요: eventId={}, occurredAt={}",
+              event.eventId(),
+              event.occurredAt());
+          return;
+        }
+        int created = notifications.handle(request);
         log.info("알림 요청 처리: eventId={}, 새 발송 줄={}", event.eventId(), created);
-      }
-      case "email.verification.requested" -> {
-        VerificationRequested v = payload(event, VerificationRequested.class);
-        verificationMailer.send(v.userId(), v.email(), v.code(), v.expiresAt());
       }
       case "user.withdrawn" -> {
         cleaner.delete(payload(event, Withdrawn.class).userId());
@@ -81,6 +95,12 @@ public class IncomingEventListener {
       }
       default -> throw new IllegalStateException("받는 종류인데 처리 코드가 없어요: " + event.eventType());
     }
+  }
+
+  /** 유효한 발생 시각은 봉투 파싱에서 확인하고, 오래된 알림은 중복 기록만 남긴 뒤 발송하지 않아요. */
+  private boolean stale(Envelope event) {
+    return event.occurredAt() != null
+        && event.occurredAt().isBefore(clock.instant().minus(MAX_REQUEST_AGE));
   }
 
   /** payload가 계약과 다르면 다시 받아도 같아서 실패 큐로 보내요 */
@@ -95,9 +115,6 @@ public class IncomingEventListener {
       }
       if (value instanceof Withdrawn withdrawn && withdrawn.userId() == null) {
         throw new IllegalArgumentException("userId가 없어요");
-      }
-      if (value instanceof VerificationRequested v) {
-        v.validate();
       }
       return value;
     } catch (JacksonException | IllegalArgumentException e) {
@@ -129,24 +146,30 @@ public class IncomingEventListener {
                 + SCHEMA_VERSION
                 + ")");
       }
-      return new Envelope(eventId, eventType, root.path("payload"));
+      Instant occurredAt = occurredAt(root);
+      if ("notification.requested".equals(eventType)
+          && (occurredAt == null || occurredAt.isAfter(clock.instant().plus(MAX_CLOCK_SKEW)))) {
+        throw new IllegalArgumentException("알림 요청에는 유효한 발생 시각이 필요해요");
+      }
+      return new Envelope(eventId, eventType, occurredAt, root.path("payload"));
     } catch (JacksonException | IllegalArgumentException e) {
       throw new AmqpRejectAndDontRequeueException("이벤트 봉투를 읽지 못했어요: " + e.getMessage(), e);
     }
   }
 
-  private record Envelope(UUID eventId, String eventType, JsonNode payload) {}
-
-  private record Withdrawn(UUID userId) {}
-
-  private record VerificationRequested(UUID userId, String email, String code, Instant expiresAt) {
-    void validate() {
-      if (userId == null || email == null || email.isBlank() || expiresAt == null) {
-        throw new IllegalArgumentException("userId·email·expiresAt이 없어요");
-      }
-      if (code == null || !code.matches("\\d{6}")) {
-        throw new IllegalArgumentException("code는 6자리 숫자예요");
-      }
+  private static Instant occurredAt(JsonNode root) {
+    String value = root.path("occurredAt").asString();
+    if (value.isBlank()) {
+      return null;
+    }
+    try {
+      return Instant.parse(value);
+    } catch (DateTimeParseException e) {
+      return null;
     }
   }
+
+  private record Envelope(UUID eventId, String eventType, Instant occurredAt, JsonNode payload) {}
+
+  private record Withdrawn(UUID userId) {}
 }

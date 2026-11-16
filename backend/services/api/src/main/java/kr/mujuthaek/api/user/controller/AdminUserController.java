@@ -102,7 +102,7 @@ class AdminUserController implements AdminUserApiSpec {
   public AdminUserResponse transfer(
       @Valid @RequestBody AdminRequests.Transfer request,
       @AuthenticationPrincipal LoginUser admin) {
-    return users.transfer(request.userId(), admin.userId());
+    return users.transfer(request.userId(), admin.userId(), admin.authenticatedAt());
   }
 
   @Override

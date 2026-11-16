@@ -41,6 +41,13 @@ class GlobalExceptionHandlerTest {
 
     @GetMapping("/api/v1/notices/{id}")
     String notice(@PathVariable String id) {
+      if (id.equals("timeout")) {
+        throw new org.springframework.dao.QueryTimeoutException(
+            "select secret where monthlyIncomeWon=987654321");
+      }
+      if (id.equals("jpa-timeout")) {
+        throw new jakarta.persistence.QueryTimeoutException("private SQL 987654321");
+      }
       if (id.equals("boom")) {
         throw new IllegalStateException("DB 연결 끊김");
       }
@@ -113,6 +120,22 @@ class GlobalExceptionHandlerTest {
     assertThat(output.getOut() + output.getErr())
         .contains("personalIncomeAnnualWon=***")
         .doesNotContain("32000000");
+  }
+
+  @Test
+  @ExtendWith(OutputCaptureExtension.class)
+  void expectedDatabaseTimeoutsReturn503WithoutQueryOrInputValues(CapturedOutput output)
+      throws Exception {
+    for (String path : new String[] {"timeout", "jpa-timeout"}) {
+      var result =
+          mvc.perform(get("/api/v1/notices/" + path))
+              .andExpect(status().isServiceUnavailable())
+              .andExpect(jsonPath("$.code").value("QUERY_TIMEOUT"))
+              .andReturn();
+      assertThat(result.getResponse().getContentAsString())
+          .doesNotContain("987654321", "select secret", "private SQL");
+    }
+    assertThat(output.getAll()).doesNotContain("987654321", "select secret", "private SQL");
   }
 
   @Test

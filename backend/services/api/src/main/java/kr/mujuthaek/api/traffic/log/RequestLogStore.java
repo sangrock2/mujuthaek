@@ -20,6 +20,8 @@ import kr.mujuthaek.api.traffic.log.RequestClassifier.Client;
 import kr.mujuthaek.api.traffic.log.RequestClassifier.LoginResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -51,13 +53,37 @@ public class RequestLogStore {
   private final JdbcTemplate jdbc;
   private final TrafficProperties props;
   private final Clock clock;
+  private final String salt;
+
+  /** 화면에 보낼 이름표를 만드는 키. 서버가 켜져 있는 동안만 메모리에 있어요 */
+  private final byte[] labelKey = IpSalt.randomKey();
+
   private final ConcurrentLinkedQueue<Entry> pending = new ConcurrentLinkedQueue<>();
   private final AtomicInteger size = new AtomicInteger();
 
-  public RequestLogStore(JdbcTemplate jdbc, TrafficProperties props, Clock clock) {
+  @Autowired
+  public RequestLogStore(
+      JdbcTemplate jdbc,
+      TrafficProperties props,
+      Clock clock,
+      @Value("${mujuthaek.jwt.secret:}") String jwtSecret) {
     this.jdbc = jdbc;
     this.props = props;
     this.clock = clock;
+    IpSalt.Resolved resolved = IpSalt.resolve(props.ipSalt(), jwtSecret);
+    this.salt = resolved.value();
+    if (resolved.source() != IpSalt.Source.CONFIGURED) {
+      log.warn(
+          "TRAFFIC_IP_SALT가 없거나 너무 짧아서 {} 값을 IP 해시에 써요. 운영은 따로 넣는 게 좋아요",
+          resolved.source() == IpSalt.Source.DERIVED_FROM_JWT_SECRET
+              ? "JWT 비밀값에서 따로 만든"
+              : "서버가 켜질 때 만든 무작위");
+    }
+  }
+
+  /** 시험용: JWT 비밀값 없이 */
+  public RequestLogStore(JdbcTemplate jdbc, TrafficProperties props, Clock clock) {
+    this(jdbc, props, clock, "");
   }
 
   /** 기록을 넣을 차례에 올려요. 차례가 가득 차면 버려요. */
@@ -125,19 +151,27 @@ public class RequestLogStore {
     log.info("요청 기록 정리: 원본 IP 지움 {}건, 오래된 기록 지움 {}건", cleared, deleted);
   }
 
-  /** IP 해시: 비밀 값 + 그날(한국 날짜) + IP. 날마다 달라져 오래 따라갈 수 없어요. 앞 16자만 써요. */
+  /**
+   * IP 해시: 비밀 값 + 그날(한국 날짜) + IP. 날마다 달라져 오래 따라갈 수 없어요. 앞 16자만 써요. 비밀 값은 {@link IpSalt}가 정해요 (공개된
+   * 기본값은 쓰지 않아요).
+   */
   String ipHash(String ip, Instant at) {
     String day = LocalDate.ofInstant(at, KST).toString();
     try {
       byte[] digest =
           MessageDigest.getInstance("SHA-256")
               .digest(
-                  (props.ipSalt() + "|" + day + "|" + (ip == null ? "" : ip))
+                  (salt + "|" + day + "|" + (ip == null ? "" : ip))
                       .getBytes(StandardCharsets.UTF_8));
       return HexFormat.of().formatHex(digest).substring(0, 16);
     } catch (NoSuchAlgorithmException impossible) {
       throw new IllegalStateException(impossible);
     }
+  }
+
+  /** 화면용 이름표: 같은 해시면 같은 값이지만, 저장된 해시와는 이어지지 않아요 */
+  private String label(String hash) {
+    return hash == null ? null : IpSalt.hmacHex(labelKey, hash).substring(0, 16);
   }
 
   // ---- 조회 (관리자 트래픽 화면) ----
@@ -192,7 +226,9 @@ public class RequestLogStore {
   }
 
   /**
-   * 요청이 많은 곳. 원본 IP가 남아 있으면(보관 기간 안) IP로, 지워졌으면 그날 해시로 묶어요. 화면에는 가린 IP만 보내요.
+   * 요청이 많은 곳. 원본 IP가 남아 있으면(보관 기간 안) IP로, 지워졌으면 그날 해시로 묶어요. 화면에는 가린 IP만 보내요. 원본 IP가 지워진 줄은 해시 대신
+   * 서버가 켜져 있는 동안만 쓰는 키로 다시 만든 이름표({@code key})를 보내요. 저장된 해시를 화면에 그대로 보여 주면 비밀 값이 새었을 때 IP를 거꾸로 찾는
+   * 재료가 돼요(2026-11-16 보안 감사 L-1).
    *
    * @param peakPerMinute 1분에 가장 많이 보낸 요청 수(빠른 반복 자동화를 찾는 데 써요)
    */
@@ -219,7 +255,7 @@ public class RequestLogStore {
         (rs, n) ->
             new TopSource(
                 RequestClassifier.maskIp(rs.getString("ip")),
-                rs.getString("ip") == null ? rs.getString("k") : null,
+                rs.getString("ip") == null ? label(rs.getString("k")) : null,
                 rs.getString("client"),
                 rs.getLong("n"),
                 rs.getLong("peak"),

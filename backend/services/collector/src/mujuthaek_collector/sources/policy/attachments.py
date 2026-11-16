@@ -19,16 +19,23 @@
 
 from __future__ import annotations
 
+import bisect
 import re
 import urllib.parse
 
-from mujuthaek_collector.core.files import DOC_EXTS, FileRef
-from mujuthaek_collector.core.html import abs_url, body_text, soup, text_of
+from bs4 import Tag
 
+from mujuthaek_collector.core.files import DOC_EXTS, FileRef
+from mujuthaek_collector.core.html import abs_url, body_text, soup, string_kinds, text_of
+
+# 긴 글자에서 파일 이름을 찾을 때는 FILE_NAME.search 말고 file_name()을 써요 (search는 시작 글자마다 끝까지 훑어서 제곱으로 느려요. fullmatch는 한 번만 훑어요)
 FILE_NAME = re.compile(r"[^\\/:*?\"<>|\r\n]+?\.(pdf|hwpx?|docx?|xlsx?|xlsm|zip)\b", re.I)
+FILE_EXT = re.compile(r"\.(?:pdf|hwpx?|docx?|xlsx?|xlsm|zip)\b", re.I)  # FILE_NAME의 확장자 부분
+NOT_NAME_CHARS = '\\/:*?"<>|\r\n'  # FILE_NAME의 [^…]: 파일 이름에 못 쓰는 글자
 DOWNLOAD_HREF = re.compile(r"download|filedown|file_down|atchfile|attach|fileid|getfile|fn_?down", re.I)
 VIEWER = re.compile(r"미리\s*보기|바로\s*보기|뷰어|viewer|preview", re.I)
-SIZE_SUFFIX = re.compile(r"\s*[\[(]\s*[\d.,]+\s*(?:[KMG]?B|bytes?|byte)\s*[\])]\s*$", re.I)
+# (?<!\s): 공백 덩어리 가운데서는 시작하지 않아요(결과는 같아요). 공백 수만 자짜리 title 속성에서 제곱으로 느려졌어요
+SIZE_SUFFIX = re.compile(r"(?<!\s)\s*[\[(]\s*[\d.,]+\s*(?:[KMG]?B|bytes?|byte)\s*[\])]\s*$", re.I)
 # 신청(변경)서, [별지 1], 수령증, 입주기업 현황 …
 FORM_FILE = re.compile(r"신청\s*(?:\([^)]*\))?\s*서|별지|서식|양식|동의서|위임장|서약서|확인서|계획서|신고서|명세서|증명|수\s*령\s*증|현\s*황")
 EMPTY_FILE = re.compile(r"^\s*(?:첨부\s*파일\s*)?없음\s*\.")  # 복지로가 '첨부 없음'을 빈 한글 파일로 올려 둔 경우 (2026-10-19 27개)
@@ -51,9 +58,23 @@ MAX_TEXT_CHARS = 20_000  # 원문 화면 하나에서 쓰는 최대 글자
 GENERIC_WORDS = {"청년", "지원", "사업", "지원사업", "운영", "추진", "모집", "공고", "안내", "계획", "정책", "프로그램"}
 
 
+def file_name(text: str) -> str | None:
+    """글자 속 첫 파일 이름 (FILE_NAME.search(text)의 글자를 strip한 것과 같아요).
+    확장자를 먼저 찾고 거기서 앞으로 이름 첫 글자를 찾아요. FILE_NAME.search는 시작 글자마다 끝까지 다시 훑어서
+    파일 이름 없는 긴 링크 글자(3만 자)에 몇 초씩 걸렸어요."""
+    for ext in FILE_EXT.finditer(text):
+        dot = ext.start()
+        if dot == 0 or text[dot - 1] in NOT_NAME_CHARS:
+            continue  # 확장자 바로 앞에 이름 글자가 없어요
+        start = max(text.rfind(c, 0, dot) for c in NOT_NAME_CHARS) + 1
+        return text[start : ext.end()].strip()
+    return None
+
+
 def file_links(html: str, page_url: str) -> list[FileRef]:
     """원문 화면 → 첨부 후보. 같은 주소는 한 번만."""
     doc = soup(html)
+    near = NearNames()
     found: list[FileRef] = []
     seen: set[str] = set()
     for anchor in doc.find_all("a", href=True):
@@ -65,12 +86,12 @@ def file_links(html: str, page_url: str) -> list[FileRef]:
             continue
         url = abs_url(page_url, href)
         path_name = urllib.parse.unquote(urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1])
-        name = next((m.group(0).strip() for m in (FILE_NAME.search(t) for t in (label, anchor.get("download") or "", path_name)) if m), None)
+        name = next((n for n in map(file_name, (label, anchor.get("download") or "", path_name)) if n), None)
         if name is None and DOWNLOAD_HREF.search(href) and GENERIC_LABEL.match(label or ""):
-            name = name_near(anchor)
+            name = near.name(anchor)
         if name is None:
             continue  # 파일 이름이 안 보이는 다운로드 링크는 무엇인지 몰라서 받지 않아요
-        if not (FILE_NAME.search(path_name) or DOWNLOAD_HREF.search(href) or FILE_NAME.fullmatch(label)):
+        if not (file_name(path_name) or DOWNLOAD_HREF.search(href) or FILE_NAME.fullmatch(label)):
             continue  # 글자에 파일 이름만 적힌 일반 링크 (예: 게시판 글 제목)
         if url in seen:
             continue
@@ -81,55 +102,183 @@ def file_links(html: str, page_url: str) -> list[FileRef]:
     return found
 
 
-def name_near(anchor) -> str | None:
-    """'충청남도 청년농업인 지원정책(pdf) - 배포.pdf [3,345,415byte] 내려받기 미리보기'처럼 바깥 칸에 적힌 파일 이름."""
-    scope = anchor.find_parent(NAME_SCOPE)
-    if scope is None:
-        return None
-    text = text_of(scope)
-    if len(text) > 300:
-        return None  # 칸이 너무 크면 다른 파일 이름을 잘못 잡을 수 있어요
-    found = FILE_NAME.search(text)
-    return found.group(0).strip() if found else None
+class NearNames:
+    """'내려받기' 링크 바깥 칸(li·dd·td …)의 파일 이름. 화면 하나에서 칸마다 한 번만 찾아요.
+    링크마다 바깥 칸을 찾아 올라가고 칸 글자를 새로 읽으면, 한 칸에 링크가 수천 개이거나 칸이 겹겹이면
+    같은 글자를 링크 수만큼 다시 읽어 제곱으로 느려졌어요 (내려받기 링크 4천 개에 7초)."""
+
+    def __init__(self) -> None:
+        self.scopes: dict[int, Tag | None] = {}  # 태그 → 그 태그나 그 바깥의 가장 가까운 칸
+        self.texts: dict[frozenset, dict[int, str | None]] = {}  # 글자 종류 → 태그 → text_of 글자 (300자를 넘으면 None)
+
+    def name(self, anchor: Tag) -> str | None:
+        """'충청남도 청년농업인 지원정책(pdf) - 배포.pdf [3,345,415byte] 내려받기 미리보기'처럼 바깥 칸에 적힌 파일 이름."""
+        scope = self._scope(anchor)
+        if scope is None:
+            return None
+        text = self._text(scope)
+        return file_name(text) if text is not None else None  # 칸이 너무 크면 다른 파일 이름을 잘못 잡을 수 있어요
+
+    def _scope(self, anchor: Tag) -> Tag | None:
+        """anchor.find_parent(NAME_SCOPE)와 같아요. 지나간 태그마다 답을 적어 둬요."""
+        walked: list[int] = []
+        node, found = anchor.parent, None
+        while node is not None:
+            if id(node) in self.scopes:
+                found = self.scopes[id(node)]
+                break
+            if node.name in NAME_SCOPE:
+                found = node
+                break
+            walked.append(id(node))
+            node = node.parent
+        for key in walked:
+            self.scopes[key] = found
+        return found
+
+    def _text(self, scope: Tag) -> str | None:
+        """text_of(scope)와 같은 글자, 300자를 넘으면 None. 안쪽 태그부터 아래에서 위로 만들고, 이미 만든 태그 안으로는 다시 내려가지 않아요."""
+        kinds = string_kinds(scope)
+        texts = self.texts.setdefault(frozenset(kinds), {})
+        stack = [(scope, False)]
+        while stack:
+            node, ready = stack.pop()
+            if ready:
+                texts[id(node)] = _joined(node, kinds, texts)
+            elif id(node) not in texts:
+                stack.append((node, True))
+                stack.extend((c, False) for c in node.contents if isinstance(c, Tag))
+        return texts[id(scope)]
+
+
+def _joined(node: Tag, kinds, texts: dict[int, str | None]) -> str | None:
+    parts: list[str] = []
+    size = -1
+    for child in node.contents:
+        if isinstance(child, Tag):
+            part = texts[id(child)]
+            if part is None:
+                return None
+        elif type(child) in kinds:
+            part = " ".join(child.split())
+        else:
+            continue
+        if part:
+            parts.append(part)
+            size += len(part) + 1
+            if size > 300:
+                return None
+    return " ".join(parts)
 
 
 def _chars(text: str) -> int:
     return len(re.sub(r"\s", "", text))
 
 
-def _plain_chars(node) -> tuple[int, int]:
-    """(전체 글자, 링크가 아닌 글자)"""
-    total = _chars(node.get_text())
-    return total, total - sum(_chars(a.get_text()) for a in node.find_all("a"))
+class _Page:
+    """원문 화면의 태그를 앞에서부터 번호 매겨 두고(tags[i]의 안쪽은 tags[i+1 : i+1+inner[i]]), 글자 수를 아래에서 위로 한 번에 세요.
+    덩어리마다 get_text()로 세고 `best in b.parents`(태그를 통째로 비교)로 안쪽인지 보면, 겹친 <div> 수백 개에 몇십 초씩 걸렸어요."""
+
+    def __init__(self, doc) -> None:
+        self.tags: list[Tag] = [t for t in doc.descendants if isinstance(t, Tag)]
+        index = {id(t): i for i, t in enumerate(self.tags)}
+        self.parents = [index.get(id(t.parent), -1) for t in self.tags]
+        self.inner = [0] * len(self.tags)
+        for i in reversed(range(len(self.tags))):
+            if self.parents[i] >= 0:
+                self.inner[self.parents[i]] += 1 + self.inner[i]
+        self.depth = [0] * len(self.tags)  # len(list(tag.parents))
+        for i, p in enumerate(self.parents):
+            self.depth[i] = (self.depth[p] if p >= 0 else 0) + 1
+        self.removed: set[int] = set()  # 지운 태그 번호 (안쪽도 함께 없는 셈)
+        self.recount()
+
+    def remove(self, i: int) -> int:
+        """태그를 지운 셈 치고, 건너뛸 범위의 끝 번호를 돌려줘요. 글자 수는 recount()를 불러야 다시 세요."""
+        self.removed.add(i)
+        return i + 1 + self.inner[i]
+
+    def recount(self) -> None:
+        self._sizes: dict[frozenset, list[int]] = {}
+        self._links: list[int] | None = None
+
+    def alive(self) -> list[int]:
+        """지운 태그와 그 안쪽을 뺀 태그 번호, 앞에서부터."""
+        out, end = [], 0
+        for i in range(len(self.tags)):
+            if i < end:
+                continue
+            if i in self.removed:
+                end = i + 1 + self.inner[i]
+            else:
+                out.append(i)
+        return out
+
+    def plain_chars(self, i: int) -> tuple[int, int]:
+        """(전체 글자, 링크가 아닌 글자): tags[i].get_text()와 그 안 <a>들의 get_text() 글자 수(공백 빼고)."""
+        total = self._total(i)
+        return total, total - self._link_chars()[i]
+
+    def _total(self, i: int) -> int:
+        kinds = string_kinds(self.tags[i])
+        key = frozenset(kinds)
+        if key not in self._sizes:
+            sizes = [sum(_chars(s) for s in t.contents if type(s) in kinds) for t in self.tags]
+            for j in reversed(range(len(self.tags))):
+                if self.parents[j] >= 0 and j not in self.removed:
+                    sizes[self.parents[j]] += sizes[j]
+            self._sizes[key] = sizes
+        return self._sizes[key][i]
+
+    def _link_chars(self) -> list[int]:
+        if self._links is None:
+            links = [0] * len(self.tags)
+            for j in reversed(range(len(self.tags))):
+                if self.parents[j] >= 0 and j not in self.removed:
+                    links[self.parents[j]] += links[j] + (self._total(j) if self.tags[j].name == "a" else 0)
+            self._links = links
+        return self._links
 
 
 def main_text(html: str) -> str | None:
-    """원문 화면의 본문 글자. 본문다운 곳을 못 찾으면 None (사이트 첫 화면, 스크립트로 그리는 화면 등)."""
-    doc = soup(html)
-    for tag in doc.find_all(["script", "style", "noscript", "iframe"]):
-        tag.decompose()
-    noise = [t for t in doc.find_all(True) if t.name in NOISE_TAGS or NOISE_ATTR.search(" ".join([t.get("id") or "", *(t.get("class") or [])]))]
-    for tag in noise:
-        if tag.attrs is None:
+    """원문 화면의 본문 글자. 본문다운 곳을 못 찾으면 None (사이트 첫 화면, 스크립트로 그리는 화면 등).
+    트리에서 태그를 떼어 내지 않고 지운 셈만 쳐요 (태그를 하나씩 떼면 형제가 많을 때 제곱으로 느려져요)."""
+    page = _Page(soup(html))
+    for i, tag in enumerate(page.tags):
+        if tag.name in ("script", "style", "noscript", "iframe"):
+            page.remove(i)
+    page.recount()
+    noise = [i for i in page.alive() if page.tags[i].name in NOISE_TAGS or NOISE_ATTR.search(_id_and_class(page.tags[i]))]
+    end = 0
+    for i in noise:  # 앞에서 지운 메뉴는 이 태그의 바깥이거나(건너뜀) 앞쪽이라, 처음 센 글자 수를 그대로 써도 같아요
+        if i < end:
             continue  # 바깥이 이미 지워짐
-        total, plain = _plain_chars(tag)
+        total, plain = page.plain_chars(i)
         if total == 0 or plain < 0.5 * total:
-            tag.decompose()  # 링크가 대부분이면 메뉴
+            end = page.remove(i)  # 링크가 대부분이면 메뉴
+    page.recount()
     candidates = []
-    for block in doc.find_all(TEXT_BLOCKS):
-        total, plain = _plain_chars(block)
-        if total >= MIN_TEXT_CHARS and plain >= 0.7 * total:
-            candidates.append((plain, block))
+    for i in page.alive():
+        if page.tags[i].name in TEXT_BLOCKS:
+            total, plain = page.plain_chars(i)
+            if total >= MIN_TEXT_CHARS and plain >= 0.7 * total:
+                candidates.append((plain, i))
     if not candidates:
         return None
+    starts = [i for _, i in candidates]
     best_plain, best = max(candidates, key=lambda c: c[0])
     while True:  # 글자의 85% 이상을 가진 안쪽 덩어리로 내려가서 바깥 틀의 잡음을 줄여요
-        inner = [(p, b) for p, b in candidates if b is not best and best in b.parents and p >= 0.85 * best_plain]
+        inside = candidates[bisect.bisect_right(starts, best) : bisect.bisect_right(starts, best + page.inner[best])]
+        inner = [(p, b) for p, b in inside if p >= 0.85 * best_plain]
         if not inner:
             break
-        best_plain, best = max(inner, key=lambda c: len(list(c[1].parents)))
-    text = body_text(best)
+        best_plain, best = max(inner, key=lambda c: page.depth[c[1]])
+    text = body_text(page.tags[best], skip={id(page.tags[i]) for i in page.removed})
     return text[:MAX_TEXT_CHARS] if _chars(text) >= MIN_TEXT_CHARS else None
+
+
+def _id_and_class(tag: Tag) -> str:
+    return " ".join([tag.get("id") or "", *(tag.get("class") or [])])
 
 
 def keywords(title: str) -> list[str]:

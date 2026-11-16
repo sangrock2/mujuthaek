@@ -20,6 +20,26 @@ def test_verified_mode_publishes_partial_results_but_blocks_whole_notice_review(
     assert PublicationGate("verified").allows(notice(status)) == (status in {"AUTO_PASSED", "PARTIALLY_PASSED", "APPROVED"})
 
 
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_unset_mode_holds_results_until_review(monkeypatch, value):
+    """설정을 빠뜨리면 검수가 필요한 결과를 공개하지 않아요(2026-11-16 보안 감사 4장)."""
+    if value is None:
+        monkeypatch.delenv("EXTRACTION_PUBLICATION_MODE", raising=False)
+    else:
+        monkeypatch.setenv("EXTRACTION_PUBLICATION_MODE", value)
+    gate = PublicationGate()
+    assert gate.mode == "manual"
+    assert not gate.allows(notice("IN_REVIEW")) and not gate.allows(notice("AUTO_PASSED")) and gate.allows(notice("APPROVED"))
+
+
+def test_legacy_mode_only_when_written_explicitly(monkeypatch):
+    monkeypatch.setenv("EXTRACTION_PUBLICATION_MODE", "legacy")
+    assert PublicationGate().allows(notice("IN_REVIEW"))
+    monkeypatch.setenv("EXTRACTION_PUBLICATION_MODE", "open")
+    with pytest.raises(ValueError):
+        PublicationGate()
+
+
 def test_benefit_requires_verification_or_explicit_human_review():
     event = {"eventType": "policy.extracted", "payload": {"quality": {"needsReview": False}}}
     assert not PublicationGate("manual").allows(event)
