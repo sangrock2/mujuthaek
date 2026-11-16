@@ -129,3 +129,53 @@ def test_quiet_alerts_swallow_send_failures():
             raise SlackError("슬랙 응답 500")
 
     assert not QuietAlerts(Broken("https://example.invalid/hook"), "collector").send("k", "t")
+
+
+# ── 바깥 글 이스케이프 (2026-11-16 보안 감사 L-22) ─────────────────────
+def test_escape_text_makes_mentions_links_and_code_fences_inert():
+    from mujuthaek_platform.slack import BACKTICK_STANDIN, escape_text
+
+    mentions = "&lt;!channel&gt; &lt;!here|here&gt; &lt;@U123&gt; &lt;#C1&gt;"
+    assert escape_text("<!channel> <!here|here> <@U123> <#C1>") == mentions
+    assert escape_text("<https://evil.example|여기를 누르세요>") == "&lt;https://evil.example|여기를 누르세요&gt;"
+    assert escape_text("a & b &amp; c") == "a &amp; b &amp;amp; c"  # 엔티티처럼 보이는 글도 글자 그대로 보이게
+    tick = BACKTICK_STANDIN
+    assert escape_text("```\n*굵게* `코드`") == f"{tick * 3}\n*굵게* {tick}코드{tick}"
+    assert escape_text("인천 청년 월세 지원 (2026)") == "인천 청년 월세 지원 (2026)"  # 보통 글은 그대로
+
+
+def test_escape_text_redacts_secrets_like_the_logs(monkeypatch):
+    from mujuthaek_platform.slack import escape_text
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "example-private-key+/=123")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.example.invalid/T000/B000/secretToken")
+    text = escape_text(
+        "요청 실패 serviceKey=example-private-key%2B%2F%3D123 · 웹훅 https://hooks.example.invalid/T000/B000/secretToken"
+    )
+    assert "example-private-key" not in text and "secretToken" not in text and text.count("[REDACTED]") == 2
+
+
+def test_quiet_alerts_escape_title_and_detail_and_keep_the_code_block_closed(monkeypatch):
+    from mujuthaek_platform.slack import QuietAlerts, SlackNotifier
+
+    sent: list[str] = []
+
+    class Fake(SlackNotifier):
+        def send(self, text: str) -> bool:
+            sent.append(text)
+            return True
+
+    secret = "example-private-key+/=123"
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", secret)
+    alerts = QuietAlerts(Fake("https://example.invalid/hook"), "collector", environment="prod")
+    # 크롤링한 제목이 코드 블록을 닫고 채널 전체 호출·링크를 넣으려 함.
+    # 비밀 값은 내용 상한(2,000자) 경계에 걸쳐 있어요(1991~2016번째 글자): 잘린 앞부분도 남지 않아야 해요
+    head = "[P1] ```\n<!channel> <https://evil.example|여기> & 제목\n"
+    detail = head + "가" * (1991 - len(head)) + secret
+    assert alerts.send("source.failed:lh", "lh <!here> 수집 실패", detail)
+    [text] = sent
+    assert text.startswith("[prod collector] lh &lt;!here&gt; 수집 실패\n```")
+    assert "<!" not in text and "<https://" not in text
+    assert "&lt;!channel&gt; &lt;https://evil.example|여기&gt; &amp; 제목" in text
+    assert text.count("```") == 2 and text.endswith("```")
+    assert secret[:8] not in text  # 가린 뒤 잘라요(자른 뒤 가리면 「example-」가 남아요)

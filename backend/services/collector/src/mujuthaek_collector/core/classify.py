@@ -10,13 +10,18 @@
 import re
 from dataclasses import dataclass
 from datetime import date
+from typing import NamedTuple
 
 NOTICE, CORRECTION, FOLLOW_UP, EXCLUDED = "NOTICE", "CORRECTION", "FOLLOW_UP", "EXCLUDED"
 OPEN_KINDS = {NOTICE, CORRECTION}
+# 제목 판단에 쓰는 앞부분. 실제 제목은 수백 자를 넘지 않아요. 외부 게시판·API의 끝없이 긴 제목에서 정규식이 오래 돌지 않게 잘라서 봐요
+# (저장하는 제목은 그대로예요)
+MAX_TITLE_CHARS = 1_000
 
+# 공백 덩어리 옆 *+는 공백을 한 번에만 읽어요(맞는 글은 같아요). 공백이 긴 제목에서 제곱으로 느려졌어요
 FOLLOWUP = re.compile(
     r"당첨자|계약\s*대상자|계약\s*안내|서류\s*심사|심사\s*대상자|대상자\s*발표|입주\s*대상자|예비자\s*발표|면접|교육\s*이수"
-    r"|접수\s*결과|접수\s*마감|주택\s*공개|커트라인|추첨\s*결과|동\s*·?\s*호\s*추첨|결과\s*발표|모집\s*결과|선정\s*결과"
+    r"|접수\s*결과|접수\s*마감|주택\s*공개|커트라인|추첨\s*결과|동\s*+(?:·\s*+)?호\s*추첨|결과\s*발표|모집\s*결과|선정\s*결과"
     r"|계약\s*체결|서류\s*제출\s*대상|대상자\s*안내|신규\s*계약|접수\s*번호|입주\s*순번|순번\s*(?:추첨|결정)"
     # 인천·울산 실제 제목 (2026-10-20): 첨부 없는 선정·입주·일정 안내와 모집 종료·확정 알림.
     # '결과 공고'는 넣지 않아요: 산업단지 심사결과·동호배정 결과처럼 제외할 글까지 후속 안내로 바뀌어요
@@ -30,9 +35,10 @@ NOT_TENANT = re.compile(
     r"|운영자\s*(?:모집|공모|선정)|운영\s*기관\s*(?:모집|공모|선정)"  # 특화시설 운영자 모집 ('(운영기관 : ○○)'은 입주자 모집이라 제외 안 함)
 )
 BUSINESS_SPACE = re.compile(r"상가|점포|입점|사무실|창업|업무시설|근린생활|임차인")  # 이 수집기 범위 밖 (사업공간)
-CORRECTION_MARK = re.compile(r"[\[(]\s*정정\s*(?:공고)?\s*[\])]|정정\s*공고")
+CORRECTION_MARK = re.compile(r"[\[(]\s*+정정\s*+(?:공고\s*+)?[\])]|정정\s*공고")
 RECRUIT = re.compile(r"모집\s*공고|입주자\s*모집|예비\s*입주자|추가\s*모집|잔여\s*세대.*모집")
-REF = re.compile(r"(?P<name>.+?)\s*\(\s*(?:공고일?\s*:?\s*)?[‘'’]?(?P<y>\d{2,4})\s*[._]\s*(?P<m>\d{1,2})\s*[._]\s*(?P<d>\d{1,2})\s*\.?\s*(?:공고)?\s*\)")
+# 공고일 괄호: 「(2026. 8. 21.)」「(공고일: ‘26.08.21 공고)」. 공고명은 find_ref가 괄호 앞 같은 줄에서 잘라요
+REF_DATE = re.compile(r"\(\s*+(?:공고일?\s*+(?::\s*+)?)?[‘'’]?(?P<y>\d{2,4})\s*+[._]\s*+(?P<m>\d{1,2})\s*+[._]\s*+(?P<d>\d{1,2})\s*+(?:\.\s*+)?(?:공고\s*+)?\)")
 # 후속 안내 단어 바로 뒤(같은 마디 안)의 바뀜 낱말: 「당첨자 발표일 변경」은 후속 안내가 아니라 무엇을 정정했는지예요
 CHANGED = re.compile(r"[^,·\])]{0,12}?(?:변경|연기|연장|조정)")
 QUALIFIER = re.compile(r"[\[(]([^\])]*)[\])]")
@@ -44,10 +50,12 @@ NOT_IDENTITY = re.compile(r"\d{2,4}\s*[._]\s*\d{1,2}\s*[._]\s*\d{1,2}|변경|연
 def out_of_scope(title: str) -> bool:
     """입주자 모집이 아닌 글(기존 입주자 안내, 매입·택지·보상 공고, 상가 등 사업공간).
     기관이 목록 머리말로 '모집공고'를 붙여도 이 제목이면 제외해요 (예: 대전 '기존주택(청년임대) 3차 매입공고')."""
+    title = title[:MAX_TITLE_CHARS]
     return bool(EXISTING.search(title) or NOT_TENANT.search(title) or BUSINESS_SPACE.search(title))
 
 
 def classify(title: str) -> str:
+    title = title[:MAX_TITLE_CHARS]
     if out_of_scope(title):
         return EXCLUDED
     follow_ups = list(FOLLOWUP.finditer(title))
@@ -55,10 +63,10 @@ def classify(title: str) -> str:
     # 예전엔 후속 안내 검사가 먼저라 정정이 원래 공고에 반영되지 않았어요(2026-11-10 코드 검토). 공고일 뒤에 바뀐 내용을 적은 제목
     # (「[정정공고] … 모집공고(2026.10.01) 당첨자 발표일 변경」)도 같은 검사로 봐요(재검토: 공고일 검사가 먼저라 후속 안내로 남았음)
     correction = bool(CORRECTION_MARK.search(title) and RECRUIT.search(title)) and all(CHANGED.match(title, m.end()) for m in follow_ups)
-    ref = REF.search(title)
+    ref = find_ref(title)
     # 공고일 뒤의 정정 표시(「…모집공고(2026.10.01) 정정공고」)는 후속 안내 글이 아니에요(2026-11-10 코드 검토: 후속 안내로 분류됐음)
-    after = CORRECTION_MARK.sub("", title[ref.end() :]) if ref else ""
-    if not correction and ref and re.search(r"모집\s*공고", ref.group("name")) and len(re.sub(r"[^가-힣]", "", after)) >= 2:
+    after = CORRECTION_MARK.sub("", title[ref.end :]) if ref else ""
+    if not correction and ref and re.search(r"모집\s*공고", ref.name) and len(re.sub(r"[^가-힣]", "", after)) >= 2:
         return FOLLOW_UP  # '…모집공고(2026. 6. 25.) 면접평가 대상자 발표'처럼 공고일 뒤에 글이 붙으면 후속 안내
     if correction:
         return CORRECTION
@@ -71,9 +79,37 @@ def classify(title: str) -> str:
 
 def norm_name(text: str) -> str:
     """공고 이름 비교용: 꾸밈말([당첨자발표], (수요자맞춤형))과 '모집공고' 같은 공통 단어를 빼요."""
-    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text)
+    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text[:MAX_TITLE_CHARS])
     text = re.sub(r"입주자|모집\s*공고문?|모집|공고|잔여\s*세대|예비|정정", " ", text)
     return re.sub(r"[^0-9A-Za-z가-힣]", "", text)
+
+
+class Ref(NamedTuple):
+    """제목 속 공고일 괄호와 그 앞의 공고명. end는 괄호가 끝나는 자리예요."""
+
+    name: str
+    y: str
+    m: str
+    d: str
+    end: int
+
+
+def find_ref(title: str) -> Ref | None:
+    """제목 속 첫 공고일 괄호와 그 앞 같은 줄의 공고명. 예전 정규식
+    `(?P<name>.+?)\\s*\\(…공고일…\\)`의 search와 같은 결과예요. 그 정규식은 시작 글자마다 공고명(.+?)과 공백(\\s*)을
+    나눠 보며 끝까지 다시 훑어서, 공백이 긴 제목에서 세제곱으로 느려졌어요(공백 4천 자에 25초). 괄호를 먼저 찾고 앞쪽을 잘라요."""
+    title = title[:MAX_TITLE_CHARS]
+    for found in REF_DATE.finditer(title):
+        head = title[: found.start()]
+        end = len(head.rstrip())  # 괄호 바로 앞 공백(줄바꿈 포함)은 공고명이 아니에요
+        if end:
+            name = head[head.rfind("\n", 0, end) + 1 : end]  # 공고명은 줄을 넘지 않아요
+        else:  # 괄호 앞이 공백뿐이면 예전 정규식은 줄바꿈이 아닌 첫 공백 한 글자를 공고명으로 잡았어요
+            name = next((ch for ch in head if ch != "\n"), "")
+            if not name:
+                continue
+        return Ref(name, found["y"], found["m"], found["d"], found.end())
+    return None
 
 
 @dataclass(frozen=True)
@@ -84,21 +120,21 @@ class TitleRef:
 
 def title_ref(title: str) -> TitleRef | None:
     """후속 안내 제목 안의 '(2026. 8. 21.)' 같은 공고일과 그 앞의 공고명. 원래 모집공고를 찾는 데 써요."""
-    found = REF.search(title)
+    found = find_ref(title)
     if not found:
         return None
-    year = int(found.group("y"))
+    year = int(found.y)
     year = year + 2000 if year < 100 else year
     try:
-        return TitleRef(norm_name(found.group("name")), date(year, int(found.group("m")), int(found.group("d"))))
+        return TitleRef(norm_name(found.name), date(year, int(found.m), int(found.d)))
     except ValueError:
         return None
 
 
 def ref_qualifiers(title: str) -> frozenset[str]:
     """후속 안내 제목의 공고일 앞 공고명에 붙은 구분 말(「…모집공고(A-2블록)(2026.10.01) 당첨자 발표」 → A2블록)."""
-    found = REF.search(title)
-    return qualifiers(found.group("name")) if found else frozenset()
+    found = find_ref(title)
+    return qualifiers(found.name) if found else frozenset()
 
 
 def same_notice(ref: TitleRef, title: str, posted_on: date | None) -> bool:
@@ -110,12 +146,16 @@ def same_notice(ref: TitleRef, title: str, posted_on: date | None) -> bool:
 
 def correction_base(title: str) -> str:
     """정정공고를 원래 공고와 비교할 이름 (정정 표시를 뺀 공고명)."""
-    return norm_name(CORRECTION_MARK.sub("", title))
+    return norm_name(CORRECTION_MARK.sub("", title[:MAX_TITLE_CHARS]))
 
 
 def qualifiers(title: str) -> frozenset[str]:
     """괄호 안 구분 말(블록·단지·유형 등. 정정 표시·공고일·바뀐 내용은 뺌). norm_name은 이걸 지워서 따로 맞춰 봐요."""
-    found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(CORRECTION_MARK.sub("", title)) if not NOT_IDENTITY.search(q))
+    text = CORRECTION_MARK.sub("", title[:MAX_TITLE_CHARS])
+    # 마지막 닫는 괄호 뒤의 여는 괄호는 짝이 없어 어차피 못 맞춰요. 거기까지만 보면 결과는 같고,
+    # 짝 없는 여는 괄호마다 끝까지 훑던 일(괄호가 많으면 제곱)이 없어요
+    text = text[: max(text.rfind("]"), text.rfind(")")) + 1]
+    found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(text) if not NOT_IDENTITY.search(q))
     return frozenset(q for q in found if q)
 
 

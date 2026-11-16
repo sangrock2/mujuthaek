@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from mujuthaek_collector.core.files import FileRef
+from mujuthaek_collector.core.links import public_link
 from mujuthaek_collector.errors import ParseError
 from mujuthaek_collector.sources.base import Request
 from mujuthaek_collector.sources.policy.base import (
@@ -167,7 +168,8 @@ class BokjiroSource(PolicySource):
     def parse_detail(self, item: PolicyItem, bodies: list[str]) -> PolicyDetail:
         record = {**item.record, **read_detail(bodies[0], f"{self.name} 상세")}
         files = [FileRef(name or url.rsplit("/", 1)[-1], url, i) for i, (name, url) in enumerate(link_items(record, "basfrmList"))]
-        detail_url = record.get("servDtlLink") or f"{BOKJIRO_VIEW}?wlfareInfoId={item.policy_id}&wlfareInfoReldBztpCd={self.reld_code}"
+        # 상세 링크가 http(s) 공개 주소가 아니면(2026-11-16 보안 감사 L-4) 비우지 않고 복지로 화면 주소를 만들어 써요
+        detail_url = public_link(record.get("servDtlLink")) or f"{BOKJIRO_VIEW}?wlfareInfoId={item.policy_id}&wlfareInfoReldBztpCd={self.reld_code}"
         homepages = [url for _, url in link_items(record, "inqplHmpgReldList")]
         return PolicyDetail(
             record=record,

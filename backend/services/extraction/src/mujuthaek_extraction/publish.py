@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.judgment import build_judgment
@@ -29,6 +28,7 @@ from mujuthaek_extraction.judgment.sanity import repair
 from mujuthaek_extraction.judgment.schema import frame_errors
 from mujuthaek_extraction.judgment.space import build_space
 from mujuthaek_extraction.judgment.startup import build_startup
+from mujuthaek_extraction.links import public_link
 
 log = logging.getLogger(__name__)
 
@@ -371,14 +371,10 @@ def policy_apply_note(policy: dict[str, Any]) -> str | None:
 
 
 def policy_detail_url(policy: dict[str, Any]) -> str | None:
-    """사람이 열어볼 원문 주소(raw.policy.collected의 detailUrl). http(s) 주소가 아니거나, URI 글자가 아닌 글자가 있거나,
-    인증 값·사용자 정보가 든 주소(계약 PRIVATE_URL)면 None."""
-    url = str(policy.get("detailUrl") or "").strip()
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    if parts.scheme not in ("http", "https") or not parts.netloc or not URI_CHARS.fullmatch(url) or tools().private_url(url):
+    """사람이 열어볼 원문 주소(raw.policy.collected의 detailUrl). 공개 링크가 아니거나(links.public_link: http(s)·호스트·사용자 정보·
+    빈칸·길이, 2026-11-16 보안 감사 L-4), URI 글자가 아닌 글자가 있거나, 인증 값이 든 주소(계약 PRIVATE_URL)면 None."""
+    url = public_link(policy.get("detailUrl"))
+    if url is None or not URI_CHARS.fullmatch(url) or tools().private_url(url):
         return None
     return url
 
@@ -414,11 +410,8 @@ def _text(value: Any, limit: int = POLICY_INFO_TEXT_MAX) -> str | None:
 
 
 def _url(value: Any) -> str | None:
-    """http(s) 주소만 (policy_detail_url과 같은 검사). 「dvic.dongguk.edu/…」처럼 scheme이 없으면 https를 붙여 봐요."""
-    url = str(value or "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
-    return policy_detail_url({"detailUrl": url}) if url else None
+    """http(s) 주소만 (policy_detail_url과 같은 검사). 「dvic.dongguk.edu/…」처럼 scheme 없이 도메인으로 시작하면 https를 붙여 봐요(links.public_link)."""
+    return policy_detail_url({"detailUrl": value})
 
 
 def policy_info(policy: dict[str, Any]) -> dict[str, Any] | None:

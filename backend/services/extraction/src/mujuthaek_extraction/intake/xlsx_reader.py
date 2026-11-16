@@ -27,7 +27,11 @@ from xml.etree import ElementTree
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024  # 압축 폭탄 방지
+MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024  # 압축 폭탄 방지 (실제로 푼 바이트의 합)
+# 엑셀이 쓰는 압축만 받아요. 파이썬 zipfile은 archive.read()로 DEFLATE도 항목당 1GiB까지, BZIP2·LZMA는 상한 없이 푼 뒤
+# zip에 적힌 크기로 잘라서, 크기를 작게 적은 408KB 엑셀 하나로 830MiB를 썼어요(2026-11-16 보안 감사 H-6)
+SAFE_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+READ_CHUNK = 64 * 1024
 MAX_ROWS = 10_000  # 시트당 읽는 한도
 AI_MAX_ROWS = 3_000  # 원문에 붙이는 행 한도(파일 전체). 넘으면 머리 행만. 실측 최대 570행·8.4만 자(2026-10-20)
 AI_MAX_CHARS = 400_000  # 원문에 붙이는 글자 한도(입력은 원문 캐시로 읽혀 싸지만 모델 입력 한도 안에 두려고)
@@ -79,17 +83,37 @@ PERCENT_FORMATS = {9, 10}
 MERGE_REPEAT_COLUMNS = 6  # 이 열 수 이하로 가로 병합된 칸만 값을 되풀이합니다
 
 
+class _Budget:
+    """zip 항목을 조금씩 풀며 실제로 나온 바이트를 셉니다. zip에 적힌 크기는 파일을 만든 사람이 고칠 수 있어 믿지 않습니다."""
+
+    def __init__(self, limit: int):
+        self.remaining = limit
+
+    def read(self, archive: zipfile.ZipFile, name: str) -> bytes:
+        info = archive.getinfo(name)
+        if info.compress_type not in SAFE_COMPRESSION:
+            raise ValueError("Unsupported spreadsheet compression")
+        chunks = []
+        with archive.open(info) as source:
+            while chunk := source.read(READ_CHUNK):
+                self.remaining -= len(chunk)
+                if self.remaining < 0:
+                    raise ValueError("Spreadsheet decompression limit exceeded")
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+
 @dataclass(frozen=True)
 class _Styles:
     dates: frozenset[int] = frozenset()  # 날짜 서식인 셀 스타일 번호(cellXfs의 순서)
     percents: frozenset[int] = frozenset()  # % 서식(0.7을 70%로 보여 주는 칸)
 
 
-def _styles(archive: zipfile.ZipFile) -> _Styles:
+def _styles(archive: zipfile.ZipFile, budget: _Budget) -> _Styles:
     """styles.xml에서 날짜·% 서식인 셀 스타일 번호를 모읍니다. 파일이 없으면 빈 서식표를 돌려줍니다."""
     if "xl/styles.xml" not in archive.namelist():
         return _Styles()
-    root = ElementTree.fromstring(archive.read("xl/styles.xml"))
+    root = ElementTree.fromstring(budget.read(archive, "xl/styles.xml"))
     custom_dates, custom_percents = set(), set()
     for fmt in root.iterfind("m:numFmts/m:numFmt", NS):
         code = re.sub(r'"[^"]*"|\[[^]]*]|\\.', "", fmt.get("formatCode") or "").lower()  # 따옴표 글자·[색]·이스케이프 제외
@@ -166,10 +190,10 @@ def _cell(cell: ElementTree.Element, shared: list[str], styles: _Styles = NO_STY
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _sheets(archive: zipfile.ZipFile) -> list[tuple[str, str]]:
+def _sheets(archive: zipfile.ZipFile, budget: _Budget) -> list[tuple[str, str]]:
     """(시트 이름, zip 안 경로) — 통합 문서에 적힌 순서대로."""
-    workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-    rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    workbook = ElementTree.fromstring(budget.read(archive, "xl/workbook.xml"))
+    rels = ElementTree.fromstring(budget.read(archive, "xl/_rels/workbook.xml.rels"))
     targets = {r.get("Id"): r.get("Target") for r in rels}
     out = []
     for sheet in workbook.iterfind("m:sheets/m:sheet", NS):
@@ -236,17 +260,18 @@ def read_xlsx(data: bytes) -> XlsxList | None:
         archive = zipfile.ZipFile(io.BytesIO(data))
         if sum(info.file_size for info in archive.infolist()) > MAX_UNCOMPRESSED_BYTES:
             return None
+        budget = _Budget(MAX_UNCOMPRESSED_BYTES)  # 적힌 크기 검사는 빠른 거절일 뿐, 실제 한도는 푼 바이트로 봅니다
         shared = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            root = ElementTree.fromstring(budget.read(archive, "xl/sharedStrings.xml"))
             shared = [_text(item) for item in root.iterfind("m:si", NS)]
-        styles = _styles(archive)
+        styles = _styles(archive, budget)
         sheets: list[tuple[str, list[list[str]], int]] = []
         hidden_total = hidden_row_total = 0
-        for name, path in _sheets(archive):
+        for name, path in _sheets(archive, budget):
             if path not in archive.namelist():
                 continue
-            sheet = ElementTree.fromstring(archive.read(path))
+            sheet = ElementTree.fromstring(budget.read(archive, path))
             by_number: dict[int, dict[int, str]] = {}
             counted, number, uncached = 0, 0, 0
             # 숨긴 행(필터로 가린 행 포함)·열은 넘기지 않아요: 기관이 이번 공고가 아닌 호실을 지우지 않고 숨긴 채 첨부하면, 숨긴 호실이

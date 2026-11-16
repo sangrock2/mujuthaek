@@ -18,6 +18,12 @@
   "$defs": {
     "nullableString": { "type": ["string", "null"] },
     "nullableDate": { "type": ["string", "null"], "format": "date" },
+    "publicLink": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "pattern": "^https?://[^\\s/?#@\\\\]+(?:[/?#]\\S*)?$",
+      "description": "사람에게 보여 줄 기관 링크: http(s)만, 호스트가 있고 사용자 정보(@)·빈칸·역슬래시가 없으며 2,000자까지. 아니면 보내는 쪽이 null로 비워요(2026-11-16 보안 감사 L-4)"
+    },
     "payload": {
       "type": "object",
       "additionalProperties": false,
@@ -58,8 +64,8 @@
         "regionNames": { "type": "array", "items": { "type": "string" } },
         "regionCodes": { "type": "array", "items": { "type": "string", "pattern": "^([0-9]{2}|[0-9]{5})$" }, "description": "시도 2자리 / 시군구 5자리. 수집 때 이름만 있었으면 extraction이 코드로 채워요" },
         "categories": { "type": "array", "items": { "type": "string" } },
-        "detailUrl": { "$ref": "#/$defs/nullableString" },
-        "applyUrl": { "$ref": "#/$defs/nullableString" }
+        "detailUrl": { "$ref": "#/$defs/publicLink" },
+        "applyUrl": { "$ref": "#/$defs/publicLink" }
       }
     },
     "support": {

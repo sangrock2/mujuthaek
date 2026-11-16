@@ -1,13 +1,27 @@
 """정책 API 파서 테스트. 응답 모양(필드 이름)을 작은 예시로 고정해요."""
 
+import time
 from datetime import date
 
 import pytest
 
 from mujuthaek_collector.core.files import FileRef
 from mujuthaek_collector.errors import BlockedError, ParseError
-from mujuthaek_collector.sources.policy.attachments import OMITTED, explains, file_links, focus, garbled, origin_file_ok, sniff_ext, text_order, with_ext
-from mujuthaek_collector.sources.policy.base import normalize_key, xml_to_dict
+from mujuthaek_collector.sources.policy.attachments import (
+    FILE_NAME,
+    OMITTED,
+    explains,
+    file_links,
+    file_name,
+    focus,
+    garbled,
+    main_text,
+    origin_file_ok,
+    sniff_ext,
+    text_order,
+    with_ext,
+)
+from mujuthaek_collector.sources.policy.base import normalize_key, startup_in_scope, xml_to_dict
 from mujuthaek_collector.sources.policy.bizinfo import BizinfoSource
 from mujuthaek_collector.sources.policy.bizinfo import region_of as bizinfo_region
 from mujuthaek_collector.sources.policy.bokjiro import BokjiroCentralSource, BokjiroLocalSource
@@ -86,6 +100,11 @@ def test_bokjiro_central_reads_forms_from_api():
     assert detail.detail_url.endswith("wlfareInfoId=WLF00001188&wlfareInfoReldBztpCd=01")
     assert "선정 기준: 소득·자산 기준 충족" in source.body_text(detail.record)
     assert "4021" not in source.body_text(detail.record)  # 조회수
+    # 상세 링크가 http(s) 공개 주소가 아니면 복지로 화면 주소를 만들어 써요(2026-11-16 보안 감사 L-4)
+    scripted = s.BOKJIRO_CENTRAL_DETAIL.replace("https://www.bokjiro.go.kr/ssis-tbu/", "javascript:alert(1)//")
+    fallback = source.parse_detail(page.items[0], [scripted])
+    assert fallback.detail_url.startswith("https://www.bokjiro.go.kr/") and "javascript" not in fallback.detail_url
+    assert fallback.origin_urls[-1] == fallback.detail_url
 
 
 def test_bokjiro_agency_without_repeated_names():
@@ -363,6 +382,119 @@ def test_main_text_of_home_page_is_not_relevant():
     text = main_text(s.HOME_PAGE.replace("</dd>", " 채용 박람회는 매달 열려요." * 10 + "</dd>"))
     assert "구직자" in text and not relevant(title, text)  # 글은 잡히지만 정책과 상관없어서 쓰지 않아요
     assert main_text("<html><body><div id='app'></div><script>render()</script></body></html>") is None  # 스크립트로 그리는 화면
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026년 청년월세 모집공고문.hwp",
+        "충청남도 청년농업인 지원정책(pdf) - 배포.pdf [3,345,415byte] 내려받기 미리보기",
+        "사업계획.pdf 보기",
+        "첨부: 공고문.HWPX, 신청서.hwp",
+        "C:\\fakepath\\신청서.docx",
+        "a.pdf.zip",
+        ".pdf 안내.pdf",
+        ".pdf",
+        "\n.pdf",
+        "공고.pdfx",
+        "공고.pdf가",
+        "보고서.xlsm",
+        "내려받기",
+        "",
+    ],
+)
+def test_file_name_is_what_the_file_name_pattern_finds(text):
+    """2026-11-16 M-6: FILE_NAME.search가 시작 글자마다 끝까지 다시 훑어 긴 링크 글자에서 제곱으로 느려져서, 확장자부터 찾는 file_name으로 바꿨어요.
+    결과는 FILE_NAME.search와 같아야 해요."""
+    found = FILE_NAME.search(text)
+    assert file_name(text) == (found.group(0).strip() if found else None)
+
+
+ORIGIN_NOTICE = """<html><head><script>gtag('x')</script></head><body>
+<div id="gnb"><ul><li><a href="/a">도정소식</a></li><li><a href="/b">분야별정보</a></li><li><a href="/c">참여소통</a></li></ul></div>
+<div class="sub_lnb_wrap"><div class="content">
+  <h3>2026년 청년 월세 지원사업 모집 공고</h3>
+  <div class="board_view">
+    <p>청년의 주거비 부담을 덜기 위해 월세를 지원합니다. 지원대상은 도내 거주 만 19세 이상 34세 이하 무주택 청년이며, 기준 중위소득 60% 이하 가구입니다.</p>
+    <p>지원내용: 월 최대 20만원, 최대 12개월. 신청은 행정복지센터 또는 복지로 누리집에서 할 수 있습니다. 자세한 내용은 붙임 공고문을 참고하세요.</p>
+    <table><tr><th>구분</th><th>내용</th></tr><tr><td>신청기간</td><td>2026. 10. 1. ~ 10. 31.</td></tr></table>
+    <noscript><div>스크립트를 켜 주세요 스크립트를 켜 주세요 스크립트를 켜 주세요</div></noscript>
+    <ul class="file"><li><a href="/cmm/fms/FileDown.do?atchFileId=F1&amp;fileSn=0">2026년 청년월세 모집공고문.hwp [3,345,415byte]</a></li>
+      <li><a href="/viewer.do?f=1">미리보기</a></li></ul>
+  </div>
+</div></div>
+<div id="footer"><a href="/privacy">개인정보처리방침</a> <a href="/copy">저작권정책</a> 충청남도 홍성군 홍북읍 충남대로 21</div>
+</body></html>"""
+
+
+def test_origin_page_text_and_links_are_unchanged():
+    """2026-11-16 M-6: 글자 수를 한 번에 세고 태그를 떼어 내지 않게 바꾼 뒤에도 본문·첨부가 예전 구현과 같아야 해요 (예전 구현으로 만든 기대값)."""
+    assert main_text(ORIGIN_NOTICE) == (
+        "2026년 청년 월세 지원사업 모집 공고\n"
+        "청년의 주거비 부담을 덜기 위해 월세를 지원합니다. 지원대상은 도내 거주 만 19세 이상 34세 이하 무주택 청년이며, 기준 중위소득 60% 이하 가구입니다.\n"
+        "지원내용: 월 최대 20만원, 최대 12개월. 신청은 행정복지센터 또는 복지로 누리집에서 할 수 있습니다. 자세한 내용은 붙임 공고문을 참고하세요.\n"
+        "[표]\n"
+        "구분 | 내용\n"
+        "신청기간 | 2026. 10. 1. ~ 10. 31.\n"
+        "2026년 청년월세 모집공고문.hwp [3,345,415byte]\n"
+        "미리보기"
+    )
+    assert [(f.name, f.url) for f in file_links(ORIGIN_NOTICE, "https://www.chungnam.go.kr/board/view.do?id=1")] == [
+        ("2026년 청년월세 모집공고문.hwp", "https://www.chungnam.go.kr/cmm/fms/FileDown.do?atchFileId=F1&fileSn=0")
+    ]
+
+
+def test_origin_page_reading_stays_fast_on_hostile_pages():
+    """2026-11-16 M-6: 원문 화면은 아무 웹 서버나 줄 수 있어요. 예전엔 파일 이름 없는 긴 링크 글자(3만 2천 자 4초), 공백뿐인 title(8만 자 21초),
+    한 칸의 '내려받기' 링크 수천 개(8천 개 22초), 겹친 <div> 400개(69초, 1천 개부터는 RecursionError)에서 수집기 전체가 멈췄어요."""
+    page = "https://origin.example/notice/1"
+    hostile = {
+        "long link text": f'<a href="/board/download.do?fileId=1">{"가" * 32000}</a>',
+        "long download attribute": f'<a href="/board/download.do?fileId=1" download="{"가" * 32000}">받기</a>',
+        "long path name": f'<a href="/files/{"가" * 32000}">안내</a>',
+        "title of spaces": f'<a href="/board/download.do?fileId=1" title="{" " * 80000}x"></a>',
+        "download links in one cell": "<div>" + "".join(f'<a href="/board/download.do?fileId={i}">내려받기</a>' for i in range(8000)) + "</div>",
+        "nested cells": "".join(f'<div><a href="/board/download.do?fileId={i}" title="받기"></a>' for i in range(4000)) + "</div>" * 4000,
+        "links under a deep chain": "<b>" * 4000 + "".join(f'<a href="/board/download.do?fileId={i}" title="받기"></a>' for i in range(4000)) + "</b>" * 4000,
+    }
+    for name, html in hostile.items():
+        started = time.perf_counter()
+        assert file_links(html, page) == [], name
+        assert time.perf_counter() - started < 1, name
+    for depth in (400, 2000):
+        html = "<html><body>" + ("<div>" + "가" * 210) * depth + "</div>" * depth + "</body></html>"
+        started = time.perf_counter()
+        assert main_text(html) == "가" * 1260  # 85% 규칙으로 안쪽 덩어리까지 내려가요 (예전 구현과 같은 결과)
+        assert time.perf_counter() - started < 1, depth
+
+
+@pytest.mark.parametrize(
+    ("support", "expected"),
+    [
+        ("1,200만 원", True),
+        ("최대 20백만원", True),
+        ("0.5억원", True),
+        ("3천만 원", True),
+        ("100 만 원 이내", True),
+        (",5만원", True),
+        ("1.5,000만원", True),
+        ("1억 2,000만원", True),
+        ("1,000,000원", False),
+        ("사업기간 5~6월", False),
+    ],
+)
+def test_startup_fund_amounts(support, expected):
+    """금액(만·백만·천만·억 원)이 있으면 창업 지원금으로 봐요. 기대값은 2026-11-16 이전 정규식의 결과예요."""
+    assert startup_in_scope("청년 창업", support) is expected
+
+
+def test_startup_fund_amount_check_stays_fast_on_long_numbers():
+    """2026-11-16 M-6: 숫자 덩어리 가운데서 다시 시작하던 정규식이 긴 숫자(지원 내용 칸 3만 2천 자리)에서 11초 걸렸어요."""
+    started = time.perf_counter()
+    assert not startup_in_scope("청년 창업", "1" * 100_000)
+    assert not startup_in_scope("청년 창업", "1," * 50_000)
+    assert startup_in_scope("청년 창업", "1," * 50_000 + "만원")
+    assert time.perf_counter() - started < 1
 
 
 @pytest.mark.parametrize(

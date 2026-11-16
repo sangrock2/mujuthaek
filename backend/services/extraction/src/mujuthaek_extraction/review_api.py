@@ -57,6 +57,7 @@ from urllib.parse import parse_qs, urlparse
 from mujuthaek_extraction.assemble.details import upgrade_stored
 from mujuthaek_extraction.contracts import tools
 from mujuthaek_extraction.extraction_stats import MAX_DAYS as MAX_STATS_DAYS
+from mujuthaek_extraction.links import public_link
 from mujuthaek_extraction.publish import approved_payload, source_files
 from mujuthaek_extraction.store import REVIEW_REASON_SQL, SUPERSEDED, superseded_message
 from mujuthaek_extraction.trace_view import trace_view
@@ -410,6 +411,10 @@ class ReviewService:
                 payload["relevant"] = False
                 payload["relevanceReason"] = REJECTED_RELEVANCE_REASON
             payload["reprocess"] = True
+            if isinstance(payload.get("source"), dict):
+                # 링크 검사(2026-11-16 보안 감사 L-4) 전에 쌓인 결과도 계약 패턴에 맞게 걸러요. source는 잠근 칸이라 검수자가 고칠 수 없어요
+                for key in ("detailUrl", "applyUrl"):
+                    payload["source"][key] = public_link(payload["source"].get(key))
             quality = payload["quality"]
             quality["needsReview"] = False
             # 검수 전 결과가 같은 버전으로 이미 나가 있어, 표시가 없으면 api가 같은 버전이라 버렸습니다(2026-11-10 코드 검토)

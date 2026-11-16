@@ -10,6 +10,7 @@ quality.confidence는 AI 자기 보고가 아니라 코드가 확인한 결과�
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from datetime import UTC, datetime
@@ -18,7 +19,10 @@ from typing import Any
 
 from mujuthaek_extraction.benefit.codes import RuleResult
 from mujuthaek_extraction.benefit.reading import PROMPT_VERSION, BenefitReading
+from mujuthaek_extraction.links import public_link
 from mujuthaek_extraction.verify.claims import has_date
+
+log = logging.getLogger(__name__)
 
 ENUMS = {
     "MARITAL": {"SINGLE", "MARRIED", "NEWLYWED", "ENGAGED"},
@@ -343,8 +347,18 @@ def _date(value: Any, sources_text: str, *, end: bool = False) -> str | None:
     return str(value) if has_date([text], {"value": str(value), "precision": "DAY"}, end=end, years=years) else None
 
 
+def _link(payload: dict[str, Any], key: str) -> str | None:
+    """화면 「신청하러 가기」·원문 링크가 되는 주소는 http(s) 주소만(links.public_link, 2026-11-16 보안 감사 L-4).
+    수집기가 이미 거르지만 예전 수집 이벤트·다시 처리하는 이벤트도 같은 규칙으로 봐요. 아닌 값은 비우고 경고 로그를 남겨요(주소 자체는 남기지 않아요)."""
+    value = payload.get(key)
+    link = public_link(value)
+    if link is None and isinstance(value, str) and value.strip():
+        log.warning("정책 링크가 http(s) 주소가 아니어서 비웠어요", extra={"rawPolicyId": payload.get("rawPolicyId"), "field": key})
+    return link
+
+
 def _source(payload: dict[str, Any], regions: Any) -> dict[str, Any]:
-    """통일 기본 칸은 수집기 값 그대로. 지역 코드가 비고 이름만 있으면 지역표로 채웁니다(초안 6장 1번)."""
+    """통일 기본 칸은 수집기 값 그대로. 지역 코드가 비고 이름만 있으면 지역표로 채웁니다(초안 6장 1번). 링크 두 칸은 _link로 한 번 더 걸러요."""
     codes = [c for c in payload.get("regionCodes") or [] if re.fullmatch(r"\d{5}", str(c))]
     if not codes and payload.get("regionNames"):
         filled = _regions(regions, payload["regionNames"])
@@ -356,8 +370,8 @@ def _source(payload: dict[str, Any], regions: Any) -> dict[str, Any]:
         "regionNames": list(payload.get("regionNames") or []),
         "regionCodes": codes,
         "categories": list(payload.get("categories") or []),
-        "detailUrl": payload.get("detailUrl"),
-        "applyUrl": payload.get("applyUrl"),
+        "detailUrl": _link(payload, "detailUrl"),
+        "applyUrl": _link(payload, "applyUrl"),
     }
 
 

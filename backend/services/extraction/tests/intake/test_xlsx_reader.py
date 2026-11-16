@@ -3,7 +3,10 @@
 import builtins
 import copy
 import io
+import struct
 import zipfile
+
+import pytest
 
 from mujuthaek_extraction.intake import InMemorySourceReader, build_intake, xlsx_reader
 from mujuthaek_extraction.intake.xlsx_reader import AI_MAX_ROWS, read_xlsx
@@ -159,8 +162,54 @@ def test_encrypted_or_unsupported_zip_is_unreadable_not_crashing(monkeypatch):
     def broken(*args, **kwargs):
         raise NotImplementedError("That compression method is not supported")
 
-    monkeypatch.setattr(reader.zipfile.ZipFile, "read", broken)
-    assert read_xlsx(make_xlsx(LISTING)) is None
+    data = make_xlsx(LISTING)  # 만들기(writestr)도 open을 쓰므로 바꿔치기 전에 만듭니다
+    monkeypatch.setattr(reader.zipfile.ZipFile, "open", broken)
+    assert read_xlsx(data) is None
+
+
+def recompress(data: bytes, compression: int) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as source, zipfile.ZipFile(out, "w", compression=compression) as target:
+        for entry in source.infolist():
+            target.writestr(entry.filename, source.read(entry))
+    return out.getvalue()
+
+
+def declare_size(data: bytes, size: int) -> bytes:
+    """zip의 지역 헤더·중앙 디렉터리에 적힌 압축 해제 크기를 바꿉니다. 파일을 만든 사람은 이 값을 마음대로 적을 수 있습니다."""
+    out = bytearray(data)
+    for signature, offset in ((b"PK\x03\x04", 22), (b"PK\x01\x02", 24)):
+        start = out.find(signature)
+        while start >= 0:
+            struct.pack_into("<I", out, start + offset, size)
+            start = out.find(signature, start + 4)
+    return bytes(out)
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_bzip2_or_lzma_members_are_refused_before_decompressing(monkeypatch, compression):
+    # 파이썬 zipfile은 BZIP2·LZMA를 출력 상한 없이 푼 뒤 적힌 크기로 잘라서, 적힌 크기를 작게 고치면 크기 검사를 지나 메모리를 다 썼어요
+    data = declare_size(recompress(make_xlsx(LISTING), compression), 100)
+    assert read_xlsx(data) is None
+
+    def no_decompression(*args, **kwargs):
+        raise AssertionError("must refuse the compression method before decompressing")
+
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    monkeypatch.setattr(zipfile.ZipFile, "open", no_decompression)
+    with pytest.raises(ValueError, match="compression"):
+        xlsx_reader._Budget(xlsx_reader.MAX_UNCOMPRESSED_BYTES).read(archive, "xl/workbook.xml")
+
+
+def test_budget_counts_the_bytes_actually_decompressed(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "READ_CHUNK", 1024)
+    data = make_xlsx([["주소"] + ["가" * 50] * 100])
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        size = len(xlsx_reader._Budget(10**9).read(archive, "xl/sharedStrings.xml"))
+        assert size > 1024
+        with pytest.raises(ValueError, match="limit exceeded"):
+            xlsx_reader._Budget(size - 1).read(archive, "xl/sharedStrings.xml")
+    assert read_xlsx(data) is not None
 
 
 def test_merged_cells_repeat_their_value_and_percent_cells_show_percent():

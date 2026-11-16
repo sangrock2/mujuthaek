@@ -12,6 +12,24 @@ from mujuthaek_collector.core.html import body_text, soup
 MIN_CHARS = 200  # 이보다 글자가 적으면 읽기 실패로 봐요 (스캔본 PDF 등)
 MAX_HWPX_BYTES = 50 * 1024 * 1024  # 다운로드 크기와 별도로 압축을 푼 XML의 합을 제한해요
 MAX_HWPX_ENTRIES = 2048
+# 한글 문서가 쓰는 압축만 받아요. 파이썬 zipfile은 BZIP2·LZMA 항목을 크기 상한 없이 통째로 푼 뒤 zip에 적힌 크기로 잘라서,
+# 크기를 작게 적은 588바이트 파일 하나로 수백 MB를 썼어요(2026-11-16 보안 감사 H-6)
+SAFE_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+READ_CHUNK = 64 * 1024
+
+
+def _read_member(archive: zipfile.ZipFile, entry: zipfile.ZipInfo, limit: int) -> bytes:
+    """zip 항목 하나를 조금씩 풀며 실제로 나온 바이트를 세요. zip에 적힌 크기는 공격자가 고칠 수 있어서 믿지 않아요."""
+    if entry.compress_type not in SAFE_COMPRESSION:
+        raise ValueError("HWPX member uses an unsupported compression method")
+    chunks, size = [], 0
+    with archive.open(entry) as source:
+        while chunk := source.read(READ_CHUNK):
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("HWPX decompression limit exceeded")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _table_lines(rows: list[list[str | None]]) -> str:
@@ -41,10 +59,7 @@ def hwpx_text(path: Path) -> tuple[str | None, str]:
         sections = sorted((entry for entry in entries if re.fullmatch(r"Contents/section\d+\.xml", entry.filename)), key=lambda entry: entry.filename)
         parts, remaining = [], MAX_HWPX_BYTES
         for entry in sections:
-            with archive.open(entry) as source:
-                data = source.read(remaining + 1)
-            if len(data) > remaining:
-                raise ValueError("HWPX decompression limit exceeded")
+            data = _read_member(archive, entry, remaining)
             remaining -= len(data)
             parts.append(data.decode("utf-8", errors="replace"))
         xml = "".join(parts)

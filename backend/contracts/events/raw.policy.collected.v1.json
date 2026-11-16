@@ -16,6 +16,12 @@
   },
   "$defs": {
     "nullableString": { "type": ["string", "null"] },
+    "publicLink": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "pattern": "^https?://[^\\s/?#@\\\\]+(?:[/?#]\\S*)?$",
+      "description": "사람에게 보여 줄 기관 링크: http(s)만, 호스트가 있고 사용자 정보(@)·빈칸·역슬래시가 없으며 2,000자까지. 아니면 collector가 null로 비워요(core/links.py, 2026-11-16 보안 감사 L-4)"
+    },
     "payload": {
       "type": "object",
       "additionalProperties": false,
@@ -37,8 +43,8 @@
         "regionNames": { "type": "array", "items": { "type": "string" }, "description": "SIDO면 시도 이름('부산광역시', K-Startup·기업마당은 '경남'처럼 줄인 이름), SIGUNGU면 '시도 시군구'('경상북도 성주군'). 이름 모양은 출처가 준 그대로. 전국·모름이면 빈 목록" },
         "regionCodes": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]{5}$" }, "description": "시군구 코드 5자리 (온통청년 zipCd만 줘요). 전국이면 빈 목록" },
         "categories": { "type": "array", "items": { "type": "string" }, "description": "출처가 붙인 분야 (보조금24 서비스분야, 복지로 관심주제, 온통청년 대·중분류, K-Startup 지원 분야, 기업마당 분야 대·중분류)" },
-        "detailUrl": { "$ref": "#/$defs/nullableString", "description": "사람이 열어볼 원문 주소" },
-        "applyUrl": { "$ref": "#/$defs/nullableString", "description": "온라인 신청 주소" },
+        "detailUrl": { "$ref": "#/$defs/publicLink", "description": "사람이 열어볼 원문 주소" },
+        "applyUrl": { "$ref": "#/$defs/publicLink", "description": "온라인 신청 주소" },
         "sourceModifiedAt": { "$ref": "#/$defs/nullableString", "description": "출처가 알려준 수정일 (형식은 출처마다 달라서 받은 그대로)" },
         "text": { "type": "string", "maxLength": 200000, "description": "AI 추출에 넘기는 전체 글자: 제목·기관·지역·분야 → API 설명 항목(대상·선정기준·지원내용·신청방법·기간·요약. 주소·연락처·파일·규칙으로 옮기는 코드 칸은 빼요. 원본은 record) → 원문 화면 본문 → 공고문 첨부 글자(1개, 1만 자까지, 길면 정책 관련 부분만). 20만 자를 넘으면 앞부분만" },
         "textKey": { "$ref": "#/$defs/nullableString", "description": "text가 잘렸을 때만 채워지는 S3 위치 (text/<출처>/<정책 ID>/v<버전>.txt)" },
