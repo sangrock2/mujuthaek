@@ -19,11 +19,13 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import kr.mujuthaek.api.TestcontainersConfiguration;
+import kr.mujuthaek.api.user.TermsFixture;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -52,6 +54,7 @@ class SecurityIntegrationTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService socialLoginService;
+  @Autowired TermsAgreementService terms;
   @Autowired SocialOAuth2UserService socialUserService;
   @Autowired AuthTokenService tokens;
   @Autowired LoginSuccessHandler loginSuccessHandler;
@@ -64,8 +67,9 @@ class SecurityIntegrationTest {
   @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
   private LoginUser login(String kakaoId) {
-    return socialLoginService.login(
-        new SocialProfile(SocialProvider.KAKAO, kakaoId, "회원" + kakaoId));
+    return TermsFixture.agreed(
+        terms,
+        socialLoginService.login(new SocialProfile(SocialProvider.KAKAO, kakaoId, "회원" + kakaoId)));
   }
 
   private String bearer(LoginUser user) {
@@ -201,6 +205,50 @@ class SecurityIntegrationTest {
 
     jdbc.update("delete from account.admin_permissions where user_id = ?", user.userId());
     jdbc.update("update account.users set role = 'USER' where id = ?", user.userId());
+  }
+
+  /** 가입 필수 동의 전에는 회원 기능이 403 TERMS_NOT_AGREED예요 (2026-11-16 보안 감사 L-2). */
+  @Test
+  void memberFeaturesNeedTheRequiredAgreement() throws Exception {
+    LoginUser user =
+        socialLoginService.login(
+            new SocialProfile(
+                SocialProvider.KAKAO, "terms-" + java.util.UUID.randomUUID(), "동의 전 회원"));
+    String token = bearer(user);
+    mvc.perform(get("/api/users/me").header("Authorization", token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.termsAgreed").value(false));
+    mvc.perform(get("/api/users/me/favorites").header("Authorization", token))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("TERMS_NOT_AGREED"));
+    mvc.perform(
+            post("/api/v1/notices/{id}/chat/messages", java.util.UUID.randomUUID())
+                .header("Authorization", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"content\":\"안녕하세요\"}"))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("TERMS_NOT_AGREED"));
+    mvc.perform(
+            post("/api/users/me/terms")
+                .header("Authorization", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"termsVersion\":\"1.0\",\"privacyVersion\":\"1.0\",\"ageOver14\":false}"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post("/api/users/me/terms")
+                .header("Authorization", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"termsVersion\":\"1.0\",\"privacyVersion\":\"1.0\",\"ageOver14\":true}"))
+        .andExpect(status().isNoContent());
+    mvc.perform(get("/api/users/me").header("Authorization", token))
+        .andExpect(jsonPath("$.termsAgreed").value(true));
+    mvc.perform(get("/api/users/me/favorites").header("Authorization", token))
+        .andExpect(status().isOk());
+    // 동의 전 로그인 없이 부르면 그대로 401이에요
+    mvc.perform(post("/api/v1/notices/{id}/chat/messages", java.util.UUID.randomUUID()))
+        .andExpect(status().isUnauthorized());
   }
 
   @Test

@@ -11,6 +11,7 @@ import kr.mujuthaek.api.benefit.repository.BenefitRepository;
 import kr.mujuthaek.api.benefit.service.BenefitQueryService;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
+import kr.mujuthaek.api.common.text.ExternalUrl;
 import org.springframework.stereotype.Service;
 
 /** 혜택 상세 (공개 정보). */
@@ -75,6 +76,9 @@ public class BenefitDetailService {
                         c.type(), c.group(), c.known(), c.rawText(), c.evidence()))
             .toList(),
         java.util.List.of(
-            new BenefitDetailResponse.Source(r.sourceCode(), r.detailUrl(), r.applyUrl())));
+            new BenefitDetailResponse.Source(
+                r.sourceCode(),
+                ExternalUrl.safe(r.detailUrl()), // 저장된 예전 값도 내보낼 때 다시 봐요 (보안 감사 L-4)
+                ExternalUrl.safe(r.applyUrl()))));
   }
 }

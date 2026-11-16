@@ -51,11 +51,11 @@ public class NoticeReportRepository {
         .optional();
   }
 
-  /** 판정 틀이 있는 창업지원 사업·사업공간 모집의 이름 (없으면 비어 있음). */
+  /** 판정 틀이 있고 숨기지 않은 창업지원 사업·사업공간 모집의 이름 (없거나 숨겼으면 비어 있음, 보안 감사 L-23). */
   public Optional<String> programTitle(UUID rawPolicyId) {
     return jdbc.sql(
             "select title from notice.policy_judgments where raw_policy_id = :id and field in"
-                + " ('STARTUP_SUPPORT', 'SPACE_RECRUITMENT')")
+                + " ('STARTUP_SUPPORT', 'SPACE_RECRUITMENT') and hidden_at is null")
         .param("id", rawPolicyId)
         .query(String.class)
         .optional();

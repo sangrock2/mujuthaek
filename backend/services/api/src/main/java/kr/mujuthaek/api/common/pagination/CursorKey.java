@@ -1,5 +1,7 @@
 package kr.mujuthaek.api.common.pagination;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Objects;
 import java.util.UUID;
 import kr.mujuthaek.api.common.exception.CustomException;
@@ -35,6 +37,22 @@ public record CursorKey(String sort, String value, UUID id) {
       }
       return position;
     } catch (NumberFormatException e) {
+      throw invalid();
+    }
+  }
+
+  /**
+   * 정렬 값이 날짜(2026-10-31)인 커서의 날짜. 날짜가 아니거나 1~9999년을 벗어나면(조작한 커서) 400 INVALID_CURSOR예요 — 그대로 SQL의
+   * {@code cast(… as date)}에 넣으면 DB 오류로 500과 운영 경보가 났어요(2026-11-16 보안 감사 L-12).
+   */
+  public LocalDate date() {
+    try {
+      LocalDate date = LocalDate.parse(value);
+      if (date.getYear() < 1 || date.getYear() > 9999) {
+        throw invalid();
+      }
+      return date;
+    } catch (DateTimeParseException e) {
       throw invalid();
     }
   }

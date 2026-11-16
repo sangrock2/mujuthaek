@@ -1,10 +1,13 @@
 package kr.mujuthaek.api.eligibility.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.Map;
+import kr.mujuthaek.api.common.validation.ReasonableDate;
 import kr.mujuthaek.api.eligibility.rule.frame.Applicant.ApplicantType;
 import kr.mujuthaek.api.eligibility.rule.frame.Applicant.MaritalStatus;
 
@@ -17,9 +20,12 @@ import kr.mujuthaek.api.eligibility.rule.frame.Applicant.MaritalStatus;
  *
  * <p>판정 엔진(rule/frame)용 입력이에요. 공고 판정 API의 입력은 API 문서 모양의 {@link ApplicantRequest}이고, 둘을 하나로 합치는 건
  * 따로 해요 (.docs/eligibility_compare.md).
+ *
+ * <p>목록 길이는 상한을 둬요. 열린 사업·공간 후보마다 다시 계산해서, 상한이 없으면 로그인 없는 요청 하나(사업 이력 수만 개)가 CPU를 오래
+ * 붙잡았어요(2026-11-16 보안 감사 H-3). 상한은 실제 화면이 보내는 값보다 넉넉해요.
  */
 public record JudgmentApplicantRequest(
-    LocalDate birthDate,
+    @ReasonableDate LocalDate birthDate,
     Boolean korean,
     @Schema(
             description = "법정동코드 2·5·8·10자리",
@@ -28,16 +34,16 @@ public record JudgmentApplicantRequest(
         String residenceRegionCode,
     Integer residenceMonths,
     MaritalStatus maritalStatus,
-    LocalDate marriedOn,
-    List<LocalDate> childBirthDates,
+    @ReasonableDate LocalDate marriedOn,
+    @Size(max = 20) List<@ReasonableDate LocalDate> childBirthDates,
     Boolean expectingChild,
     HouseholdRequest household,
     SubscriptionRequest subscription,
-    BusinessRequest business,
-    List<String> statuses,
-    List<String> restrictions,
+    @Valid BusinessRequest business,
+    @Size(max = 20) List<String> statuses,
+    @Size(max = 30) List<String> restrictions,
     LoanRequest loan,
-    YearMonth birthMonth) {
+    @ReasonableDate YearMonth birthMonth) {
 
   public record HouseholdRequest(
       Integer size,
@@ -64,13 +70,14 @@ public record JudgmentApplicantRequest(
               pattern = "^(\\d{2}|\\d{5}|\\d{8}|\\d{10})$",
               example = "1165000000")
           String siteRegionCode,
-      List<BusinessRecordRequest> history,
+      @Size(max = 50) List<@Valid BusinessRecordRequest> history,
       @Schema(description = "업종 코드 5자리", pattern = "^\\d{5}$", example = "47190")
           String industryCode,
-      @Schema(description = "연도별 매출(원)", example = "{\"2025\": 120000000}")
+      @Schema(description = "연도별 매출(원)", example = "{\"2025\": 120000000}") @Size(max = 30)
           Map<Integer, Long> revenueByYear) {}
 
-  public record BusinessRecordRequest(LocalDate openedOn, LocalDate closedOn) {}
+  public record BusinessRecordRequest(
+      @ReasonableDate LocalDate openedOn, @ReasonableDate LocalDate closedOn) {}
 
   /**
    * 대출용 소득·자산·생애최초 (대출 자격 판정에만 써요). 주택도시기금 상품안내 기준이라 판정의 월소득·총자산과 따로 받아요.

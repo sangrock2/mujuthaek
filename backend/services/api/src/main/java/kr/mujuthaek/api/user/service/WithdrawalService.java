@@ -59,6 +59,7 @@ public class WithdrawalService {
   /** 탈퇴 시작: 다시 로그인할 소셜을 정하고 일회용 티켓을 만들어요 (이전 티켓은 지워요). provider를 비우면 처음 연결한 소셜이에요. */
   @Transactional
   public WithdrawalStart start(UUID userId, String provider) {
+    notAdmin(userId);
     var linked = socialAccounts.findByUserIdOrderByCreatedAt(userId);
     SocialAccount account =
         linked.stream()
@@ -112,11 +113,26 @@ public class WithdrawalService {
    */
   @Transactional
   public void withdraw(UUID userId, SocialProvider provider, String providerUserId) {
+    notAdmin(userId); // 탈퇴를 시작한 뒤 관리자가 된 경우
     socialAccounts
         .findByProviderAndProviderUserId(provider, providerUserId)
         .filter(account -> account.getUserId().equals(userId))
         .orElseThrow(() -> new CustomException(ErrorCode.WITHDRAWAL_ACCOUNT_MISMATCH));
     users.deleteUser(userId);
     events.publishEvent(new UserWithdrawn(userId));
+  }
+
+  /**
+   * 관리자(일반·최상위)는 탈퇴할 수 없어요. 일반 회원으로 바뀐 뒤에 탈퇴해요. 예전에는 관리자가 본인 탈퇴로 자기 처분 기록의 행위자를 지울 수 있었고, 최상위 관리자가
+   * 탈퇴하면 긴급 정지 해제·넘기기·권한 관리를 아무도 할 수 없었어요(2026-11-16 보안 감사 L-9).
+   */
+  private void notAdmin(UUID userId) {
+    users
+        .findById(userId)
+        .filter(user -> user.getRole().isAdmin())
+        .ifPresent(
+            user -> {
+              throw new CustomException(ErrorCode.WITHDRAWAL_ADMIN_NOT_ALLOWED);
+            });
   }
 }

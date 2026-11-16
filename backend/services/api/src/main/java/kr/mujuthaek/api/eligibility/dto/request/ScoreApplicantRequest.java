@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Pattern;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import kr.mujuthaek.api.common.logging.SensitiveFields;
+import kr.mujuthaek.api.common.validation.ReasonableDate;
 import kr.mujuthaek.api.eligibility.rule.SubscriptionScore;
 
 /**
@@ -17,15 +18,15 @@ import kr.mujuthaek.api.eligibility.rule.SubscriptionScore;
  * @param homelessSince 무주택 시작 연월 (집이 있으면 null + homeOwner = true)
  */
 public record ScoreApplicantRequest(
-    @Past LocalDate birthDate,
+    @Past @ReasonableDate LocalDate birthDate,
     @Pattern(regexp = "SINGLE|MARRIED|ENGAGED") String marital,
-    @PastOrPresent YearMonth marriedOn,
-    @PastOrPresent YearMonth homelessSince,
+    @PastOrPresent @ReasonableDate YearMonth marriedOn,
+    @PastOrPresent @ReasonableDate YearMonth homelessSince,
     Boolean homeOwner,
     @Min(0) @Max(20) Integer dependents,
     @Valid SubscriptionRequest subscription) {
 
-  public record SubscriptionRequest(@PastOrPresent YearMonth joinedOn) {}
+  public record SubscriptionRequest(@PastOrPresent @ReasonableDate YearMonth joinedOn) {}
 
   public SubscriptionScore.Input toInput() {
     return new SubscriptionScore.Input(

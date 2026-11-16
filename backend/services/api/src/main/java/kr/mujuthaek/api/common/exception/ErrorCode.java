@@ -45,6 +45,11 @@ public enum ErrorCode {
   WITHDRAWAL_PROVIDER_NOT_LINKED(HttpStatus.BAD_REQUEST, "연결되지 않은 소셜 계정이에요"),
   WITHDRAWAL_TICKET_INVALID(HttpStatus.BAD_REQUEST, "탈퇴 요청이 만료됐어요. 다시 시도해 주세요"),
   WITHDRAWAL_ACCOUNT_MISMATCH(HttpStatus.BAD_REQUEST, "탈퇴하려는 계정과 다시 로그인한 계정이 달라요"),
+  /** 관리자는 일반 회원으로 바뀐 뒤에 탈퇴해요 (2026-11-16 보안 감사 L-9) */
+  WITHDRAWAL_ADMIN_NOT_ALLOWED(
+      HttpStatus.CONFLICT, "관리자는 일반 회원으로 바뀐 뒤에 탈퇴할 수 있어요. 최상위 관리자는 먼저 다른 관리자에게 넘겨 주세요"),
+  /** 가입 필수 동의 전에는 회원 기능을 쓸 수 없어요 (2026-11-16 보안 감사 L-2) */
+  TERMS_NOT_AGREED(HttpStatus.FORBIDDEN, "서비스 이용약관과 개인정보 수집·이용에 동의해야 쓸 수 있어요"),
   FAVORITE_TARGET_NOT_FOUND(HttpStatus.NOT_FOUND, "관심으로 저장할 공고·정책을 찾을 수 없어요"),
   FAVORITE_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "관심 공고는 200개까지 저장할 수 있어요"),
   PREPARATION_NOT_FOUND(HttpStatus.NOT_FOUND, "준비 기록을 찾을 수 없어요"),

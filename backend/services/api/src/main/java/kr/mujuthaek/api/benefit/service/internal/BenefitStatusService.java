@@ -36,7 +36,8 @@ public class BenefitStatusService {
       BenefitStatus next =
           BenefitStatus.of(true, row.applyAlways(), row.applyStart(), row.applyEnd(), today);
       if (next.name().equals(row.status())) continue;
-      benefits.updateStatus(row.id(), next, clock.instant());
+      // 읽은 뒤 숨김 처리됐거나 다른 곳에서 바뀌었으면 건너뛰어요 (숨김을 되돌리지 않게, 보안 감사 L-23)
+      if (!benefits.updateStatus(row.id(), row.status(), next, clock.instant())) continue;
       if (next == BenefitStatus.CLOSED) events.publishEvent(new BenefitClosed(row.id(), today));
       changed++;
     }

@@ -95,6 +95,58 @@ class ChatSseHubTest {
         .doesNotThrowAnyException();
   }
 
+  /**
+   * 보안 감사 M-4: 스프링은 미리 보낸 내용을 쓴 뒤에 완료·오류 알림을 등록해서, 그 사이 연결이 끊기면 알림이 오지 않아 자리가 영영 남았어요. 알림 없이 끝난 연결도
+   * 보내기·하트비트가 실패하면 자리를 돌려줘야 해요.
+   */
+  @Test
+  void connectionsEndedWithoutCallbacksGiveTheirSlotBackOnTheNextSend() {
+    var limited = new ChatSseHub(1, 1);
+    UUID room = UUID.randomUUID();
+    SseEmitter emitter = limited.subscribe(room);
+    emitter.complete(); // 스프링에 넘기기 전에 끝남: 등록한 알림이 불리지 않아요
+    assertThat(limited.connections(room)).isEqualTo(1);
+
+    limited.heartbeat();
+
+    assertThat(limited.connections(room)).isZero();
+    assertThat(limited.totalConnections()).isZero();
+    limited.subscribe(UUID.randomUUID());
+  }
+
+  @Test
+  void releaseGivesTheSlotBackOnlyOnce() {
+    var limited = new ChatSseHub(2, 2);
+    UUID room = UUID.randomUUID();
+    SseEmitter first = limited.subscribe(room);
+    limited.subscribe(room);
+
+    limited.release(first);
+    limited.release(first);
+    first.complete();
+
+    assertThat(limited.totalConnections()).isEqualTo(1);
+    limited.subscribe(room);
+    assertThatThrownBy(() -> limited.subscribe(room)).isInstanceOf(CustomException.class);
+  }
+
+  @Test
+  void connectionsOlderThanTheTimeoutAreSweptEvenIfNoCallbackArrives() {
+    long[] now = {0};
+    var limited = new ChatSseHub(1, 1, () -> now[0]);
+    UUID room = UUID.randomUUID();
+    limited.subscribe(room);
+
+    now[0] = ChatSseHub.STALE_AFTER_MS - 1;
+    limited.heartbeat();
+    assertThat(limited.connections(room)).isEqualTo(1);
+
+    now[0] = ChatSseHub.STALE_AFTER_MS;
+    limited.heartbeat();
+    assertThat(limited.connections(room)).isZero();
+    limited.subscribe(room);
+  }
+
   /** 연결이 타임아웃(30분)되면 정상으로 닫아요. 타임아웃 오류(503)로 끝나면 「처리하지 못한 오류」 알림이 가요. 브라우저는 다시 붙어요. */
   @Test
   void timedOutConnectionClosesNormallyInsteadOfATimeoutError() throws Exception {

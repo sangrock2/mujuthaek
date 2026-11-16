@@ -19,8 +19,10 @@ import kr.mujuthaek.api.notification.service.internal.DeadlineReminderService;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.security.RefreshTokenCookies;
 import kr.mujuthaek.api.user.service.AuthTokenService;
+import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -63,8 +65,9 @@ public class E2eApiApplication {
         AuthTokenService tokens,
         RefreshTokenCookies cookies,
         DeadlineReminderService reminders,
-        S3Client s3) {
-      return new Control(jdbc, json, ingestion, login, tokens, cookies, reminders, s3);
+        S3Client s3,
+        TermsAgreementService terms) {
+      return new Control(jdbc, json, ingestion, login, tokens, cookies, reminders, s3, terms);
     }
 
     @Bean
@@ -99,6 +102,7 @@ public class E2eApiApplication {
     private final RefreshTokenCookies cookies;
     private final DeadlineReminderService reminders;
     private final S3Client s3;
+    private final TermsAgreementService terms;
     private UUID noticeId;
     private ObjectNode original;
 
@@ -110,7 +114,8 @@ public class E2eApiApplication {
         AuthTokenService tokens,
         RefreshTokenCookies cookies,
         DeadlineReminderService reminders,
-        S3Client s3) {
+        S3Client s3,
+        TermsAgreementService terms) {
       this.jdbc = jdbc;
       this.json = json;
       this.ingestion = ingestion;
@@ -119,6 +124,14 @@ public class E2eApiApplication {
       this.cookies = cookies;
       this.reminders = reminders;
       this.s3 = s3;
+      this.terms = terms;
+    }
+
+    /** e2e 고정 회원은 가입 필수 동의를 마친 상태예요 (동의 전에는 회원 기능이 403, 보안 감사 L-2) */
+    private LoginUser member(String socialId, String nickname) {
+      var user = login.login(new SocialProfile(SocialProvider.KAKAO, socialId, nickname));
+      terms.agree(user.userId(), "1.0", "1.0", true);
+      return user;
     }
 
     @PostMapping("/reset")
@@ -212,8 +225,8 @@ public class E2eApiApplication {
           jdbc.sql("select id from notice.notices where not hidden and merged_into is null")
               .query(UUID.class)
               .single();
-      var one = login.login(new SocialProfile(SocialProvider.KAKAO, "e2e-u1", "E2E 준비 회원"));
-      var two = login.login(new SocialProfile(SocialProvider.KAKAO, "e2e-u2", "E2E 다른 회원"));
+      var one = member("e2e-u1", "E2E 준비 회원");
+      var two = member("e2e-u2", "E2E 다른 회원");
       jdbc.sql(
               "insert into notification.push_subscriptions(id,user_id,endpoint,p256dh,auth,created_at,updated_at) values(:id,:user,'https://fcm.googleapis.com/e2e','e2e-test-public-key','e2e-test-auth',now(),now())")
           .param("id", UUID.randomUUID())
@@ -226,8 +239,7 @@ public class E2eApiApplication {
     void session(@PathVariable String account, HttpServletResponse response) {
       if (!account.equals("u1") && !account.equals("u2"))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-      var user =
-          login.login(new SocialProfile(SocialProvider.KAKAO, "e2e-" + account, "E2E " + account));
+      var user = member("e2e-" + account, "E2E " + account);
       var pair = tokens.issue(user);
       cookies.write(response, pair.refreshToken(), pair.refreshTokenTtl());
     }

@@ -141,7 +141,7 @@ public class NoticeQueries {
       sql.append(" order by ").append(key).append(" asc, id asc");
     }
     if (after != null) {
-      params.addValue("afterValue", after.value()).addValue("afterId", after.id());
+      params.addValue("afterValue", after.date()).addValue("afterId", after.id());
     }
     sql.append(" limit :limit");
     return jdbc.query(

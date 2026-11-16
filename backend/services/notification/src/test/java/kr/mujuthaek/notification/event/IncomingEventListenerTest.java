@@ -153,13 +153,13 @@ class IncomingEventListenerTest {
 
   private static String event(UUID eventId, String eventType) {
     return """
-        {"eventId":"%s","eventType":"%s","schemaVersion":1,"occurredAt":"2026-10-22T00:00:00Z",
+        {"eventId":"%s","eventType":"%s","schemaVersion":1,"occurredAt":"%s",
          "producer":"api","payload":{"type":"DEADLINE_D1","dedupKey":"NOTICE:%s:D1:2026-11-06",
          "target":{"type":"NOTICE","id":"%s"},"title":"내일 마감: 강동구 행복주택",
          "body":"관심 공고 접수가 내일(11월 6일) 마감돼요.","linkPath":"/notices/%s",
          "recipients":[{"userId":"%s","email":null,"quietEnabled":false}]}}
         """
-        .formatted(eventId, eventType, eventId, eventId, eventId, UUID.randomUUID());
+        .formatted(eventId, eventType, Instant.now(), eventId, eventId, eventId, UUID.randomUUID());
   }
 
   private static void await(Supplier<Boolean> condition) throws InterruptedException {

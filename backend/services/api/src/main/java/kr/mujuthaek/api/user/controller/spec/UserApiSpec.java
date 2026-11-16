@@ -5,14 +5,29 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import kr.mujuthaek.api.user.dto.request.ContactEmailRequest;
+import kr.mujuthaek.api.user.dto.request.TermsAgreementRequest;
 import kr.mujuthaek.api.user.dto.response.MeResponse;
 import kr.mujuthaek.api.user.dto.response.MyReportsResponse;
 import kr.mujuthaek.api.user.dto.response.WithdrawalResponse;
 import kr.mujuthaek.api.user.service.LoginUser;
 import org.springframework.http.ResponseEntity;
 
-@Tag(name = "내 계정", description = "내 정보·내 제보·연락용 이메일·탈퇴예요. 로그인한 회원만 부를 수 있어요.")
+@Tag(name = "내 계정", description = "내 정보·가입 동의·내 제보·연락용 이메일·탈퇴예요. 로그인한 회원만 부를 수 있어요.")
 public interface UserApiSpec {
+
+  @Operation(
+      summary = "가입 필수 동의",
+      description =
+          "가입 마무리 화면에서 만 14세 이상 확인·이용약관·개인정보 수집·이용에 동의한 것을 남겨요. 화면이 보여 준 약관·처리방침 버전을"
+              + " 같이 보내요(영문·숫자·점·하이픈 20자까지). 나이·생년월일은 받지 않아요. 다시 보내면 버전·시각을 새로 남겨요. 동의하기 전에는"
+              + " 회원 기능(내 정보 조회·연락용 이메일·탈퇴를 뺀 /api/users/me 아래, 채팅 쓰기·좋아요·신고, 공고·혜택·사업·지역 제보)이 403"
+              + " TERMS_NOT_AGREED예요. 내 정보(GET /api/users/me)의 termsAgreed로 동의했는지 알 수 있어요.")
+  @ApiResponse(responseCode = "204", description = "남겼어요")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED — ageOver14가 true가 아니거나 버전이 비었거나 형식이 달라요")
+  ResponseEntity<Void> agreeTerms(
+      @Parameter(hidden = true) LoginUser user, TermsAgreementRequest request);
 
   @Operation(
       summary = "탈퇴 시작",
@@ -27,6 +42,10 @@ public interface UserApiSpec {
   @ApiResponse(
       responseCode = "400",
       description = "WITHDRAWAL_PROVIDER_NOT_LINKED — provider가 이 계정에 연결된 소셜이 아니에요")
+  @ApiResponse(
+      responseCode = "409",
+      description =
+          "WITHDRAWAL_ADMIN_NOT_ALLOWED — 관리자(일반·최상위)는 일반 회원으로 바뀐 뒤에 탈퇴할 수 있어요 (처리 기록의 행위자를 지울 수 없게)")
   WithdrawalResponse startWithdrawal(
       @Parameter(hidden = true) LoginUser user,
       @Parameter(

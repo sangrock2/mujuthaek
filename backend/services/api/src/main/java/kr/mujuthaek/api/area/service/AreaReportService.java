@@ -19,6 +19,8 @@ import kr.mujuthaek.api.common.event.AreaReportAnswered;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.common.id.UuidV7;
+import kr.mujuthaek.api.common.text.ControlChars;
+import kr.mujuthaek.api.common.text.PersonalInfo;
 import kr.mujuthaek.api.common.text.ScreenPaths;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -55,6 +57,19 @@ public class AreaReportService {
     UUID reporterId = reporterId(reporter);
     if (blank(request.reportedValue()) && blank(request.note())) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "맞는 값이나 설명 중 하나는 적어 주세요");
+    }
+    // 제어 문자(NUL 등)는 DB가 받지 않아 500이 났어요(보안 감사 L-12). 설명에는 휴대폰 번호·주민등록번호를 받지 않아요(L-7)
+    if (ControlChars.anyPresent(
+        request.noticeLocationId(),
+        request.field(),
+        request.currentValue(),
+        request.reportedValue(),
+        request.note(),
+        request.screen())) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "제보에 쓸 수 없는 문자(제어 문자)가 있어요");
+    }
+    if (PersonalInfo.contains(request.note())) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "설명에 휴대폰 번호·주민등록번호는 적지 말아 주세요");
     }
     if (!reports.hasLocations(noticeId)) {
       throw new CustomException(ErrorCode.NOT_FOUND, "생활권 정보가 있는 공고가 아니에요");

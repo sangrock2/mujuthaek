@@ -57,6 +57,13 @@ public class ChatMessageRepository {
   /** 최근 보낸 메시지 수와 그중 가장 오래된 시각 (1분 5개 제한). */
   public record RecentSends(int count, OffsetDateTime oldest) {}
 
+  /** 그 회원이 쓴 글의 작성자 이름을 모두 바꿔요 (실명일 수 있는 닉네임을 별칭으로 바꿀 때). 바꾼 줄 수 */
+  public int renameAuthor(UUID userId, String nickname) {
+    return jdbc.update(
+        "update chat.messages set author_nickname = :nickname where user_id = :user",
+        new MapSqlParameterSource().addValue("user", userId).addValue("nickname", nickname));
+  }
+
   public void insert(
       UUID id,
       UUID noticeId,

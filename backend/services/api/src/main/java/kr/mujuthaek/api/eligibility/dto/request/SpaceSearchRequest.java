@@ -24,13 +24,17 @@ public record SpaceSearchRequest(
     @Schema(defaultValue = "20") @Min(1) @Max(100) Integer size) {
 
   /**
+   * 목록 길이는 상한을 둬요. 지역 목록은 후보마다 모든 값과 비교해서, 상한이 없으면 로그인 없는 요청 하나가 CPU를 몇 초씩 붙잡았어요(2026-11-16 보안 감사
+   * H-3).
+   *
    * @param spaceTypes STARTUP_SPACE(창업 공간) · SHOP_RENTAL(공공 상가) · MEETING_ROOM(회의실). 비우면 전부
-   * @param regionCodes 시도 2자리 또는 시군구 5자리. 비우면 전국. 전국 공간과 지역을 모르는 공간은 늘 들어가요
+   * @param regionCodes 시도 2자리 또는 시군구 5자리 (50개까지). 비우면 전국. 전국 공간과 지역을 모르는 공간은 늘 들어가요
    * @param keyword 검색어. 띄어쓰기로 나눈 낱말이 모두 이름(제목)·기관에 들어 있는 것만. 비우면 전부
    */
   public record Filters(
-      List<@Pattern(regexp = "STARTUP_SPACE|SHOP_RENTAL|MEETING_ROOM") String> spaceTypes,
-      List<@Pattern(regexp = "\\d{2}|\\d{5}") String> regionCodes,
+      @Size(max = 10)
+          List<@Pattern(regexp = "STARTUP_SPACE|SHOP_RENTAL|MEETING_ROOM") String> spaceTypes,
+      @Size(max = 50) List<@Pattern(regexp = "\\d{2}|\\d{5}") String> regionCodes,
       @Size(max = 100) String keyword) {}
 
   public Filters filtersOrEmpty() {

@@ -11,6 +11,7 @@ import kr.mujuthaek.api.TestcontainersConfiguration;
 import kr.mujuthaek.api.notification.client.NotificationServerClient;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.*;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +30,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class EmailNotificationApiTest {
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired JdbcClient jdbc;
   @MockitoBean NotificationServerClient mail;
@@ -171,7 +173,9 @@ class EmailNotificationApiTest {
   }
 
   private LoginUser login() {
-    return logins.login(
-        new SocialProfile(SocialProvider.KAKAO, "mail-" + UUID.randomUUID(), "이메일 시험"));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(
+            new SocialProfile(SocialProvider.KAKAO, "mail-" + UUID.randomUUID(), "이메일 시험")));
   }
 }

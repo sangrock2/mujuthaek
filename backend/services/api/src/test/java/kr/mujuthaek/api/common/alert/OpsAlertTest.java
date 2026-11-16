@@ -36,6 +36,24 @@ class OpsAlertTest {
         .isEqualTo("[prod api] 검수 API 연결 실패 (지난 알림 뒤 같은 일 2번 더)\n```ConnectException```");
   }
 
+  /** 요청 주소처럼 밖에서 정한 값이 슬랙 전체 호출·링크·코드 블록 탈출이 되지 않아요 (2026-11-16 보안 감사 L-22). */
+  @Test
+  void slackControlCharactersAreShownAsText() {
+    var alert =
+        new OpsAlert(
+            new OpsAlertProperties(null, "prod", Duration.ofMinutes(10), null),
+            json,
+            new MutableClock());
+
+    String text =
+        alert.take("x", "처리하지 못한 오류 GET /api/<!channel>/<https://evil.example|여기>&", "a```<!here>");
+
+    assertThat(text)
+        .isEqualTo(
+            "[prod api] 처리하지 못한 오류 GET /api/&lt;!channel&gt;/&lt;https://evil.example|여기&gt;&amp;"
+                + "\n```aˋˋˋ&lt;!here&gt;```");
+  }
+
   @Test
   void ignoreCodesComeFromConfig() {
     var properties =

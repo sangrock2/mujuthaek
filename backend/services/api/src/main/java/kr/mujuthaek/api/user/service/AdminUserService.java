@@ -42,6 +42,10 @@ public class AdminUserService {
 
   private static final Logger log = LoggerFactory.getLogger(AdminUserService.class);
   private static final int PAGE_SIZE = 30;
+
+  /** 회원 찾기 쪽 번호 상한 (30명 × 10만 쪽 = 300만 명) */
+  static final int MAX_PAGE = 100_000;
+
   private static final Duration TRANSFER_LOGIN_WINDOW = Duration.ofMinutes(10);
 
   /** 오류 문구에 쓰는 권한 이름 (화면 이름과 같아요) */
@@ -122,6 +126,10 @@ public class AdminUserService {
   public AdminUserResponse.Page search(String query, String filter, int page) {
     String q = query == null || query.isBlank() ? null : query.strip();
     String f = filter == null || filter.isBlank() ? null : filter;
+    if (page > MAX_PAGE) {
+      // 아주 큰 쪽 번호는 page × 30이 int를 넘어 음수 OFFSET이 돼서 500이 났어요(2026-11-16 보안 감사 L-12)
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "page는 " + MAX_PAGE + "까지예요");
+    }
     int p = Math.max(0, page);
     Instant now = clock.instant();
     return new AdminUserResponse.Page(
@@ -249,7 +257,8 @@ public class AdminUserService {
     if ("ADMIN".equals(current)) {
       canTouchWhole(actor, permissionsOf(userId), "정지");
     }
-    users.suspend(userId, reason.strip(), until, actorId, now);
+    notOverSuper(actor, userId, "바꾸려면");
+    users.suspend(userId, reason.strip(), until, actorId, actor.isSuper(), now);
     users.revokeLogins(userId);
     users.record(userId, "SUSPEND", null, reason.strip(), actorId, now);
     log.info("이용 정지: user={} until={} by={}", userId, until, actorId);
@@ -266,12 +275,23 @@ public class AdminUserService {
     if ("ADMIN".equals(current)) {
       canTouchWhole(actor, permissionsOf(userId), "정지 해제");
     }
+    notOverSuper(actor, userId, "풀려면");
     Instant now = clock.instant();
     if (users.unsuspend(userId) > 0) {
       users.record(userId, "UNSUSPEND", null, null, actorId, now);
       log.info("이용 정지 해제: user={} by={}", userId, actorId);
     }
     return find(userId);
+  }
+
+  /**
+   * 최상위 관리자가 내린 정지는 최상위 관리자만 바꾸거나 풀어요. 예전에는 「이용 정지」 권한만 있으면 최상위가 내린 정지를 풀거나 줄일 수 있었어요(2026-11-16 보안
+   * 감사 L-10).
+   */
+  private void notOverSuper(AdminAccess actor, UUID userId, String doing) {
+    if (!actor.isSuper() && users.suspendedBySuper(userId)) {
+      throw forbidden("최상위 관리자가 내린 정지예요. " + doing + " 최상위 관리자에게 요청해 주세요");
+    }
   }
 
   // ---------- 최상위 고유 ----------

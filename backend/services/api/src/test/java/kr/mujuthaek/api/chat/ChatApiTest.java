@@ -25,11 +25,13 @@ import kr.mujuthaek.api.TestcontainersConfiguration;
 import kr.mujuthaek.api.chat.domain.ChatRoom;
 import kr.mujuthaek.api.chat.service.ChatRooms;
 import kr.mujuthaek.api.common.event.UserWithdrawn;
+import kr.mujuthaek.api.user.TermsFixture;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -94,6 +96,7 @@ class ChatApiTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired JdbcTemplate jdbc;
   @Autowired ApplicationEventPublisher events;
@@ -602,7 +605,9 @@ class ChatApiTest {
 
   private LoginUser member() {
     String id = UUID.randomUUID().toString();
-    return logins.login(new SocialProfile(SocialProvider.KAKAO, id, "회원" + id.substring(0, 6)));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(new SocialProfile(SocialProvider.KAKAO, id, "회원" + id.substring(0, 6))));
   }
 
   /** 채팅 신고를 검토할 수 있는 관리자 (관리자 화면 권한은 요청마다 DB로 확인해서 DB에 관리자·「채팅 제재」를 넣어요) */

@@ -113,13 +113,17 @@ mujuthaek:
       base-url: ${COLLECTOR_ADMIN_URL:http://localhost:8093}
       token: ${COLLECTOR_ADMIN_TOKEN:}  # 수집기와 같은 값. 비면 보내지 않아요
       timeout: 5s
+  email-notifications:
+    # 수신 거부 링크 전용 서명 키(32자 이상 무작위). 비면 예전처럼 알림 서버 내부 토큰으로 서명해요(보안 감사 L-15)
+    # 넣은 뒤 예전 메일의 링크(v1)는 내부 토큰을 바꾸기 전까지 그대로 돼요
+    unsubscribe-key: ${EMAIL_UNSUBSCRIBE_KEY:}
   notification:
     server:                             # 알림 서버 내부 API. 관리자 알림 화면의 발송 결과를 이 서버를 거쳐 받아요
       base-url: ${NOTIFICATION_SERVER_URL:http://localhost:8081}
       token: ${NOTIFICATION_INTERNAL_TOKEN:}  # 알림 서버와 같은 값. 비면 보내지 않아요(로컬은 같은 컴퓨터 요청만 받음)
       timeout: 5s
   traffic:                              # 관리자 트래픽 화면 (GA 숫자 + api 서버 요청 기록)
-    ip-salt: ${TRAFFIC_IP_SALT:local-dev-salt}  # IP 해시에 섞는 비밀 값. 운영은 꼭 따로 넣어요
+    ip-salt: ${TRAFFIC_IP_SALT:}        # IP 해시에 섞는 비밀 값(16자 이상). 비면 JWT 비밀값에서 따로 만든 값을 써요(IpSalt)
     raw-ip-days: 14                     # 원본 IP 보관 일수(보안 대응용). 지나면 지워요
     keep-days: 90                       # 요청 기록 보관 일수
     ingest-token: ${TRAFFIC_INGEST_TOKEN:}  # 프론트 서버가 화면 요청을 넘길 때 쓰는 비밀 값. 비면 화면 요청은 안 받아요

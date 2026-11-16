@@ -73,24 +73,26 @@ class SecurityConfig {
       UserService userService,
       AdminUserService adminUsers,
       AdminAuthorization admin,
+      TermsAuthorization terms,
       AuthTokenService tokens)
       throws Exception {
     AuthenticationEntryPoint unauthorized =
         (request, response, error) -> problems.write(request, response, ErrorCode.UNAUTHENTICATED);
     AccessDeniedHandler forbidden =
-        (request, response, error) -> problems.write(request, response, ErrorCode.FORBIDDEN);
+        (request, response, error) ->
+            problems.write(
+                request,
+                response,
+                TermsAuthorization.notAgreed(error)
+                    ? ErrorCode.TERMS_NOT_AGREED
+                    : ErrorCode.FORBIDDEN);
     http.cors(Customizer.withDefaults())
         .csrf(csrf -> csrf.disable())
         .sessionManagement(
             session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .logout(logout -> logout.disable()) // 로그아웃은 AuthController (refresh token 폐기)
         .authorizeHttpRequests(
-            auth ->
-                adminPaths(auth, admin)
-                    .requestMatchers("/api/users/**")
-                    .authenticated()
-                    .anyRequest()
-                    .permitAll())
+            auth -> memberPaths(adminPaths(auth, admin), terms).anyRequest().permitAll())
         .oauth2Login(
             login ->
                 login
@@ -116,6 +118,39 @@ class SecurityConfig {
                         unauthorized, PathPatternRequestMatcher.withDefaults().matcher("/api/**"))
                     .accessDeniedHandler(forbidden));
     return http.build();
+  }
+
+  /**
+   * 회원 기능 경로. 로그인과 가입 필수 동의(만 14세 이상·이용약관·개인정보 수집·이용)가 있어야 해요. 동의 전에도 쓸 수 있는 건 내 정보 보기·동의하기·연락용
+   * 이메일·탈퇴뿐이에요(동의 화면이 쓰는 것). 예전에는 동의를 서버에 남기지 않아 동의 화면을 건너뛰어도 회원 기능을 모두 쓸 수 있었어요(2026-11-16 보안 감사
+   * L-2). 채팅·제보 쓰기는 경로가 회원 아래가 아니라서 따로 적어요 — 새 회원 쓰기 기능을 만들면 여기에 더해 주세요.
+   */
+  private static AuthorizeHttpRequestsConfigurer<HttpSecurity>
+          .AuthorizationManagerRequestMatcherRegistry
+      memberPaths(
+          AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry
+              auth,
+          TermsAuthorization terms) {
+    return auth.requestMatchers(HttpMethod.GET, "/api/users/me")
+        .authenticated()
+        .requestMatchers(HttpMethod.POST, "/api/users/me/terms", "/api/users/me/withdrawal")
+        .authenticated()
+        .requestMatchers("/api/users/me/email")
+        .authenticated()
+        .requestMatchers("/api/users/**")
+        .access(terms.agreed())
+        .requestMatchers(
+            HttpMethod.POST,
+            "/api/v1/notices/*/chat/messages",
+            "/api/v1/chat/messages/*/reports",
+            "/api/v1/notices/*/reports",
+            "/api/v1/notices/*/area-reports",
+            "/api/v1/programs/*/reports",
+            "/api/v1/benefits/*/reports",
+            "/api/v1/reports")
+        .access(terms.agreed())
+        .requestMatchers(HttpMethod.PUT, "/api/v1/chat/messages/*/like")
+        .access(terms.agreed());
   }
 
   /**

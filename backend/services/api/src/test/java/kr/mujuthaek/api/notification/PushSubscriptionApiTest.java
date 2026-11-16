@@ -12,11 +12,13 @@ import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import kr.mujuthaek.api.TestcontainersConfiguration;
+import kr.mujuthaek.api.user.TermsFixture;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import kr.mujuthaek.api.user.service.WithdrawalService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,6 +45,7 @@ class PushSubscriptionApiTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired WithdrawalService withdrawals;
   @Autowired JdbcClient jdbc;
@@ -202,7 +205,9 @@ class PushSubscriptionApiTest {
   @Test
   void withdrawalRemovesDevicesAndTheLeftoverTokenCannotSubscribeAgain() throws Exception {
     String socialId = "push-" + UUID.randomUUID();
-    LoginUser me = logins.login(new SocialProfile(SocialProvider.KAKAO, socialId, "닉네임"));
+    LoginUser me =
+        TermsFixture.agreed(
+            terms, logins.login(new SocialProfile(SocialProvider.KAKAO, socialId, "닉네임")));
     String token = bearer(me);
     mvc.perform(subscribe(me, endpoint(), null)).andExpect(status().isNoContent());
 
@@ -219,8 +224,9 @@ class PushSubscriptionApiTest {
   }
 
   private LoginUser login() {
-    return logins.login(
-        new SocialProfile(SocialProvider.KAKAO, "push-" + UUID.randomUUID(), "닉네임"));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(new SocialProfile(SocialProvider.KAKAO, "push-" + UUID.randomUUID(), "닉네임")));
   }
 
   private String bearer(LoginUser user) {
