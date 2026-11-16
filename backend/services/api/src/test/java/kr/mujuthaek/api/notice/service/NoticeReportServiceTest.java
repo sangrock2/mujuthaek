@@ -327,7 +327,8 @@ class NoticeReportServiceTest {
   @Test
   void benefitPoliciesAreReportedReopenedAsBenefitReviewsAndAnswered() {
     UUID policy = UUID.randomUUID();
-    UUID missing = UUID.fromString(policy.toString().replace('0', '1'));
+    // 0이 없는 UUID에서는 문자열 replace가 원본과 같아져 중복 제보(CONFLICT)를 검사하게 돼요.
+    UUID missing = new UUID(policy.getMostSignificantBits() ^ 1L, policy.getLeastSignificantBits());
     UUID review = UUID.randomUUID();
     // 가짜 추출 서버는 요청이 오기 전에 기대를 모두 적어야 해요(요청 뒤에는 더할 수 없음). 제보 접수는 이 서버의 혜택만 보고 추출 서비스에 묻지
     // 않아요(2026-11-16 보안 감사 L-13). 「고치기」만 추출 서비스를 불러요
