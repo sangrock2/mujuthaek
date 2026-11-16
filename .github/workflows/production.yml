@@ -107,7 +107,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-      - run: npm install --global vercel@65.15.0
+      # This job can mint the AWS deploy role through OIDC. Never run package install scripts here: a compromised
+      # transitive dependency's postinstall could otherwise request that token (security audit M-2, 2026-11-16).
+      # The CLI only uploads source for a remote Vercel build, so it needs no native build step.
+      - run: npm install --global --ignore-scripts --no-audit --no-fund vercel@65.15.0
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}

@@ -11,6 +11,7 @@ from aws_personal import AWS, RUNTIME
 
 BACKUP_USER = 'mujuthaek-personal-backup'
 PRIVATE = RUNTIME / '.env.backup-isolated'
+APP_POLICY = 'PersonalBucketOnly'
 
 
 def backup_policy(bucket):
@@ -112,12 +113,12 @@ def finalize(aws, config, receipt):
         raise RuntimeError('Unexpected managed permissions on app identity')
     if aws.call('iam', 'list-groups-for-user', '--user-name', users[0])['Groups']:
         raise RuntimeError('Unexpected group membership on app identity')
-    old = aws.call('iam', 'get-user-policy', '--user-name', users[0], '--policy-name', 'PersonalBucketOnly')['PolicyDocument']
+    old = aws.call('iam', 'get-user-policy', '--user-name', users[0], '--policy-name', APP_POLICY)['PolicyDocument']
     snapshot = RUNTIME / 'app-storage-policy-before-backup-separation.json'
     if not snapshot.exists():
         private_file(snapshot)
         snapshot.write_text(json.dumps(old), encoding='utf-8')
-    aws.call('iam', 'put-user-policy', '--user-name', users[0], '--policy-name', 'PersonalBucketOnly',
+    aws.call('iam', 'put-user-policy', '--user-name', users[0], '--policy-name', APP_POLICY,
              '--policy-document', json.dumps(app_policy(config['bucket'])))
     print('App storage restricted to raw files; backup objects explicitly denied; existing app key retained.')
 

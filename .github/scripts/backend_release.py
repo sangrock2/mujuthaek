@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 
 BUCKET = 'mujuthaek-personal-659355919826-raw'
+# The only deployment keys CI may replace. Everything else is create-only, which the deploy role's IAM policy also
+# enforces (setup_github_release.py, security audit L-17).
+MUTABLE = ('desired.json', 'releases/current.json')
 
 
 def aws(*args, capture=True):
@@ -28,6 +31,8 @@ def get(key, destination):
 
 
 def put(key, source, immutable=False):
+    if not immutable and key not in MUTABLE:
+        raise ValueError('Release objects are create-only; only the request and completion pointers are replaced')
     args = ['s3api', 'put-object', '--bucket', BUCKET, '--key', 'deployments/' + key,
             '--body', str(source), '--server-side-encryption', 'AES256']
     if immutable:

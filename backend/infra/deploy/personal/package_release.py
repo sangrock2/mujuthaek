@@ -6,7 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 EXCLUDED = {".git", ".venv", ".gradle", ".next", "node_modules", "__pycache__", "build", "test-results", "runtime", "playwright-report"}
-PREFIXES = ("frontend/", "backend/services/", "backend/libs/", "backend/contracts/", "backend/infra/deploy/personal/")
+# The host runs no frontend container (Vercel serves the site), so frontend source is never shipped to it.
+PREFIXES = ("backend/services/", "backend/libs/", "backend/contracts/", "backend/infra/deploy/personal/")
 EXTRA = {"backend/.dockerignore", "backend/infra/deploy/certificates.py", "backend/infra/deploy/nginx/acme.conf"}
 
 

@@ -11,16 +11,25 @@ from pathlib import Path
 
 PROJECT = 'prj_TgaOO5IH8i8ETBXwM5bv2n7gtkj8'
 TEAM = 'team_BpOTTz4f6CcMVITAdEzieKXr'
+# The deploy job also holds AWS deploy-role credentials and the OIDC token request variables. The Vercel CLI and its
+# npm dependencies get only what they need, so a compromised CLI release cannot reuse them (security audit M-2).
+CLI_ENVIRONMENT = ('PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SYSTEMROOT', 'TMPDIR', 'TEMP', 'TMP',
+                   'LANG', 'LC_ALL', 'CI', 'NODE_OPTIONS', 'VERCEL_TELEMETRY_DISABLED', 'VERCEL_TOKEN')
+
+
+def cli_environment():
+    environment = {name: os.environ[name] for name in CLI_ENVIRONMENT if name in os.environ}
+    return dict(environment, VERCEL_ORG_ID=TEAM, VERCEL_PROJECT_ID=PROJECT)
 
 
 def vercel(*args, cwd=None):
-    environment = dict(os.environ, VERCEL_ORG_ID=TEAM, VERCEL_PROJECT_ID=PROJECT)
+    environment = cli_environment()
     result = subprocess.run(['vercel', *args, '--scope', TEAM, '--yes', '--json', '--token', environment['VERCEL_TOKEN']], cwd=cwd,
                             capture_output=True, text=True, env=environment)
     if result.returncode:
         detail = (result.stderr or result.stdout)[-1800:]
         for name in ('VERCEL_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'):
-            secret = environment.get(name)
+            secret = os.environ.get(name)
             if secret:
                 detail = detail.replace(secret, '[REDACTED]')
         raise RuntimeError('Vercel operation failed: ' + detail.strip())

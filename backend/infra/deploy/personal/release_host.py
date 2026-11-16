@@ -13,6 +13,19 @@ BASE = Path('/opt/mujuthaek-source/backend/infra/deploy/personal')
 SERVICES = ('api', 'notification')
 AWS_IMAGE = 'amazon/aws-cli:2.36.28'
 READINESS_SECONDS = 600
+# Dead-letter queues that hold personal data (notification recipients' emails and push keys, expired push
+# subscriptions) get a 7-day age and size cap, without redeclaring queues (changed x-arguments fail with
+# PRECONDITION_FAILED) and, as an operator policy, without replacing any regular policy on the same queues; where
+# both set a limit the lower one wins (security audit L-14). Pipeline DLQs (raw.*, policy.*, area.*) are left alone
+# on purpose: their messages may still need reprocessing and applying a TTL deletes old ones at once.
+DLQ_RETENTION = ('mujuthaek-dlq-retention', r'^mujuthaek\.(notification|api\.push-subscription-expired)\.dlq$',
+                 {'message-ttl': 7 * 24 * 3600 * 1000, 'max-length': 10000})
+
+
+def dlq_retention_command():
+    name, pattern, definition = DLQ_RETENTION
+    return ('exec', '-T', 'rabbitmq', 'rabbitmqctl', 'set_operator_policy', '--priority', '0', '--apply-to', 'queues',
+            name, pattern, json.dumps(definition, separators=(',', ':')))
 
 
 def release_id(value):
@@ -184,6 +197,14 @@ class Host:
         self.compose('exec', '-T', 'nginx', 'nginx', '-t')
         self.compose('exec', '-T', 'nginx', 'nginx', '-s', 'reload')
 
+    def retain_dead_letters(self):
+        """Re-apply the idempotent DLQ cap on every backend deployment, so a rebuilt broker volume regains it."""
+        try:
+            self.compose(*dlq_retention_command(), timeout=60)
+        except (subprocess.SubprocessError, OSError):
+            # Broker housekeeping must not fail, and so roll back, an already healthy release; the journal shows it.
+            print(json.dumps({'warning': 'dlq_retention_policy_not_applied'}), flush=True)
+
     def select(self, release, images=None, services=None):
         services = list(SERVICES if services is None else services)
         images = images or {s: {'tag': f'mujuthaek-personal-{s}:{release}'} for s in SERVICES}
@@ -261,6 +282,7 @@ class Host:
         if services:
             with self.worker_cpu_budget():
                 self.prepare_and_activate(target, data, old, previous_images, services, schema)
+            self.retain_dead_letters()
         state = {'protocol': 2, 'release': target, 'previous': old['release'], 'schema': self.schema(),
                  'commit': data.get('commit'), 'images': data['images'], 'changed_services': services,
                  'applied_at': int(time.time())}

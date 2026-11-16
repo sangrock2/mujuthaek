@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
           mkdir -p backend/infra/security/build
           python3 backend/infra/security/test_gateway.py > backend/infra/security/build/gateway.json
-          python3 -c 'import json; r=json.load(open("backend/infra/security/build/gateway.json")); assert r["ok"] and len(r["checks"]) == 10 and all(r["checks"].values()), "Missing or failed gateway evidence"; print(json.dumps(r, indent=2))'
+          python3 -c 'import json; r=json.load(open("backend/infra/security/build/gateway.json")); assert r["ok"] and len(r["checks"]) == 13 and all(r["checks"].values()), "Missing or failed gateway evidence"; print(json.dumps(r, indent=2))'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gateway-security-evidence

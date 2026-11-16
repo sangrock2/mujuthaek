@@ -107,4 +107,4 @@ if __name__ == "__main__":
     elif args.action in {"old", "new"}:
         execute(args.action, args.command)
     else:
-        transfer("sudo docker image save mujuthaek-personal-api:20261113-1 mujuthaek-personal-notification:20261113-1 mujuthaek-personal-frontend:20261113-1 | gzip -1", "gzip -d | sudo docker image load")
+        transfer("sudo docker image save mujuthaek-personal-api:20261113-1 mujuthaek-personal-notification:20261113-1 | gzip -1", "gzip -d | sudo docker image load")

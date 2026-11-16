@@ -79,12 +79,24 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-2
           allowed-account-ids: "659355919826"
+      # Release objects are create-only (security audit L-17): the deploy role may write deployments/releases/* only with
+      # If-None-Match, so nothing can replace an archive a later rollback would trust. A re-run for a commit whose pair
+      # is already stored keeps the stored pair (the checksum is written last and the host verifies the archive
+      # against it). A single PUT (no multipart, up to 5 GiB) is required because multipart cannot carry the condition.
       - name: Store private worker image archive
         env:
           SHA: ${{ github.sha }}
         run: |
-          aws s3 cp worker-images.tar.gz "s3://mujuthaek-personal-659355919826-raw/deployments/releases/workers/$SHA/worker-images.tar.gz" --sse AES256 --only-show-errors
-          aws s3 cp worker-images.sha256 "s3://mujuthaek-personal-659355919826-raw/deployments/releases/workers/$SHA/worker-images.sha256" --sse AES256 --only-show-errors
+          if aws s3api head-object --bucket mujuthaek-personal-659355919826-raw \
+              --key "deployments/releases/workers/$SHA/worker-images.sha256" > /dev/null 2>&1; then
+            echo "Worker images for $SHA are already stored; keeping the stored pair"
+            exit 0
+          fi
+          for name in worker-images.tar.gz worker-images.sha256; do
+            aws s3api put-object --bucket mujuthaek-personal-659355919826-raw \
+              --key "deployments/releases/workers/$SHA/$name" --body "$name" \
+              --server-side-encryption AES256 --if-none-match '*' > /dev/null
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: worker-image-record-${{ github.sha }}

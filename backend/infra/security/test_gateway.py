@@ -7,6 +7,7 @@ from contextlib import closing
 import http.client
 import http.server
 import json
+import re
 import socket
 import ssl
 import subprocess
@@ -53,6 +54,48 @@ def command(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120).stdout
 
 
+def locations(config):
+    """Every location block with its own directives. Quoted strings, comments and one-line blocks are handled."""
+    found, stack, words = [], [], []
+    for token in re.findall(r"'[^']*'|\"[^\"]*\"|#[^\n]*|[{};]|[^\s{};'\"#]+", config):
+        if token.startswith('#'):
+            continue
+        if token == '{':
+            stack.append((words, []))
+            words = []
+        elif token == '}':
+            name, directives = stack.pop()
+            if name[:1] == ['location']:
+                found.append((' '.join(name[1:]), directives))
+            words = []
+        elif token == ';':
+            if stack:
+                stack[-1][1].append(words)
+            words = []
+        else:
+            words.append(token)
+    return found
+
+
+def limit_gaps(config):
+    """Proxied locations without both a per-address and a server-wide request limit.
+
+    Each location is checked on its own directives: nginx ignores the parent's limit_req once a location declares any.
+    """
+    zones = {zone: key for key, zone in re.findall(r'(?m)^\s*limit_req_zone\s+(\S+)\s+zone=([\w-]+):', config)}
+    proxied = [(name, directives) for name, directives in locations(config)
+               if any(directive[:1] == ['proxy_pass'] for directive in directives)]
+    if not proxied:
+        raise AssertionError('No proxied locations found; the gateway configuration was not parsed')
+    gaps = []
+    for name, directives in proxied:
+        keys = {zones.get(word.split('=', 1)[1]) for directive in directives if directive[:1] == ['limit_req']
+                for word in directive[1:] if word.startswith('zone=')}
+        if not {'$binary_remote_addr', '$server_name'} <= keys:
+            gaps.append(name)
+    return gaps
+
+
 def free_port():
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -91,11 +134,13 @@ class Gateway:
             self.close()
             raise
 
-    def connection(self):
-        return http.client.HTTPSConnection('127.0.0.1', self.port, context=CONTEXT, timeout=5)
+    def connection(self, source=None):
+        # Any 127.0.0.0/8 source address works on Linux loopback, so one host can act as many clients.
+        return http.client.HTTPSConnection('127.0.0.1', self.port, context=CONTEXT, timeout=5,
+                                           source_address=(source, 0) if source else None)
 
-    def get(self, path, headers=None):
-        with closing(self.connection()) as client:
+    def get(self, path, headers=None, source=None):
+        with closing(self.connection(source)) as client:
             client.request('GET', path, headers=headers or {})
             response = client.getresponse()
             return response.status, response.read()
@@ -105,9 +150,12 @@ class Gateway:
 
 
 def main():
+    results = {}
+    gaps = limit_gaps(CONFIG.read_text(encoding='utf-8'))
+    assert not gaps, f'Proxied locations without per-address and server-wide limits: {gaps}'
+    results['every_proxied_location_has_ip_and_total_limits'] = True
     upstream = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
-    results = {}
     with tempfile.TemporaryDirectory(prefix='gateway-security-') as temporary:
         directory = Path(temporary)
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
@@ -188,6 +236,22 @@ def main():
             for client in clients:
                 client.close()
             STOP.set()
+            gateway.close()
+        # Fresh limit zones so earlier bursts cannot decide these results.
+        gateway = Gateway(directory, upstream.server_port)
+        try:
+            # Each health call checks the database and the broker; only admitted calls may reach the upstream.
+            before = len(SEEN)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+                statuses = list(pool.map(lambda _: gateway.get('/actuator/health')[0], range(96)))
+            assert 200 in statuses and 429 in statuses
+            assert len(SEEN) - before == statuses.count(200)
+            results['health_check_rate_limited_before_upstream'] = True
+            # One request per source address never trips the per-address zone, so any 429 is the server-wide budget.
+            statuses = [gateway.get('/oauth2/authorization/test', source=f'127.0.0.{n}')[0] for n in range(10, 50)]
+            assert 200 in statuses and 429 in statuses
+            results['oauth_start_limited_across_client_addresses'] = True
+        finally:
             gateway.close()
     upstream.shutdown()
     print(json.dumps({'ok': True, 'checks': results}, indent=2))

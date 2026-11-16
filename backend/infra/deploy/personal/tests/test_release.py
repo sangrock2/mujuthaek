@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import re
+import sys
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def load(name, path):
@@ -20,6 +23,8 @@ def load(name, path):
 host = load('release_host', Path(__file__).resolve().parents[1] / 'release_host.py')
 guard = load('pr_direction', ROOT / '.github/scripts/pr_direction.py')
 frontend = load('frontend_release', ROOT / '.github/scripts/frontend_release.py')
+publisher = load('backend_release', ROOT / '.github/scripts/backend_release.py')
+release_role = load('setup_github_release', Path(__file__).resolve().parents[1] / 'setup_github_release.py')
 
 
 def manifest(release='release-123'):
@@ -37,6 +42,69 @@ class ReleaseSafety(unittest.TestCase):
                     frontend.vercel('deploy')
                 self.assertNotIn('synthetic-vercel-secret', str(error.exception))
                 self.assertIn('[REDACTED]', str(error.exception))
+
+    def test_vercel_cli_never_receives_aws_or_oidc_credentials(self):
+        # Security audit M-2: the deploy job can mint the AWS deploy role; a compromised CLI release must not see it.
+        job = {'VERCEL_TOKEN': 'synthetic-token', 'PATH': '/usr/bin', 'HOME': '/home/runner',
+               'AWS_ACCESS_KEY_ID': 'AKIASYNTHETIC', 'AWS_SECRET_ACCESS_KEY': 'synthetic-secret',
+               'AWS_SESSION_TOKEN': 'synthetic-session', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'synthetic-oidc',
+               'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://example.invalid/oidc', 'GITHUB_TOKEN': 'synthetic-github'}
+        done = SimpleNamespace(returncode=0, stdout='{}', stderr='')
+        with patch.dict('os.environ', job, clear=True), patch.object(frontend.subprocess, 'run', return_value=done) as run:
+            frontend.vercel('promote', 'https://example.vercel.app')
+        environment = run.call_args.kwargs['env']
+        self.assertEqual(environment['VERCEL_ORG_ID'], frontend.TEAM)
+        self.assertEqual(environment['PATH'], '/usr/bin')
+        for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+                     'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_TOKEN'):
+            self.assertNotIn(name, environment)
+
+    def test_production_job_installs_the_vercel_cli_without_install_scripts(self):
+        workflow = (ROOT / '.github/workflows/production.yml').read_text(encoding='utf-8')
+        installs = [line for line in workflow.splitlines() if 'npm install' in line]
+        self.assertTrue(installs)
+        self.assertTrue(all('--ignore-scripts' in line for line in installs))
+
+    def test_deploy_role_can_create_but_never_replace_release_objects(self):
+        # Security audit L-17: a replaced archive or manifest would make a later "rollback to a good release" redeploy
+        # whatever a stolen deploy token stored there.
+        statements = release_role.release_policy()['Statement']
+        puts = [statement for statement in statements if statement['Action'] == 's3:PutObject']
+        create_only = [statement for statement in puts if 'Condition' in statement]
+        self.assertEqual([statement['Resource'] for statement in create_only],
+                         [release_role.BUCKET + '/deployments/releases/*'])
+        self.assertEqual(create_only[0]['Condition'], {'StringEquals': {'s3:if-none-match': '*'}})
+        replaceable = [resource for statement in puts if 'Condition' not in statement for resource in statement['Resource']]
+        # Exactly the pointers the release scripts rewrite; nothing else is replaceable.
+        self.assertEqual(replaceable, [release_role.BUCKET + '/deployments/' + key for key in publisher.MUTABLE])
+        self.assertNotIn('Delete', json.dumps(statements))
+
+    def test_release_publisher_refuses_to_replace_anything_but_the_pointers(self):
+        with patch.object(publisher, 'aws') as command:
+            publisher.put('releases/release-123/manifest.json', 'manifest.json', immutable=True)
+            self.assertEqual(command.call_args.args[-2:], ('--if-none-match', '*'))
+            publisher.put('releases/current.json', 'production-current.json')
+            publisher.put('desired.json', 'desired.json')
+            for key in ('releases/release-123/manifest.json', 'releases/release-123/images.tar.gz', 'states/current.json'):
+                with self.assertRaises(ValueError):
+                    publisher.put(key, 'manifest.json')
+            self.assertEqual(command.call_count, 3)
+
+    def test_workflows_upload_release_objects_only_as_create_only_puts(self):
+        uploads = 0
+        for path in sorted((ROOT / '.github/workflows').glob('*.yml')):
+            text = path.read_text(encoding='utf-8').replace('\\\n', ' ')
+            for line in text.splitlines():
+                if 'deployments/releases/' not in line or line.strip().startswith('#'):
+                    continue
+                if re.search(r'\bs3api\s+(head-object|get-object)\b', line):
+                    continue  # reads only (a re-run keeps an already stored pair)
+                with self.subTest(workflow=path.name, line=line.strip()):
+                    self.assertNotRegex(line, r'\baws\s+s3\s+(cp|mv|sync)\b')
+                    self.assertIn('s3api put-object', line)
+                    self.assertIn("--if-none-match '*'", line)
+                    uploads += 1
+        self.assertGreater(uploads, 0)
 
     def test_vercel_candidate_is_bound_to_existing_team_and_project(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'VERCEL_TOKEN': 'synthetic-token'}):

@@ -1,11 +1,13 @@
 """Runtime selection and mixed-version snapshots must preserve untouched services."""
 import importlib.util
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -120,6 +122,28 @@ class HostSelection(unittest.TestCase):
                 self.assertEqual(result['changed_services'], ['api'])
                 obj.select.assert_called_once_with('release-new', target['images'], ['api'])
                 obj.ensure_images.assert_called_once_with(target, ['api'])
+
+    def test_backend_deploy_reapplies_dead_letter_retention_without_risking_the_release(self):
+        # Security audit L-14: a rebuilt broker volume regains the DLQ cap on the next backend deployment, and a
+        # broker hiccup after a healthy start must not turn into a failed (and then rolled back) release.
+        for failure in [None, subprocess.CalledProcessError(1, 'rabbitmqctl')]:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, patch.object(host.subprocess, 'run'):
+                target = snapshot('release-new')
+                target['images']['notification'] = snapshot()['images']['notification']
+                obj = self.fake(directory, target)
+                events = []
+                obj.select = Mock(side_effect=lambda *args: events.append('select'))
+                def compose(*args, **kwargs):
+                    events.append('retention')
+                    if failure:
+                        raise failure
+                obj.compose = Mock(side_effect=compose)
+                with redirect_stdout(io.StringIO()) as output:
+                    result = obj.apply({'release': 'release-new', 'mode': 'deploy'})
+                self.assertEqual(result['changed_services'], ['api'])
+                self.assertEqual(events, ['select', 'retention'])
+                obj.compose.assert_called_once_with(*host.dlq_retention_command(), timeout=60)
+                self.assertEqual('dlq_retention_policy_not_applied' in output.getvalue(), failure is not None)
 
     def test_health_failure_restores_only_changed_service(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(host.subprocess, 'run'):

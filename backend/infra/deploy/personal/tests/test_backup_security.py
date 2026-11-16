@@ -1,4 +1,8 @@
+import contextlib
+import hashlib
+import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -6,9 +10,89 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+BASE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE))
 import backup_security as backup
+import setup_resources as setup
+import storage_security as storage
 from backup_upload import upload_command
+
+ACCOUNT = '123456789012'
+BUCKET = f'mujuthaek-personal-{ACCOUNT}-raw'
+OWNED = [{'Key': 'Project', 'Value': 'mujuthaek-personal'}]
+RUNTIME_USER = 'mujuthaek-personal-runtime-20261113'
+
+
+class FakeAWS:
+    """Answers only the calls a path makes and records every inline IAM policy it writes."""
+
+    def __init__(self, responses):
+        self.responses, self.policies, self.actions = responses, {}, []
+
+    def verify(self, require_credits=True):
+        return {}
+
+    def call(self, service, action, *args, region=None):
+        self.actions.append(action)
+        if action == 'put-user-policy':
+            options = dict(zip(args[::2], args[1::2]))
+            self.policies[options['--policy-name']] = json.loads(options['--policy-document'])
+            return {}
+        response = self.responses.get(action, {})
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def fresh_install(runtime):
+    aws = FakeAWS({
+        'get-instance': {'instance': {'tags': [{'key': 'Project', 'value': 'mujuthaek-personal'}]}},
+        'get-static-ips': {'staticIps': [{'name': setup.STATIC_IP_NAME, 'ipAddress': '192.0.2.10', 'attachedTo': setup.INSTANCE}]},
+        'list-buckets': {'Buckets': [{'Name': BUCKET}]},
+        'get-bucket-tagging': {'TagSet': OWNED},
+        'get-bucket-policy': RuntimeError('An error occurred (NoSuchBucketPolicy)'),
+        'create-access-key': {'AccessKey': {'AccessKeyId': 'AKIAEXAMPLEEXAMPLE00', 'SecretAccessKey': 'example-only'}},
+    })
+    argv = ['setup_resources.py', '--profile', 'personal-example', '--account', ACCOUNT]
+    with patch.object(setup, 'AWS', return_value=aws), patch.object(setup, 'RUNTIME', runtime), \
+            patch.object(sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
+        setup.main()
+    return aws
+
+
+def live_hardening(runtime):
+    """The live host's path: backup separation finalize, then the storage boundary installer."""
+    arn, key = f'arn:aws:iam::{ACCOUNT}:user/mujuthaek-personal-backup', 'AKIABACKUPEXAMPLE000'
+    private = runtime / '.env.backup-isolated'
+    private.write_text(f'AWS_ACCESS_KEY_ID={key}\nBACKUP_IDENTITY_ARN={arn}\n')
+    # An existing snapshot skips the owner-only file helper (icacls on Windows).
+    (runtime / 'app-storage-policy-before-backup-separation.json').write_text('{}')
+    receipt = {'ok': True, 'get_put_verified': True, 'overwrite_blocked': True,
+               'bucket_fingerprint': hashlib.sha256(BUCKET.encode()).hexdigest(),
+               'identity_fingerprint': hashlib.sha256(arn.encode()).hexdigest(),
+               'key_fingerprint': hashlib.sha256(key.encode()).hexdigest()}
+    config = {'account': ACCOUNT, 'bucket': BUCKET, 'iam_users': [RUNTIME_USER]}
+    finalize = FakeAWS({
+        'get-user': {'User': {'Tags': OWNED}},
+        'list-attached-user-policies': {'AttachedPolicies': []},
+        'list-groups-for-user': {'Groups': []},
+        'get-user-policy': {'PolicyDocument': {'Version': '2012-10-17', 'Statement': []}},
+    })
+    with patch.object(backup, 'PRIVATE', private), patch.object(backup, 'RUNTIME', runtime), \
+            contextlib.redirect_stdout(io.StringIO()):
+        backup.finalize(finalize, config, receipt)
+    boundary = FakeAWS({
+        'get-bucket-tagging': {'TagSet': OWNED},
+        'get-user': {'User': {'Tags': OWNED}},
+        'get-bucket-policy': RuntimeError('An error occurred (NoSuchBucketPolicy)'),
+        'get-user-policy': RuntimeError('An error occurred (NoSuchEntity)'),
+    })
+    (runtime / 'config.json').write_text(json.dumps(config))
+    with patch.object(storage, 'AWS', return_value=boundary), \
+            patch.object(sys, 'argv', ['storage_security.py', '--config', str(runtime / 'config.json')]), \
+            contextlib.redirect_stdout(io.StringIO()):
+        storage.main()
+    return {**finalize.policies, **boundary.policies}
 
 
 class BackupSecurityTests(unittest.TestCase):
@@ -74,6 +158,37 @@ class BackupSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): backup.prepare(SimpleNamespace(call=call), {'bucket': 'example-bucket'})
         self.assertNotIn('put-user-policy', calls)
         self.assertNotIn('create-access-key', calls)
+
+
+class FreshInstallTests(unittest.TestCase):
+    def test_fresh_install_starts_with_the_permissions_a_finalized_live_host_has(self):
+        # Security audit L-19: a new install or disaster recovery must not give the app key backup access until a
+        # separate manual finalize step runs.
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            fresh = fresh_install(Path(first))
+            live = live_hardening(Path(second))
+        self.assertEqual(fresh.policies, live)
+        self.assertEqual(set(fresh.policies), {backup.APP_POLICY, storage.BOUNDARY_POLICY})
+        app = json.dumps(fresh.policies[backup.APP_POLICY])
+        self.assertNotIn(f'"arn:aws:s3:::{BUCKET}/*"', app)
+        self.assertIn(f'arn:aws:s3:::{BUCKET}/backups/*', app)
+        # The access key is created only once its final permissions are in place.
+        last_policy = max(index for index, action in enumerate(fresh.actions) if action == 'put-user-policy')
+        self.assertGreater(fresh.actions.index('create-access-key'), last_policy)
+
+    def test_fresh_install_generates_every_required_and_new_runtime_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fresh_install(Path(directory))
+            lines = (Path(directory) / '.env').read_text(encoding='ascii').splitlines()
+            versions = (Path(directory) / 'versions.env').read_text(encoding='ascii')
+        values = dict(line.split('=', 1) for line in lines)
+        # Security audit L-1/L-15: a private IP-hash salt and a dedicated unsubscribe-link key.
+        for name in ('TRAFFIC_IP_SALT', 'EMAIL_UNSUBSCRIBE_KEY'):
+            self.assertRegex(values[name], r'^[0-9a-f]{64}$')
+        self.assertEqual(len({values[name] for name in setup.SECRETS}), len(setup.SECRETS))
+        required = set(re.findall(r'\$\{(\w+):\?', (BASE / 'compose.prod.yml').read_text(encoding='ascii')))
+        self.assertEqual(required - set(values), {'RELEASE'})
+        self.assertRegex(versions, r'(?m)^RELEASE=\S+$')
 
 
 if __name__ == '__main__':
