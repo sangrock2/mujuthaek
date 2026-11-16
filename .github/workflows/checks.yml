@@ -10,6 +10,16 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  dependencies:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
   web:
     uses: ./.github/workflows/web.yml
   backend:
@@ -23,7 +33,7 @@ jobs:
   ready:
     name: CI ready
     if: always()
-    needs: [web, backend, contracts, e2e, secrets]
+    needs: [dependencies, web, backend, contracts, e2e, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Require every check
@@ -33,9 +43,12 @@ jobs:
           CONTRACTS: ${{ needs.contracts.result }}
           E2E: ${{ needs.e2e.result }}
           SECRETS: ${{ needs.secrets.result }}
+          DEPENDENCIES: ${{ needs.dependencies.result }}
+          EVENT: ${{ github.event_name }}
         run: |
           test "$WEB" = success
           test "$BACKEND" = success
           test "$CONTRACTS" = success
           test "$E2E" = success
           test "$SECRETS" = success
+          if [ "$EVENT" = pull_request ]; then test "$DEPENDENCIES" = success; fi

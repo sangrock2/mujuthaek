@@ -46,15 +46,20 @@ def plan_policy(bucket=BUCKET):
     ]}
 
 
-def subject(prefix, workflow, repo=REPO):
-    return f'{prefix}:ref:refs/heads/main:workflow_ref:{repo}/.github/workflows/{workflow}@refs/heads/main'
+def subject(prefix, workflow, repo=REPO, environment=None):
+    context = 'ref:refs/heads/main'
+    if environment is not None:
+        if environment != 'vercel-production':
+            raise ValueError('Unrecognized protected deployment environment')
+        context = 'environment:' + environment
+    return f'{prefix}:{context}:workflow_ref:{repo}/.github/workflows/{workflow}@refs/heads/main'
 
 
-def trust_policy(prefix, workflows, provider=PROVIDER):
+def trust_policy(prefix, workflows, provider=PROVIDER, environment=None):
     return {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow', 'Principal': {'Federated': provider},
             'Action': 'sts:AssumeRoleWithWebIdentity', 'Condition': {'StringEquals': {
                 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-                'token.actions.githubusercontent.com:sub': [subject(prefix, workflow) for workflow in workflows]}}}]}
+                'token.actions.githubusercontent.com:sub': [subject(prefix, workflow, environment=environment) for workflow in workflows]}}}]}
 
 
 def subject_prefix(oidc):

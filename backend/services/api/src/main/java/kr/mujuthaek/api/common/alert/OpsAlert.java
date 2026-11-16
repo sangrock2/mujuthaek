@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import kr.mujuthaek.api.common.logging.LogText;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,7 +76,7 @@ public class OpsAlert {
       return;
     }
     if (!properties.enabled()) {
-      log.debug("슬랙 알림 주소가 없어 보내지 않아요: {}", title);
+      log.debug("슬랙 알림 주소가 없어 보내지 않아요: {}", LogText.singleLine(title, 256));
       return;
     }
     Thread.ofVirtual().name("ops-alert").start(() -> post(text));

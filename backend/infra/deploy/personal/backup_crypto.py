@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from private_files import create_private_file
 
 
 def transform(source, destination, certificate, *, private_key=None, openssl=None):
@@ -22,7 +23,7 @@ def transform(source, destination, certificate, *, private_key=None, openssl=Non
     else:
         args = ['-encrypt', '-aes-256-gcm', '-stream', '-outform', 'DER', '-recip', str(certificate),
                 '-keyopt', 'rsa_padding_mode:oaep', '-keyopt', 'rsa_oaep_md:sha256']
-    descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    descriptor = create_private_file(destination)
     try:
         with os.fdopen(descriptor, 'wb') as output:
             result = subprocess.run([binary, 'cms', '-binary', *args, '-in', str(source)],

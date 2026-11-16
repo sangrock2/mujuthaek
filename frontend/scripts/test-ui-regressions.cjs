@@ -550,6 +550,7 @@ assert.deepEqual(
 assert.deepEqual(base["form-action"], ["'self'"]);
 assert.deepEqual(base["default-src"], ["'self'"]);
 assert.deepEqual(base["object-src"], ["'none'"]);
+assert.deepEqual(base["base-uri"], ["'none'"]);
 assert.deepEqual(base["frame-ancestors"], ["'none'"]);
 assert.equal(
   base["img-src"].some((s) => s.includes("*") && !s.includes(".")),
@@ -562,7 +563,8 @@ assert.deepEqual(csp({ apiOrigin: "http://127.0.0.1:18080" })["connect-src"], [
   "http://127.0.0.1:18080",
 ]);
 const withThirdParties = csp({ analytics: true, kakaoMap: true });
-assert.ok(withThirdParties["script-src"].includes("https://*.googletagmanager.com"));
+assert.ok(withThirdParties["script-src"].includes("https://www.googletagmanager.com"));
+assert.equal(withThirdParties["script-src"].includes("https://*.googletagmanager.com"), false);
 assert.ok(withThirdParties["connect-src"].includes("https://*.google-analytics.com"));
 assert.ok(withThirdParties["script-src"].includes("dapi.kakao.com"));
 assert.ok(withThirdParties["img-src"].includes("*.daumcdn.net"));

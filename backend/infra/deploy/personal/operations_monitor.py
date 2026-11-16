@@ -214,7 +214,7 @@ def send_report(directory, report, alerts):
     lines = ['무주택자들 운영 점검', report['checked_at'], '', *alerts.values(), '',
              'AWS 비용·크레딧은 집계 지연이 있을 수 있습니다. 예산은 크레딧 차감 전 기준이며 자동 중지 한도가 아닙니다.',
              '크레딧 만료일은 사용자 제공 정보입니다. Billing → Credits에서 개별 만료일도 확인해 주세요.',
-             'Vercel 토큰 교체: Vercel Account → Tokens에서 새 토큰 생성 → GitHub Actions secret VERCEL_TOKEN 교체.',
+             'Vercel 토큰 교체: Vercel Account → Tokens에서 새 토큰 생성 → GitHub vercel-production 환경의 VERCEL_TOKEN 교체.',
              'IAM 키는 만료일이 없으며, 권고 시 새 키 적용·발송/백업/배포 검증 후 기존 키를 비활성화합니다.',
              '', json.dumps(report, ensure_ascii=False, indent=2)]
     message = {'Subject': {'Data': '[무주택자들] 운영 점검 알림', 'Charset': 'UTF-8'},
@@ -245,9 +245,19 @@ def run(send_snapshot=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--send-report', action='store_true')
+    parser.add_argument('--verify-only', action='store_true',
+                        help='Verify provider authentication without sending mail or writing state')
     args = parser.parse_args()
     try:
         configure(json.loads(os.environ['OPERATIONS_CONFIG']))
+        if args.verify_only:
+            if args.send_report:
+                raise CheckError('Verification cannot send a report.')
+            if aws('sts', 'get-caller-identity')['Account'] != ACCOUNT:
+                raise CheckError('Account mismatch.')
+            vercel_status(os.environ.get('VERCEL_TOKEN'))
+            print('AWS OIDC and protected Vercel credential verified; no mail or monitor state changes.')
+            return 0
         ok = run(args.send_report)
     except Exception:
         # Public repository: never print provider payloads, balances, token metadata or stack traces.

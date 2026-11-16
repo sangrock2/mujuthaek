@@ -42,6 +42,9 @@ public class CriteriaService {
    * @param noticeType 공고 유형별 순위 요건이 있으면 그것 (RANK_CRITERIA의 byNoticeType)
    */
   public CriteriaResponse criteria(Integer year, String noticeType) {
+    if (year != null && (year < 2000 || year > 2200)) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED);
+    }
     LocalDate today = LocalDate.now(clock);
     int y =
         year != null

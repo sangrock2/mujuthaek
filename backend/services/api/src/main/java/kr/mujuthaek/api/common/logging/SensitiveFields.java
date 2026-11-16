@@ -115,8 +115,17 @@ public final class SensitiveFields {
 
   /** 예외를 로그에 남기기 전에: 메시지(원인 포함)를 가린 같은 모양의 예외. 스택 위치는 그대로예요. */
   public static Throwable masked(Throwable t) {
-    Throwable cause = t.getCause() != null && t.getCause() != t ? masked(t.getCause()) : null;
-    var copy = new MaskedException(t.getClass().getName() + ": " + mask(t.getMessage()), cause);
+    return masked(t, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+  }
+
+  private static Throwable masked(Throwable t, java.util.Set<Throwable> seen) {
+    if (seen.size() >= 16 || !seen.add(t)) {
+      return new MaskedException("[cause chain truncated]", null);
+    }
+    Throwable cause = t.getCause() != null ? masked(t.getCause(), seen) : null;
+    var copy =
+        new MaskedException(
+            t.getClass().getName() + ": " + LogText.singleLine(mask(t.getMessage()), 2048), cause);
     copy.setStackTrace(t.getStackTrace());
     return copy;
   }

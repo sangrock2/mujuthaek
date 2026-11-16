@@ -37,11 +37,11 @@ def policy():
 
 def operations_trust(prefix):
     provider = PROVIDER.replace('659355919826', settings.ACCOUNT)
-    return trust_policy(prefix, WORKFLOWS, provider=provider)
+    return trust_policy(prefix, WORKFLOWS, provider=provider, environment='vercel-production')
 
 
 def secret(name, value):
-    subprocess.run(['gh', 'secret', 'set', name, '--repo', REPO], input=value,
+    subprocess.run(['gh', 'secret', 'set', name, '--repo', REPO, '--env', 'vercel-production'], input=value,
                    check=True, capture_output=True, text=True, timeout=60)
 
 

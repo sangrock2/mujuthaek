@@ -68,6 +68,7 @@ public interface EligibilityApiSpec {
   @ApiResponse(responseCode = "200", description = "기준 금액")
   @ApiResponse(responseCode = "404", description = "CRITERIA_NOT_FOUND — 그 연도의 판정 기준값이 아직 없어요")
   ResponseEntity<CriteriaResponse> criteria(
-      @Parameter(description = "기준 연도. 비우면 오늘 쓰는 가장 최근 연도", example = "2026") Integer year,
+      @Parameter(description = "기준 연도 (2000~2200). 비우면 오늘 쓰는 가장 최근 연도", example = "2026")
+          Integer year,
       @Parameter(description = "공고 유형. 그 유형의 순위 요건이 있으면 그것을, 없으면 기본 순위 요건을 줘요") String noticeType);
 }
