@@ -31,10 +31,20 @@ class Price:
             (plain * self.input + cached * self.cached_input + writes * self.cache_write) * input_factor + output_tokens * self.output * output_factor
         ) / 1_000_000
 
-    def worst_usd(self, chars: int, max_output_tokens: int) -> float:
-        """보내기 전 최악 비용: 입력 글자 수를 모두 캐시 쓰기 토큰으로(한국어는 대개 토큰 수 ≤ 글자 수), 출력 한도를 모두 씀."""
-        input_factor, output_factor = (2.0, 1.5) if self.long_context_tokens is not None and chars > self.long_context_tokens else (1.0, 1.0)
-        return (chars * self.cache_write * input_factor + max_output_tokens * self.output * output_factor) / 1_000_000
+    def worst_usd(self, input_tokens: int, max_output_tokens: int) -> float:
+        """보내기 전 최악 비용: 입력 토큰 상한(input_token_ceiling)을 모두 캐시 쓰기 토큰으로, 출력 한도를 모두 씀.
+        장문 요율(long_context_tokens 초과)도 같은 상한으로 정해요."""
+        long = self.long_context_tokens is not None and input_tokens > self.long_context_tokens
+        input_factor, output_factor = (2.0, 1.5) if long else (1.0, 1.0)
+        return (input_tokens * self.cache_write * input_factor + max_output_tokens * self.output * output_factor) / 1_000_000
+
+
+def input_token_ceiling(text: str) -> int:
+    """글 → 입력 토큰 수의 상한(2026-11-16 보안 감사 L-21). OpenAI 토크나이저(바이트 단위 BPE)는 UTF-8 한 바이트가 많아야 토큰 하나라서
+    UTF-8 바이트 수가 토큰 수를 넘지 않아요. 예전에는 글자 수를 썼는데(한국어는 대개 토큰 ≤ 글자), 드문 한자는 글자당 약 4토큰이라
+    (CJK 확장 B 1,000자 = 3,982토큰, o200k 실측) 상한이 실제의 약 1/4로, 장문 요율 경계를 넘으면 최대 약 1/8로 잡혀 공고·하루·월 상한을 넘을 수 있었어요.
+    보통 한국어 글은 바이트 수가 실제 토큰의 약 3배라 그만큼 넉넉히 잡아요(상한의 뜻은 같고 예약만 커져요). 짝 없는 서로게이트도 세요."""
+    return len(text.encode("utf-8", "surrogatepass"))
 
 
 IMAGE_TOKENS = 3_000  # 그림 한 장의 입력 토큰 상한 추정(쪽 그림 120dpi 기준, 실제보다 넉넉하게)
@@ -82,12 +92,12 @@ class Budget:
     _entries: dict[int, str] = field(default_factory=dict, init=False, repr=False, compare=False)  # 표 → 장부 ID
 
     def worst_case(self, request: ModelRequest) -> float:
-        # 토큰 수를 모르므로 글자 수를 상한으로 씁니다(한국어는 대개 토큰 수 ≤ 글자 수).
-        chars = len(request.system) + len(request.user) + len(request.instructions) + IMAGE_TOKENS * len(request.images)
+        # 토큰 수를 모르므로 UTF-8 바이트 수를 상한으로 씁니다(input_token_ceiling, 2026-11-16 보안 감사 L-21: 예전엔 글자 수).
+        tokens = sum(input_token_ceiling(text) for text in (request.system, request.user, request.instructions)) + IMAGE_TOKENS * len(request.images)
         # 출력 형식(JSON 스키마)도 입력으로 함께 보냅니다. 공유 형식을 쓰면 더 큰 쪽이 가므로 둘 중 큰 것을 셉니다(검토 2026-10-20)
-        chars += max((len(json.dumps(s, ensure_ascii=False)) for s in (request.output_schema, request.shared_schema) if s), default=0)
-        chars += request.tool_chars()  # 도구 설명과 앞선 차례(도구 호출·결과)도 입력으로 갑니다
-        return PRICES[self.model].worst_usd(chars, request.max_output_tokens)
+        tokens += max((input_token_ceiling(json.dumps(s, ensure_ascii=False)) for s in (request.output_schema, request.shared_schema) if s), default=0)
+        tokens += sum(input_token_ceiling(text) for text in request.tool_texts())  # 도구 설명과 앞선 차례(도구 호출·결과)도 입력으로 갑니다
+        return PRICES[self.model].worst_usd(tokens, request.max_output_tokens)
 
     def _fits(self, worst: float) -> bool:
         held = sum(self._held.values()) if self._held else 0.0  # 잡아 둔 것이 없으면 정확히 0 (순서대로 부를 때 이전과 같은 계산)

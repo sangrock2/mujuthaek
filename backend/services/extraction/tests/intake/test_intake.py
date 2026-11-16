@@ -280,6 +280,31 @@ def test_attachment_fields_follow_the_contract(reader, change, path):
     assert result.status is IntakeStatus.REJECTED and result.issues[0].path == path
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "raw/lh/../area/x.pdf",
+        "raw/lh/./x.pdf",
+        "raw/lh//x.pdf",
+        "/raw/lh/x.pdf",
+        "raw/lh/1\\..\\x.pdf",
+        "raw/lh/x\ny.pdf",
+        "raw/lh/" + "가" * 400,
+    ],
+)
+def test_attachment_key_cannot_leave_its_area(reader, key):
+    """S3 키에 `..`·빈 조각·역슬래시·제어 문자·너무 긴 키를 받지 않아요(2026-11-16 보안 감사 4장)."""
+    files = [{"name": "a.pdf", "downloadUrl": "https://x.kr/f", "sha256": PDF_SHA, **fields("pdf", "NOTICE_DOC"), "s3Key": key}]
+    result = build_intake(make_event(files=files), reader)
+    assert result.status is IntakeStatus.REJECTED and result.issues[0].path == "/payload/files/0/s3Key"
+
+
+@pytest.mark.parametrize("key", ["raw/dcco/1/v2.txt", "text/dcco/../v2.txt", "text/dcco/1/v2.pdf", "/text/dcco/1/v2.txt", "text/dcco/1" + chr(0) + "/v2.txt"])
+def test_text_key_must_point_at_collected_text(reader, key):
+    result = build_intake(make_event(textKey=key), reader)
+    assert result.status is IntakeStatus.REJECTED and result.issues[0].path == "/payload/textKey"
+
+
 def test_previous_event_format_without_new_file_fields_is_accepted(reader):
     # fileType·role·s3Key 칸을 추가하기 전 collector의 이벤트: 이름으로 형식·역할을 채우고, 위치가 없어 수집 글자로 추출 + 사람 확인
     files = [

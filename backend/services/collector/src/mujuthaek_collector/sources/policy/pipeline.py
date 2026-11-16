@@ -33,6 +33,7 @@ from mujuthaek_collector.core import intake
 from mujuthaek_collector.core.documents.text import extract_text
 from mujuthaek_collector.core.file_store import FileStore, add_months, content_type, object_key, text_key
 from mujuthaek_collector.core.files import DOC_EXTS, FileRef
+from mujuthaek_collector.core.links import public_link
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS
 from mujuthaek_collector.core.storage import DONE, FAILED, HELD, IGNORED, MAX_ATTEMPTS, PENDING, SKIPPED
 from mujuthaek_collector.core.versioning import content_hash, sha256_hex
@@ -230,6 +231,7 @@ def process_policy(ctx: PolicyContext, policy: PolicyRow) -> bool:
     source = ctx.source
     item = PolicyItem(policy.policy_id, policy.title, policy.marker, policy.list_raw)
     detail = source.fetch_detail(ctx.api, item)
+    keep_public_links(ctx, policy, detail)
 
     wants_documents = source.needs_documents(detail.record)
     candidates = [Candidate(f, "API", detail.detail_url) for f in detail.files] if wants_documents else []
@@ -322,6 +324,22 @@ def process_policy(ctx: PolicyContext, policy: PolicyRow) -> bool:
     )
     log.info("정책 새 버전 저장", extra={"source": source.code, "policy": policy.policy_id, "version": version, "files": len(saved)})
     return True
+
+
+LINK_LABELS = {"detail_url": "원문 주소", "apply_url": "신청 주소"}
+
+
+def keep_public_links(ctx: PolicyContext, policy: PolicyRow, detail: PolicyDetail) -> None:
+    """화면 링크가 되는 원문·신청 주소는 http(s) 주소만 남겨요(core/links.py, 2026-11-16 보안 감사 L-4). 출처 API 값을 그대로 옮기면
+    javascript:·data: 주소나 사용자 정보가 든 주소도 「신청하러 가기」 링크로 나갔어요. 아닌 값은 비우고(링크 없음) 로그를 남겨요.
+    회차 경고는 같은 칸마다 한 번만 남겨요(한 출처의 여러 정책이 같은 모양이면 경고가 쌓이지 않게). 경고에 주소 자체는 넣지 않아요."""
+    for name, label in LINK_LABELS.items():
+        value = getattr(detail, name)
+        link = public_link(value)
+        if link is None and isinstance(value, str) and value.strip():
+            log.warning("http(s) 주소가 아니어서 비웠어요", extra={"source": ctx.source.code, "policy": policy.policy_id, "field": name})
+            ctx.warn_once(f"link:{name}", f"{ctx.source.name} {label}가 http(s) 주소가 아니어서 비웠어요 (첫 사례 정책 ID {policy.policy_id})")
+        setattr(detail, name, link)
 
 
 def policy_fields(source: PolicySource, item: PolicyItem, detail: PolicyDetail) -> PolicyFields:

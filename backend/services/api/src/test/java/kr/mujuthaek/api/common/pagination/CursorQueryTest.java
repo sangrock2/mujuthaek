@@ -74,4 +74,20 @@ class CursorQueryTest {
                 .nextCursor())
         .isNull();
   }
+
+  /** 조작한 날짜 커서는 SQL의 date 변환에서 500이 났어요 (2026-11-16 보안 감사 L-12). */
+  @Test
+  void dateCursorRejectsAnythingButAPlainDate() {
+    UUID id = UUID.randomUUID();
+    assertThat(new CursorKey("LATEST", "0001-01-01", id).date()).isEqualTo(LocalDate.of(1, 1, 1));
+    assertThat(new CursorKey("DEADLINE", "9999-12-31", id).date())
+        .isEqualTo(LocalDate.of(9999, 12, 31));
+    for (String bad :
+        new String[] {"", "x", "2026-13-01", "2026-10-31'", "+10000-01-01", "-0001-01-01"}) {
+      assertThatThrownBy(() -> new CursorKey("LATEST", bad, id).date())
+          .isInstanceOfSatisfying(
+              CustomException.class,
+              e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.INVALID_CURSOR));
+    }
+  }
 }

@@ -100,14 +100,26 @@ public class OpsAlert {
       return null;
     }
     StringBuilder text =
-        new StringBuilder("[").append(properties.environment()).append(" api] ").append(title);
+        new StringBuilder("[")
+            .append(properties.environment())
+            .append(" api] ")
+            .append(escape(title));
     if (skipped[0] > 0) {
       text.append(" (지난 알림 뒤 같은 일 ").append(skipped[0]).append("번 더)");
     }
     if (detail != null && !detail.isBlank()) {
-      text.append("\n```").append(detail.strip()).append("```");
+      text.append("\n```").append(escape(detail.strip())).append("```");
     }
     return text.length() > MAX_TEXT ? text.substring(0, MAX_TEXT) + "…```" : text.toString();
+  }
+
+  /**
+   * 슬랙 mrkdwn의 제어 문자를 그대로 보여 주게 바꿔요. 제목에는 요청 주소처럼 밖에서 정할 수 있는 값이 들어가서, 그대로 두면 {@code <!channel>} 같은
+   * 전체 호출이나 {@code <https://…|여기>} 같은 링크를 경보 채널에 넣을 수 있었어요(2026-11-16 보안 감사 L-22). 백틱은 코드 블록을 닫지
+   * 못하게 비슷한 글자(ˋ)로 바꿔요.
+   */
+  static String escape(String value) {
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('`', 'ˋ');
   }
 
   private void post(String text) {

@@ -5,14 +5,16 @@ import time
 import uuid
 from pathlib import Path
 
+from release_host import AWS_IMAGE
+
 BASE = Path(__file__).resolve().parent
 values = dict(line.split("=", 1) for line in (BASE / ".env").read_text().splitlines() if line and not line.startswith("#"))
 backup = sorted((BASE / "runtime/backups").glob("api-*.dump"))[-1]
 restore = BASE / "runtime/restore-check"
 restore.mkdir(exist_ok=True, mode=0o700)
 subprocess.run([
-    "docker", "run", "--rm", "--env-file", str(BASE / "runtime/backup-aws.env"),
-    "--mount", f"type=bind,src={restore},dst=/restore", "amazon/aws-cli:2.36.28",
+    "docker", "run", "--rm", "--pull", "never", "--env-file", str(BASE / "runtime/backup-aws.env"),
+    "--mount", f"type=bind,src={restore},dst=/restore", AWS_IMAGE,
     "s3", "cp", f"s3://{values['S3_BUCKET']}/backups/{backup.name}", "/restore/check.dump", "--only-show-errors",
 ], check=True)
 name = "mujuthaek-personal-restore-" + uuid.uuid4().hex[:8]

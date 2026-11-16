@@ -57,6 +57,13 @@ public class ChatMessageRepository {
   /** 최근 보낸 메시지 수와 그중 가장 오래된 시각 (1분 5개 제한). */
   public record RecentSends(int count, OffsetDateTime oldest) {}
 
+  /** 그 회원이 쓴 글의 작성자 이름을 모두 바꿔요 (실명일 수 있는 닉네임을 별칭으로 바꿀 때). 바꾼 줄 수 */
+  public int renameAuthor(UUID userId, String nickname) {
+    return jdbc.update(
+        "update chat.messages set author_nickname = :nickname where user_id = :user",
+        new MapSqlParameterSource().addValue("user", userId).addValue("nickname", nickname));
+  }
+
   public void insert(
       UUID id,
       UUID noticeId,
@@ -92,6 +99,14 @@ public class ChatMessageRepository {
             ChatMessageRepository::row)
         .stream()
         .findFirst();
+  }
+
+  /** 작성자 삭제·관리자 복원·신고의 상태 변경을 같은 메시지 행에서 직렬화해요. */
+  public void lockMessage(UUID id) {
+    jdbc.queryForList(
+        "select id from chat.messages where id = :id for update",
+        new MapSqlParameterSource("id", id),
+        UUID.class);
   }
 
   /**
@@ -221,7 +236,7 @@ public class ChatMessageRepository {
         """
         update chat.messages
         set status = :status, report_count = case when :reset then 0 else report_count end
-        where id = :id
+        where id = :id and status <> 'DELETED'
         """,
         new MapSqlParameterSource()
             .addValue("id", id)
@@ -233,8 +248,8 @@ public class ChatMessageRepository {
   public record MessageRef(UUID id, UUID noticeId) {}
 
   /**
-   * 탈퇴한 회원의 채팅 데이터 줄을 지워요 (다른 모듈처럼): 그 회원이 누른 좋아요(숫자도 줄여요), 남긴 신고(검토 전이면 신고 수도 줄여요), 쓴 메시지(달린
-   * 좋아요·신고는 같이 지워져요). 다른 사람이 단 답장은 남아요.
+   * 탈퇴한 회원의 채팅 데이터 줄을 지워요: 그 회원이 누른 좋아요(숫자도 줄여요), 남긴 신고의 회원 ID·자유 문구, 쓴 메시지(달린 좋아요·신고는 같이 지워져요). 다른
+   * 사람이 단 답장은 남아요.
    *
    * @return 지운 메시지
    */
@@ -247,15 +262,10 @@ public class ChatMessageRepository {
         """,
         params);
     jdbc.update("delete from chat.message_likes where user_id = :user", params);
+    // 숨김 상태의 검토 작업은 회원 탈퇴와 별개로 남겨요. 신고를 지우면 숨김 글이 검토 큐에서 사라져요.
     jdbc.update(
-        """
-        update chat.messages m set report_count = m.report_count - 1
-        where m.report_count > 0
-          and exists (select 1 from chat.message_reports r
-                      where r.message_id = m.id and r.reporter_id = :user and r.review_status = 'PENDING')
-        """,
+        "update chat.message_reports set reporter_id = null, detail = null where reporter_id = :user",
         params);
-    jdbc.update("delete from chat.message_reports where reporter_id = :user", params);
     return jdbc.query(
         "delete from chat.messages where user_id = :user returning id, notice_id",
         params,

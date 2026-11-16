@@ -20,9 +20,11 @@ import re
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any
 from urllib.parse import urlparse
+
+from mujuthaek_platform.http_server import BoundedHTTPServer
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +212,7 @@ def handler_for(connect: Callable[[], Any], token: str | None, runner: Runner | 
     return Handler
 
 
-def serve(db_url: str, runner: Runner | None = None) -> ThreadingHTTPServer:
+def serve(db_url: str, runner: Runner | None = None) -> BoundedHTTPServer:
     """스케줄러와 같이 뒤에서 도는 관리자 API를 시작해요."""
     from mujuthaek_collector.core.storage import PostgresStore
 
@@ -221,6 +223,6 @@ def serve(db_url: str, runner: Runner | None = None) -> ThreadingHTTPServer:
     host = os.getenv("COLLECTOR_ADMIN_HOST", "0.0.0.0")
     if not token:
         log.warning("수집 현황 API 토큰(COLLECTOR_ADMIN_TOKEN)이 없어 같은 컴퓨터에서 온 요청만 받아요")
-    server = ThreadingHTTPServer((host, ADMIN_PORT), handler_for(connect, token, runner))
+    server = BoundedHTTPServer((host, ADMIN_PORT), handler_for(connect, token, runner))
     threading.Thread(target=server.serve_forever, daemon=True, name="collector-admin-api").start()
     return server

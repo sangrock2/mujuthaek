@@ -23,6 +23,7 @@ import { useNotice } from "@/features/notice/queries";
 import { api } from "@/shared/lib/api/client";
 import { endpoints } from "@/shared/lib/api/endpoints";
 import { snapshotRegions } from "@/shared/lib/regions";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import {
   type BusinessSummary,
   type SpaceDetail,
@@ -570,22 +571,27 @@ function policyDetail(
     currentStep: 0,
     schedule: [],
     rules: rulesOf(e.judgment),
-    sourceUrl: e.detailUrl ?? undefined,
+    sourceUrl: safeExternalUrl(e.detailUrl) ?? undefined,
     notReady: !e.judgment,
     summaryNote: text.note,
     about: aboutOf(e.info),
   };
 }
 
-/** 출처 안내 → 상세 "공고 안내" (요약 · 기관 · 문의처 · 접수 방법 · 링크). 칸이 하나도 없으면 없음 */
+/**
+ * 출처 안내 → 상세 "공고 안내" (요약 · 기관 · 문의처 · 접수 방법 · 링크). 칸이 하나도 없으면 없음.
+ * 신청·안내 주소는 출처 API 값을 그대로 옮긴 것이라 http·https 주소일 때만 링크 줄을 둬요 (2026-11-16 보안 감사 L-4)
+ */
 function aboutOf(info: ApiPolicyInfo | null): SpaceDetail["about"] {
   if (!info) return undefined;
+  const applyUrl = safeExternalUrl(info.applyUrl);
+  const guideUrl = safeExternalUrl(info.guideUrl);
   const rows = [
     info.organization && { label: "운영 기관", value: info.organization },
     info.contact && { label: "문의처", value: info.contact },
     info.applyMethod && { label: "접수 방법", value: info.applyMethod },
-    info.applyUrl && { label: "신청 주소", value: "신청하러 가기", href: info.applyUrl },
-    info.guideUrl && { label: "사업 안내", value: "안내 페이지 열기", href: info.guideUrl },
+    applyUrl && { label: "신청 주소", value: "신청하러 가기", href: applyUrl },
+    guideUrl && { label: "사업 안내", value: "안내 페이지 열기", href: guideUrl },
   ].filter((r): r is { label: string; value: string; href?: string } => Boolean(r));
   return info.summary || rows.length ? { summary: info.summary ?? undefined, rows } : undefined;
 }
@@ -637,7 +643,7 @@ export function useApiSpaceDetail(id: string) {
       currentStep: schedule.find((s) => s.now)?.step ?? 0,
       schedule,
       rules: rulesOf(j),
-      sourceUrl: n.doc.source.detailUrl || undefined,
+      sourceUrl: safeExternalUrl(n.doc.source.detailUrl) ?? undefined,
       notReady: Boolean(e) && !j,
     };
   }, [n, evaluation.data]);

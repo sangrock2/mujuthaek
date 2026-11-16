@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import io
 import logging
+import math
 import os
 import re
 from collections import Counter
@@ -48,6 +49,9 @@ PROMPT_VERSION = "image_text/v1"
 THIRD_CALL = "image_text_third"
 THIRD_ENV = "EXTRACTION_IMAGE_THIRD_READING"
 THIRD_RESOLUTION = 400  # 처음 판독(200)·다시 읽기(300)와 다른 입력
+# 쪽 하나를 그리는 화소 상한. pdfplumber는 자를 영역과 상관없이 쪽 전체를 그린 뒤 잘라서, 쪽 크기(MediaBox)만 크게 적은 수백 바이트 PDF
+# 하나가 수 GB를 그려 워커를 메모리 부족으로 죽였어요(2026-11-16 보안 감사 M-5). A3 쪽을 400dpi로 그려도(약 3,100만) 넘지 않아요
+MAX_RENDER_PIXELS = 40_000_000
 THIRD_OUTPUT_TOKENS = 4_000  # 행 부근 조각만 읽음
 BAND_MARGIN = 1.5  # 찾은 행 높이의 몇 배를 위·아래로 더 자를지(두 줄 칸·합친 칸이 잘리지 않게)
 # 실측 최대 2,019(GH 783, 시도 6건)지만 한 호출에 쪽 그림을 6장까지 보내 표가 빽빽하면 쪽마다 수천 토큰이라 그대로 둡니다
@@ -84,12 +88,23 @@ def _render(data: bytes, page_number: int) -> bytes:
     return out.getvalue()
 
 
+def render_scale(page: Any) -> float:
+    """쪽이 너무 크면 모든 해상도(200·300·400dpi)를 같은 비율로 낮춰요(같은 비율이라 세 번째 판독의 행 위치 계산이 그대로 맞아요).
+    보통 쪽(A4·A3)은 1이에요. 쪽 전체를 그리므로 MediaBox·CropBox 중 큰 넓이로 봐요."""
+    boxes = [box for box in (getattr(page, "mediabox", None), getattr(page, "cropbox", None)) if box]
+    area = max([float(page.width * page.height)] + [float((b[2] - b[0]) * (b[3] - b[1])) for b in boxes])
+    largest = area * (max(RESOLUTION, TILE_RESOLUTION, THIRD_RESOLUTION) / 72) ** 2
+    # 화소 수는 올림해서 그려지므로 1%를 남겨요
+    return 1.0 if largest <= MAX_RENDER_PIXELS else math.sqrt(MAX_RENDER_PIXELS / largest) * 0.99
+
+
 def _picture(data: bytes, page_number: int, resolution: int) -> Any:
     """그 쪽의 큰 그림 영역(PIL 그림)."""
     import pdfplumber
 
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         page = pdf.pages[page_number - 1]
+        resolution = resolution * render_scale(page)
         area = float(page.width * page.height) or 1.0
         boxes = [
             (max(float(i["x0"]), 0.0), max(float(i["top"]), 0.0), min(float(i["x1"]), float(page.width)), min(float(i["bottom"]), float(page.height)))

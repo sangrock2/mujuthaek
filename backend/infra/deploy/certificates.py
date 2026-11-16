@@ -106,11 +106,15 @@ def activate(base, settings):
     os.replace(pending, tls / "current")
 
 
-def persist_tls_path(base):
+def persist_tls_path(base, identifier=None):
     path = base / ".env"
     original = path.stat()
-    lines = [line for line in path.read_text().splitlines() if not line.startswith("API_TLS_CERT_DIR=")]
+    removed = ("API_TLS_CERT_DIR=", "API_PUBLIC_HOST=") if identifier else ("API_TLS_CERT_DIR=",)
+    lines = [line for line in path.read_text().splitlines() if not line.startswith(removed)]
     lines.append(f'API_TLS_CERT_DIR="{base / "tls"}"')
+    if identifier:
+        identifier_args(identifier)
+        lines.append(f'API_PUBLIC_HOST="{identifier}"')
     descriptor, temporary = tempfile.mkstemp(prefix=".env-tls-", dir=base)
     with os.fdopen(descriptor, "w") as output:
         output.write("\n".join(lines) + "\n")
@@ -197,7 +201,7 @@ def main():
             folder.chmod(0o755)
         run("docker", "pull", CERTBOT_IMAGE)
         if args.action == "issue":
-            persist_tls_path(base)
+            persist_tls_path(base, settings['identifier'])
             compose(base, args.environment, "stop", "nginx")
             bootstrap = f"mujuthaek-acme-bootstrap-{args.environment}"
             # Only our named bootstrap can be replaced; application containers/volumes are retained.

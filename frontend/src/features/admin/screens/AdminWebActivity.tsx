@@ -80,6 +80,7 @@ export function AdminWebActivity() {
   const items = data?.items ?? [];
   // 처리한 관리자는 회원 ID로 남아 있어서 이름을 찾아요
   const ids = [...new Set(items.map((i) => i.by).filter((b): b is string => !!b && UUID.test(b)))];
+  // 이름 조회 권한이 없으면(403) users가 비어 있고, 아래에서 회원 ID 앞부분으로 보여요
   const { data: users } = useAdminUserNames(ids);
   const nameOf = (by: string | null) => {
     if (!by) return "알 수 없음";

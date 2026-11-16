@@ -10,8 +10,11 @@ if [ -f "$PERF_DIR/.env" ]; then
   set +a
 fi
 
-BASE_URL="${BASE_URL:-http://3.37.131.73}"
-EC2_HOST="${EC2_HOST:-3.37.131.73}"
+# 서버 주소는 저장소에 기본값으로 두지 않고 tools/perf/.env에서만 읽어요(2026-11-16 보안 감사 4장)
+BASE_URL="${BASE_URL:-}"
+EC2_HOST="${EC2_HOST:-}"
+[ -n "$BASE_URL" ] || { echo "tools/perf/.env에 BASE_URL을 적어요 (.env.example 참고)" >&2; exit 1; }
+[ -n "$EC2_HOST" ] || { echo "tools/perf/.env에 EC2_HOST를 적어요 (.env.example 참고)" >&2; exit 1; }
 SSH_USER="${SSH_USER:-ubuntu}"
 SSH_KEY="${SSH_KEY:-}"
 SSH_KEY="${SSH_KEY/#\~/$HOME}"
@@ -21,6 +24,18 @@ GRAFANA=http://localhost:3300
 REMOTE_DIR=/opt/mujuthaek
 
 warn() { echo "  ! $*" >&2; }
+
+# JWT를 직접 만들어도 되는 주소인지: 로컬·테스트 이름만이에요. k6/lib/token.js의 mintAllowed와 같은 규칙이에요
+token_host_allowed() {
+  local rest="${1#*://}" host
+  if [ "${rest#\[}" != "$rest" ]; then host="${rest#\[}" && host="${host%%]*}"; else host="${rest%%[:/?#]*}"; fi
+  host="$(printf '%s' "$host" | tr 'A-Z' 'a-z')"
+  case "$host" in
+    localhost | 127.0.0.1 | ::1 | *.localhost | *.test) return 0 ;;
+    staging.* | dev.* | test.* | qa.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 remote() {
   local key=()

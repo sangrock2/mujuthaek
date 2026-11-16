@@ -41,7 +41,10 @@ GAP = r"(?P<gap>[^\d\n|/;]{0,12}?)"
 AMOUNT = re.compile(
     r"(?P<amount>\d[\d,]*(?:\.\d+)?\s*억(?:\s*\d[\d,]*\s*(?:천\s*)?만)?|\d[\d,]*(?:\.\d+)?)\s*(?P<unit>백\s*만\s*원|천\s*만\s*원|천\s*원|만\s*원|억\s*원|원)"
 )
-AFTER_WORD = re.compile(GAP + AMOUNT.pattern)  # 금액 낱말 바로 뒤의 금액
+AFTER_WORD = re.compile(GAP + AMOUNT.pattern)  # 금액 낱말 바로 뒤의 금액 (자리를 정해 match로만 써요)
+# 글 속 어디든 금액이 있는지(search)만 볼 때는 AMOUNT 대신 이것을 써요: 숫자 덩어리(숫자·쉼표) 첫머리에서만 찾아요. 덩어리 가운데서 시작해도
+# 같은 끝에 닿아 결과는 같은데, AMOUNT.search는 시작 숫자마다 덩어리 끝까지 다시 훑어서 긴 숫자(2만 4천 자리에 20초)에서 제곱으로 느려졌어요
+ANY_AMOUNT = re.compile(r"(?<![\d,]),*+" + AMOUNT.pattern)
 BARE_NUMBER = re.compile(GAP + r"\d")
 # 금액 뒤에서 이 금액 설명이 끝나는 곳: 다른 금액 낱말(보증금·월임대료·분양가·관리비·계약금 등)이나 면적·기간 낱말
 NEXT_WORD = re.compile(ANY_KIND_WORD.pattern + r"|관리비|계약금|중도금|잔금|부가(?:가치)?세|공용|전용|면적|기간|입찰|예정\s*가격")
@@ -119,6 +122,7 @@ def _amounts(text: str, span: tuple[int, int, int]) -> dict[str, Found]:
     start, end, label_at = span
     found = {kind: Found() for kind in MAIN_KINDS}
     piece = text[start:end]
+    label_line_end = text.find("\n", label_at)  # 이름이 나온 줄의 끝 (없으면 -1)
     for kind, word in KIND_WORDS.items():
         for m in word.finditer(piece):
             amount = AFTER_WORD.match(piece, m.end())
@@ -127,16 +131,16 @@ def _amounts(text: str, span: tuple[int, int, int]) -> dict[str, Found]:
                     found[kind].unclear += 1  # 단위 없는 숫자(「보증금 12,000」): 단위를 짐작하지 않습니다
                 continue
             gap = amount["gap"]
-            if NOT_PRICE_BEFORE.search(piece[: m.start()][-6:]) or UNCLEAR_GAP.search(gap) or ANY_KIND_WORD.search(gap):
+            # 앞·뒤 글은 필요한 만큼만 잘라 봅니다(줄 전체를 금액마다 복사하면 금액 낱말이 많은 긴 줄에서 제곱으로 느려졌어요)
+            if NOT_PRICE_BEFORE.search(piece[max(0, m.start() - 6) : m.start()]) or UNCLEAR_GAP.search(gap) or ANY_KIND_WORD.search(gap):
                 found[kind].unclear += 1
                 continue
             if UNCLEAR_TAIL.match(piece, amount.end()):
                 found[kind].unclear += 1
                 continue
             # 다음 금액 낱말 전까지 금액이 또 있으면(「보증금 12,000천원(일반) 또는 9,000천원(청년)」) 어느 것인지 정하지 않습니다
-            rest = piece[amount.end() :]
-            stop = NEXT_WORD.search(rest)
-            if AMOUNT.search(rest[: stop.start() if stop else len(rest)]):
+            stop = NEXT_WORD.search(piece, amount.end())
+            if ANY_AMOUNT.search(piece[amount.end() : stop.start() if stop else len(piece)]):
                 found[kind].unclear += 1
                 continue
             source, unit = amount["amount"].strip(), re.sub(r"\s+", "", amount["unit"])
@@ -146,7 +150,7 @@ def _amounts(text: str, span: tuple[int, int, int]) -> dict[str, Found]:
                 continue
             # 근거: 이름이 같은 줄에 있으면 이름부터 금액 끝까지(한 줄), 아니면 금액 낱말부터
             first = start + m.start()
-            same_line = "\n" not in text[label_at:first]
+            same_line = label_line_end < 0 or label_line_end >= first  # text[label_at:first]에 줄바꿈이 없음 (금액마다 잘라 보지 않아요)
             quote_start = label_at if same_line and label_at <= first else first
             found[kind].values.setdefault(krw, (source, unit, (quote_start, start + amount.end())))
     return found

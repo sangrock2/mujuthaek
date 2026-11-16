@@ -31,9 +31,12 @@ public class EventQueueConfig {
   /**
    * 받는 이벤트 (contracts/schemas/notification-events.draft.md). 모두 api가 보내요. 받을 사람·주소·문구는 api가 정해서
    * 보내고, 알림 서버는 보내기만 해요.
+   *
+   * <p>예전 email.verification.requested(인증 코드 메일)는 더 받지 않아요. api는 링크
+   * 방식(/internal/email-verification)으로 바꿔 이 이벤트를 보내지 않는데, 받는 쪽이 남아 있어 MQ에 쓸 수 있는 누구나 동의·횟수 제한 없이 아무
+   * 주소로 공식 메일을 보낼 수 있었어요(2026-11-16 보안 감사 M-8). 브로커에 남은 예전 연결로 오면 실패 큐로 가요.
    */
-  static final List<String> ROUTING_KEYS =
-      List.of("notification.requested", "email.verification.requested", "user.withdrawn");
+  static final List<String> ROUTING_KEYS = List.of("notification.requested", "user.withdrawn");
 
   @Bean
   Declarables notificationQueues() {

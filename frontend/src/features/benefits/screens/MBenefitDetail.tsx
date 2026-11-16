@@ -100,7 +100,7 @@ export function MBenefitDetail({ id }: { id: string }) {
                 href={b.sourceUrl}
                 target="_blank"
                 onClick={() => track("notice_source_open", { notice_kind: "benefit", via: "site" })}
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="inline-flex min-h-[44px] items-center text-[14px] font-bold no-underline"
               >
                 근거 원문
@@ -168,7 +168,7 @@ export function MBenefitDetail({ id }: { id: string }) {
               href={b.policyUrl}
               target="_blank"
               onClick={() => track("notice_source_open", { notice_kind: "benefit", via: "site" })}
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="rounded-control bg-fill text-text hover:text-text flex min-h-[54px] min-w-0 flex-[1_1_0] items-center justify-center text-[15px] font-bold no-underline"
             >
               정책 원문
@@ -178,7 +178,7 @@ export function MBenefitDetail({ id }: { id: string }) {
             <a
               href={applyHref(b)}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="rounded-control bg-brand flex min-h-[54px] min-w-0 flex-[2_1_0] items-center justify-center text-[16px] font-extrabold text-white no-underline hover:text-white"
             >
               신청하러 가기

@@ -57,6 +57,19 @@ def test_slack_sender_uses_the_shared_notifier(monkeypatch):
     assert "secret" not in str(error.value)
 
 
+def test_slack_sender_escapes_the_whole_text(monkeypatch):
+    # 2026-11-16 보안 감사 L-22: 경고 글의 DB 값(분야 이름 등)이 <!channel>·링크·코드 표시가 되지 않게 통째로 이스케이프해요
+    from mujuthaek_platform import slack
+
+    sent = []
+    monkeypatch.setattr(slack.urllib.request, "urlopen", lambda request, timeout: sent.append(json.loads(request.data)) or FakeResponse(200))
+    costs = COSTS | {"fields": [{"field": "<!channel> `HOUSING` & <https://evil.example|x>", "paidCalls": 1, "costUsd": 1.0}]}
+    slack_sender("https://hooks.example.invalid/T/B/x")(alert_text(costs))
+    [body] = sent
+    assert "<!channel>" not in body["text"] and "<https://" not in body["text"] and "`" not in body["text"]
+    assert "&lt;!channel&gt; ˋHOUSINGˋ &amp; &lt;https://evil.example|x&gt;" in body["text"] and "$500.00 / $600.00" in body["text"]
+
+
 def test_alert_text_has_month_ratio_and_each_field():
     text = alert_text(COSTS)
     assert "2026-10" in text and "83%" in text and "$500.00 / $600.00" in text

@@ -41,6 +41,14 @@ def test_tls_setting_preserves_other_environment_entries(tmp_path):
     assert path.read_text() == f'UNCHANGED=test-only\nAPI_TLS_CERT_DIR="{tmp_path / "tls"}"\n'
 
 
+def test_certificate_identifier_pins_the_gateway_host(tmp_path):
+    path = tmp_path / '.env'
+    path.write_text('UNCHANGED=test-only\nAPI_PUBLIC_HOST=old.example.org\n')
+    certificates.persist_tls_path(tmp_path, 'api.example.org')
+    assert path.read_text().endswith('API_PUBLIC_HOST="api.example.org"\n')
+    assert 'API_PUBLIC_HOST=old.example.org' not in path.read_text()
+
+
 @pytest.mark.skipif(__import__("os").name == "nt", reason="symlink activation uses Linux deployment semantics")
 def test_activation_validates_before_atomic_pair_switch(tmp_path, monkeypatch):
     lineage = tmp_path / "letsencrypt/live/mujuthaek-prod"

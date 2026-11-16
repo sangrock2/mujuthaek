@@ -10,6 +10,10 @@ spring:
     url: ${API_DB_URL:jdbc:postgresql://localhost:5432/api}
     username: ${API_DB_USER:api_app}
     password: ${API_DB_PASSWORD:api-pass}
+  jdbc:
+    template:
+      # HTTP 검색이 DB 연결을 오래 붙잡지 않게 SQL 한 문장마다 제한해요. Flyway·직접 JDBC 적재에는 적용되지 않아요.
+      query-timeout: ${API_QUERY_TIMEOUT:15s}
   jpa:
     open-in-view: false
     hibernate:
@@ -92,6 +96,9 @@ app:
     cookie-secure: false                # 로컬은 http라 false. 운영은 true (application-prod.yml)
   push:                                 # 웹 푸시 (contracts/schemas/web-push.draft.md). 개인키는 알림 서버에만 있어요
     vapid-public-key: ${PUSH_VAPID_PUBLIC_KEY:}  # 비어 있으면 구독을 받지 않아요 (공개키 API 503). 만들기: npx web-push generate-vapid-keys
+  metrics:                              # /actuator/prometheus 문지기 (MetricsAccessFilter, 2026-11-16 보안 감사 4장)
+    token: ${METRICS_TOKEN:}            # 있으면 Authorization: Bearer <값>일 때만 지표를 줘요. Prometheus는 scrape 설정의 authorization으로 넣어요
+    require-token: false                # 토큰이 없을 때 지표를 막을지. 로컬·테스트는 열고, 운영(application-prod.yml)은 막아요
 
 mujuthaek:
   judging:                              # 판정 캐시 (공고: 판정 모델 한 개 약 4.4KB, 혜택: 지원 내용·읽어 둔 조건). 적중률 mujuthaek_judging_cache_total
@@ -113,13 +120,17 @@ mujuthaek:
       base-url: ${COLLECTOR_ADMIN_URL:http://localhost:8093}
       token: ${COLLECTOR_ADMIN_TOKEN:}  # 수집기와 같은 값. 비면 보내지 않아요
       timeout: 5s
+  email-notifications:
+    # 수신 거부 링크 전용 서명 키(32자 이상 무작위). 비면 예전처럼 알림 서버 내부 토큰으로 서명해요(보안 감사 L-15)
+    # 넣은 뒤 예전 메일의 링크(v1)는 내부 토큰을 바꾸기 전까지 그대로 돼요
+    unsubscribe-key: ${EMAIL_UNSUBSCRIBE_KEY:}
   notification:
     server:                             # 알림 서버 내부 API. 관리자 알림 화면의 발송 결과를 이 서버를 거쳐 받아요
       base-url: ${NOTIFICATION_SERVER_URL:http://localhost:8081}
       token: ${NOTIFICATION_INTERNAL_TOKEN:}  # 알림 서버와 같은 값. 비면 보내지 않아요(로컬은 같은 컴퓨터 요청만 받음)
       timeout: 5s
   traffic:                              # 관리자 트래픽 화면 (GA 숫자 + api 서버 요청 기록)
-    ip-salt: ${TRAFFIC_IP_SALT:local-dev-salt}  # IP 해시에 섞는 비밀 값. 운영은 꼭 따로 넣어요
+    ip-salt: ${TRAFFIC_IP_SALT:}        # IP 해시에 섞는 비밀 값(16자 이상). 비면 JWT 비밀값에서 따로 만든 값을 써요(IpSalt)
     raw-ip-days: 14                     # 원본 IP 보관 일수(보안 대응용). 지나면 지워요
     keep-days: 90                       # 요청 기록 보관 일수
     ingest-token: ${TRAFFIC_INGEST_TOKEN:}  # 프론트 서버가 화면 요청을 넘길 때 쓰는 비밀 값. 비면 화면 요청은 안 받아요

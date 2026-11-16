@@ -15,6 +15,7 @@ import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,6 +34,7 @@ class PreferenceApiTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired FavoriteRepository favorites;
   @Autowired JsonMapper json;
@@ -215,7 +217,8 @@ class PreferenceApiTest {
   }
 
   private LoginUser login() {
-    return logins.login(
-        new SocialProfile(SocialProvider.KAKAO, "pref-" + UUID.randomUUID(), "닉네임"));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(new SocialProfile(SocialProvider.KAKAO, "pref-" + UUID.randomUUID(), "닉네임")));
   }
 }

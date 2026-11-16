@@ -229,10 +229,17 @@ public class BenefitRepository {
         .list();
   }
 
-  public void updateStatus(UUID id, BenefitStatus status, Instant now) {
-    jdbc.sql("update benefit.benefits set status = ?, updated_at = ? where id = ?")
-        .params(status.name(), Timestamp.from(now), id)
-        .update();
+  /**
+   * 상태가 아직 previous일 때만 바꿔요. 읽은 뒤 그사이 관리자가 숨김 처리했으면 그대로 둬요 — 예전에는 조건 없이 덮어써서 동시에 일어난 숨김을 되돌릴 수
+   * 있었어요(2026-11-16 보안 감사 L-23). 바꿨으면 true.
+   */
+  public boolean updateStatus(UUID id, String previous, BenefitStatus status, Instant now) {
+    return jdbc.sql(
+                "update benefit.benefits set status = ?, updated_at = ? where id = ? and status = ?"
+                    + " and status <> 'HIDDEN'")
+            .params(status.name(), Timestamp.from(now), id, previous)
+            .update()
+        > 0;
   }
 
   /**

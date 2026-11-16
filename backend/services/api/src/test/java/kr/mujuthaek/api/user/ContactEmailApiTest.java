@@ -1,7 +1,6 @@
 package kr.mujuthaek.api.user;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
@@ -18,6 +17,7 @@ import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -36,6 +36,7 @@ class ContactEmailApiTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired JdbcClient jdbc;
 
@@ -189,48 +190,21 @@ class ContactEmailApiTest {
   }
 
   @Test
-  void anAddressBelongsToOneMemberIgnoringCase() throws Exception {
+  void unverifiedContactAddressCannotReserveOrRevealAnotherMembersAddress() throws Exception {
     LoginUser a = login();
     LoginUser b = login();
-    String address = "dup-" + UUID.randomUUID() + "@example.com";
+    String address = "shared-" + UUID.randomUUID() + "@example.com";
     mvc.perform(as(a, put("/api/users/me/email")).content(body(address)))
         .andExpect(status().isNoContent());
-
-    // 다른 회원은 같은 주소·대소문자만 다른 주소를 못 써요
     mvc.perform(as(b, put("/api/users/me/email")).content(body(address)))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_USED"));
+        .andExpect(status().isNoContent());
     mvc.perform(as(b, put("/api/users/me/email")).content(body(address.toUpperCase())))
-        .andExpect(status().isConflict());
-    mvc.perform(as(b, get("/api/users/me"))).andExpect(jsonPath("$.email").doesNotExist());
-
-    // 본인은 같은 주소로 다시 저장할 수 있어요 (동의 다시 받기)
-    mvc.perform(as(a, put("/api/users/me/email")).content(body(address.toUpperCase())))
         .andExpect(status().isNoContent());
-
-    // 지우면 다른 회원이 쓸 수 있어요
+    mvc.perform(as(a, get("/api/users/me"))).andExpect(jsonPath("$.email").value(address));
     mvc.perform(as(a, delete("/api/users/me/email"))).andExpect(status().isNoContent());
-    mvc.perform(as(b, put("/api/users/me/email")).content(body(address)))
-        .andExpect(status().isNoContent());
-  }
-
-  /** 앞의 확인을 지나 동시에 같은 주소를 넣어도 DB 유니크 인덱스가 막아요 */
-  @Test
-  void uniqueIndexBlocksDuplicatesIgnoringCase() {
-    LoginUser a = login();
-    LoginUser b = login();
-    String address = "race-" + UUID.randomUUID() + "@example.com";
-    String sql =
-        "update account.users set email = :email, email_consent_version = 'email-v1',"
-            + " email_consented_at = now() where id = :id";
-    jdbc.sql(sql).param("email", address).param("id", a.userId()).update();
-    assertThatThrownBy(
-            () ->
-                jdbc.sql(sql)
-                    .param("email", address.toUpperCase())
-                    .param("id", b.userId())
-                    .update())
-        .hasMessageContaining("users_email_uk");
+    mvc.perform(as(b, get("/api/users/me")))
+        .andExpect(
+            jsonPath("$.email").value(address.toUpperCase().replace("EXAMPLE.COM", "example.com")));
   }
 
   private static String body(String email) {
@@ -252,7 +226,8 @@ class ContactEmailApiTest {
   }
 
   private LoginUser login() {
-    return logins.login(
-        new SocialProfile(SocialProvider.KAKAO, "email-" + UUID.randomUUID(), "닉네임"));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(new SocialProfile(SocialProvider.KAKAO, "email-" + UUID.randomUUID(), "닉네임")));
   }
 }

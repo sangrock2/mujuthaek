@@ -6,11 +6,12 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { liveAlerts, markAlertRead, markAllAlertsRead } from "@/features/alerts/api";
-import { useSession } from "@/features/auth/session";
+import { isMember, useSession } from "@/features/auth/session";
 import { api } from "@/shared/lib/api/client";
 import { endpoints } from "@/shared/lib/api/endpoints";
 import { mockQuery } from "@/features/mock-query";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { safeAppPath } from "@/shared/lib/safeUrl";
 import {
   alertsData,
   type AlertGroup,
@@ -29,12 +30,12 @@ export const alertsKeys = {
 const MOCK_UNREAD = alertsData.items.filter((a) => !a.read).length;
 
 /**
- * 헤더 알림 점: 읽지 않은 알림 수. 로그인했을 때만 물어요(로그아웃·실패면 0).
+ * 헤더 알림 점: 읽지 않은 알림 수. 가입을 마친 회원일 때만 물어요(로그아웃·약관 동의 전·실패면 0).
  * 다른 화면에서 알림이 와도 보이게 1분마다, 창으로 돌아올 때 다시 물어요
  */
 export function useUnreadCount(): number {
   const session = useSession();
-  const loggedIn = !!session.data;
+  const loggedIn = isMember(session.data);
   const q = useQuery({
     queryKey: alertsKeys.unread,
     queryFn: () => api.get<{ count: number }>(endpoints.notificationsUnreadCount),
@@ -52,11 +53,13 @@ export function useUnreadCount(): number {
 const EMPTY: AlertsData = { items: [], settings: [], quietHours: "밤 10시 ~ 아침 8시" };
 
 export function useAlertsData() {
+  const session = useSession();
   const mock = useQuery({ ...mockQuery(alertsKeys.list, alertsData), enabled: USE_MOCKS });
   const live = useQuery({
     queryKey: [...alertsKeys.list, "live"],
     queryFn: liveAlerts,
-    enabled: !USE_MOCKS,
+    // 약관 동의 전 계정은 서버가 막아요(403). 동의 화면으로 가는 동안 다시 묻지 않아요
+    enabled: !USE_MOCKS && session.data?.termsAgreed !== false,
     retry: false,
   });
   if (USE_MOCKS) return { data: mock.data, isError: false };
@@ -120,9 +123,9 @@ export function useAlerts() {
           ? `읽지 않은 알림 ${unread}개`
           : "모두 읽었어요",
     markRead,
-    /** 알림을 누르면 읽음으로 바꾸고 그 화면으로 가요 (앱 안 경로만) */
+    /** 알림을 누르면 읽음으로 바꾸고 그 화면으로 가요 (앱 안 경로만, 「/\다른곳」도 막아요) */
     open: (a: AlertItem) => {
-      const path = a.linkPath?.startsWith("/") && !a.linkPath.startsWith("//") ? a.linkPath : null;
+      const path = safeAppPath(a.linkPath);
       if (!path) {
         markRead(a.id);
         return;

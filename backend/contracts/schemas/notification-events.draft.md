@@ -5,7 +5,7 @@
 | 이벤트 | 보내는 곳 | 뜻 |
 | --- | --- | --- |
 | `notification.requested` | api `notification` 모듈 | "이 회원들에게, 이 주소로, 이 문구를 보내 주세요" |
-| `email.verification.requested` | api `user` 모듈 | "이 주소로 이메일 인증 코드를 보내 주세요" |
+| ~~`email.verification.requested`~~ | (폐기, 2026-11-16) | 알림 서버가 더 받지 않아요. 인증 메일은 api가 `/internal/email-verification`으로 요청해요 (3장) |
 | `user.withdrawn` | api `user` 모듈 | "이 회원이 탈퇴했어요. 발송 기록을 지워 주세요" |
 
 나중에 알림 서버가 보내는 이벤트: `email.bounced` (SES 반송·스팸 신고 → api가 이메일 상태를 바꿈, 6장), `push.subscription.expired` (죽은 푸시 구독 → api가 그 기기를 지움, [web-push.draft.md](web-push.draft.md) 5장).
@@ -132,7 +132,9 @@ PWA ──HTTP──▶ api
    - 나머지: 지금. 단 `quietEnabled`이고 22:00~08:00이면 다음 08:00
 3. 워커가 보내고 SENT / 재시도 / FAILED를 남겨요
 
-## 3. `email.verification.requested`
+## 3. `email.verification.requested` (폐기)
+
+> 2026-11-16 폐기: api는 인증 링크 방식(알림 서버 `/internal/email-verification`, 주소별·전체 상한 있음)으로 바꿔 이 이벤트를 보내지 않아요. 받는 쪽이 남아 있으면 MQ에 쓸 수 있는 누구나 동의·횟수 제한 없이 아무 주소로 공식 메일을 보낼 수 있어서(보안 감사 M-8) 알림 서버도 더 받지 않고, 오면 실패 큐로 보내요. 아래는 예전 기록이에요.
 
 회원이 PWA에서 알림 이메일을 등록하면 api `user` 모듈이 6자리 코드를 만들어(해시만 저장) 보내요. 알림 서버는 **바로** 메일로 보내요 (묶음·조용한 시간 없음).
 

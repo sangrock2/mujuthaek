@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 from aws_personal import AWS, RUNTIME
+from private_files import write_private_file
 
 aws = AWS('mujuthaek', '659355919826')
 aws.verify(require_credits=False)
@@ -32,7 +33,5 @@ policy = {'Version': '2012-10-17', 'Statement': [
 ]}
 aws.call('iam', 'put-user-policy', '--user-name', user, '--policy-name', 'HostReleaseResultsOnly', '--policy-document', json.dumps(policy))
 key = aws.call('iam', 'create-access-key', '--user-name', user)['AccessKey']
-fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-with os.fdopen(fd, 'w') as output:
-    output.write(f"AWS_ACCESS_KEY_ID={key['AccessKeyId']}\nAWS_SECRET_ACCESS_KEY={key['SecretAccessKey']}\nAWS_REGION=ap-northeast-2\n")
+write_private_file(path, f"AWS_ACCESS_KEY_ID={key['AccessKeyId']}\nAWS_SECRET_ACCESS_KEY={key['SecretAccessKey']}\nAWS_REGION=ap-northeast-2\n")
 print('Created root-host-only S3 release credentials in ignored runtime; values not printed')

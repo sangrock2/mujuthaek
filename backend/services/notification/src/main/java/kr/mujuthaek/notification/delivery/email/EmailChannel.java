@@ -1,5 +1,7 @@
 package kr.mujuthaek.notification.delivery.email;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -64,7 +66,25 @@ class EmailChannel implements NotificationChannel {
               + "/email/unsubscribe#token="
               + unsubscribe
               + "\n";
-    return sender.send(new EmailMessage(address, subject(notifications), body));
+    return sender.send(
+        new EmailMessage(
+            address, subject(notifications), body, oneClickUnsubscribeUrl(unsubscribe)));
+  }
+
+  /**
+   * 메일 앱의 「수신 거부」 버튼이 부르는 주소(RFC 8058 한 번 눌러 해제). 메일 앱은 이 주소에 {@code List-Unsubscribe=One-Click}를
+   * POST해요. 웹 주소의 {@code /api/**}는 api 서버로 넘어가서 api의 {@code POST
+   * /api/email-notifications/unsubscribe/one-click}이 받아요. RFC가 https만 허용해서 로컬(http)은 붙이지
+   * 않아요(2026-11-16 보안 감사 4장).
+   */
+  String oneClickUnsubscribeUrl(String token) {
+    String base = properties.webBaseUrl();
+    if (token == null || token.isBlank() || base == null || !base.startsWith("https://")) {
+      return null;
+    }
+    return base.replaceAll("/+$", "")
+        + "/api/email-notifications/unsubscribe/one-click?token="
+        + URLEncoder.encode(token, StandardCharsets.UTF_8);
   }
 
   private static String subject(List<OutgoingNotification> notifications) {

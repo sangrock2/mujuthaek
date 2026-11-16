@@ -39,6 +39,15 @@ class ContactEmailServiceTest {
         "a\u0000b@example.com",
         "a\nb@example.com",
         "a\u0085b@example.com",
+        // 표시 이름·묶음 형식: 같은 받은편지함을 다른 주소처럼 써서 주소별 제한을 피할 수 있었어요(보안 감사)
+        "Name<victim@example.com>",
+        "\"x\"<victim@example.com>",
+        "x,y<victim@example.com>",
+        "=?utf-8?q?a?=<victim@example.com>",
+        "victim@example.com>",
+        "a(comment)@example.com",
+        "a;b@example.com",
+        "a@[127.0.0.1]",
       })
   void rejects(String email) {
     assertThatThrownBy(() -> ContactEmailService.normalize(email))

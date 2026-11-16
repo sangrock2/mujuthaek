@@ -2,8 +2,13 @@
 server:
   forward-headers-strategy: framework
 
-# 운영은 health와 prometheus만 열어요. nginx가 /actuator/health 말고는 막고 포트도 127.0.0.1에만 묶여 있어
-# prometheus는 서버 안(SSH 터널)에서만 읽혀요
+# 운영은 health와 prometheus만 열어요. 포트는 127.0.0.1에만 묶여 있지만 같은 컨테이너 망의 다른 컨테이너는
+# notification:8081에 바로 닿아서, prometheus는 METRICS_TOKEN(Bearer)이 있을 때만 열려요. 토큰을 넣지 않으면
+# prometheus는 404예요(2026-11-16 보안 감사 4장). health는 그대로 인증 없이 열려요
+notification:
+  metrics:
+    require-token: true
+
 management:
   endpoints:
     web:

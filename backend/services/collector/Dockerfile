@@ -8,12 +8,15 @@ WORKDIR /app
 COPY libs/python-platform libs/python-platform
 COPY services/collector services/collector
 WORKDIR /app/services/collector
-RUN uv sync --no-dev --frozen
+# 바이트코드를 미리 만들어요: 코드가 읽기 전용이라 실행 중에는 .pyc를 쓸 수 없고, CPU 한도가 낮아 시작마다 다시 컴파일하면 느려요
+RUN uv sync --no-dev --frozen --compile-bytecode
 # 실행할 때 uv를 거치지 않고 가상환경의 python을 바로 써요 (uv run은 시작할 때마다 패키지를 다시 확인·설치해요)
 ENV PATH="/app/services/collector/.venv/bin:$PATH"
+RUN python -m compileall -q /app/libs/python-platform/src /app/services/collector/src
 
-# 일반 사용자로 실행
-RUN useradd --create-home collector && chown -R collector /app
+# 일반 사용자로 실행. 코드·가상환경은 root 소유(읽기 전용)로 두고, 실행 중에 쓰는 곳은 임시 폴더(/tmp: 문서 변환·지역 적재)와
+# 자기 홈뿐이에요. 침해된 프로세스가 자기 코드나 패키지를 바꿔 재시작 뒤에도 남지 못하게 해요(보안 감사 4절)
+RUN useradd --create-home collector
 USER collector
 
 EXPOSE 8091

@@ -1,6 +1,7 @@
 package kr.mujuthaek.notification.delivery.email;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
@@ -22,5 +23,19 @@ public record MailProperties(
    * @param maxPerSecond 초당 최대 발송 수. 샌드박스는 1통이에요
    */
   public record Ses(
-      @DefaultValue("ap-northeast-2") String region, @DefaultValue("1") int maxPerSecond) {}
+      @DefaultValue("ap-northeast-2") String region,
+      @DefaultValue("1") int maxPerSecond,
+      @DefaultValue("") String configurationSet) {
+    public Ses(String region, int maxPerSecond) {
+      this(region, maxPerSecond, "");
+    }
+
+    @ConstructorBinding
+    public Ses {
+      configurationSet = configurationSet == null ? "" : configurationSet;
+      if (!configurationSet.isEmpty() && !configurationSet.matches("[A-Za-z0-9_-]{1,64}")) {
+        throw new IllegalArgumentException("Invalid SES configuration set name");
+      }
+    }
+  }
 }

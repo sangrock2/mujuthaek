@@ -16,6 +16,7 @@ import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.common.pagination.CursorKey;
 import kr.mujuthaek.api.common.pagination.CursorQuery;
 import kr.mujuthaek.api.common.region.RegionQueryService;
+import kr.mujuthaek.api.common.text.ExternalUrl;
 import kr.mujuthaek.api.notice.domain.CompletedNotice;
 import kr.mujuthaek.api.notice.domain.NoticeStatus;
 import kr.mujuthaek.api.notice.dto.request.NoticeListFilter;
@@ -311,8 +312,22 @@ public class NoticeQueryService {
     Map<UUID, PolicyInfo> out = new java.util.HashMap<>();
     queries
         .policyInfos(rawPolicyIds)
-        .forEach((id, info) -> out.put(id, json.readValue(info, PolicyInfo.class)));
+        .forEach((id, info) -> out.put(id, safeLinks(json.readValue(info, PolicyInfo.class))));
     return out;
+  }
+
+  /** 신청·안내 링크는 http·https만 내보내요 (보안 감사 L-4: 계약이 모양을 강제하지 않아요) */
+  private static PolicyInfo safeLinks(PolicyInfo info) {
+    return new PolicyInfo(
+        info.supportArea(),
+        info.summary(),
+        info.organization(),
+        info.contact(),
+        info.applyMethod(),
+        ExternalUrl.safe(info.applyUrl()),
+        ExternalUrl.safe(info.guideUrl()),
+        info.amountText(),
+        info.applyNote());
   }
 
   public List<NoticeForJudgment> findOpenForJudgment(NoticeField field) {
@@ -696,6 +711,14 @@ public class NoticeQueryService {
         swLat, swLng, neLat, neLng, zoom, tenure, noticeTypes, providers, statuses, MAP_PINS);
   }
 
+  private static boolean latitude(double value) {
+    return Double.isFinite(value) && value >= -90 && value <= 90;
+  }
+
+  private static boolean longitude(double value) {
+    return Double.isFinite(value) && value >= -180 && value <= 180;
+  }
+
   /** 핀 한도를 정해서 (테스트에서 묶음을 보려고). */
   NoticeMapResponse map(
       double swLat,
@@ -708,6 +731,11 @@ public class NoticeQueryService {
       List<String> providers,
       List<String> statuses,
       int maxPins) {
+    // NaN·무한대·범위 밖 좌표는 비교를 그냥 지나가 DB 오류로 500과 운영 경보가 났어요(2026-11-16 보안 감사 L-12)
+    if (!latitude(swLat) || !latitude(neLat) || !longitude(swLng) || !longitude(neLng)) {
+      throw new CustomException(
+          ErrorCode.VALIDATION_FAILED, "지도 범위: 위도는 -90~90, 경도는 -180~180 사이 숫자여야 해요");
+    }
     if (swLat >= neLat || swLng >= neLng) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "지도 범위: 남서쪽(sw)이 북동쪽(ne)보다 작아야 해요");
     }

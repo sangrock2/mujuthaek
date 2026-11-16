@@ -746,3 +746,24 @@ def test_a_flaky_attachment_does_not_flip_the_policy_version(api, web, policy_st
     assert run(source, api, web, policy_store, file_store, policy_settings).new_count == 0  # 이전 첨부를 이어 써 내용이 같음
     assert len(policy_store.versions) == 2 and policy_store.by_key("WLF00001188").status == "DONE"
     assert policy_store.by_key("WLF00001188").attempts == 0
+
+
+# ── 화면 링크: http(s) 주소만 (2026-11-16 보안 감사 L-4) ───────────────
+def test_links_that_are_not_public_http_are_dropped_with_one_warning_per_field(api, web, policy_store, file_store, policy_settings):
+    """출처 API의 신청 주소를 그대로 「신청하러 가기」 링크로 보냈어요. http(s) 공개 주소가 아니면 비우고(링크 없음) 회차 경고는 칸마다 한 번만."""
+    script = {**s.YOUTH_POLICY, "aplyUrlAddr": "javascript:alert(document.cookie)"}
+    userinfo = {**s.YOUTH_POLICY, "plcyNo": "20260815005400215678", "aplyUrlAddr": "https://user:pw@evil.example/apply"}
+    bare = {**s.YOUTH_POLICY, "plcyNo": "20260815005400219999", "aplyUrlAddr": "youth.incheon.go.kr/apply"}
+    source = youth(api, web)
+    api.pages[list_url(source, 1, "주거")] = s.youth_list([script, userinfo, bare])
+    result = run(source, api, web, policy_store, file_store, policy_settings)
+    assert result.new_count == 3
+    links = {e["payload"]["policyId"]: e["payload"]["applyUrl"] for e in policy_store.events}
+    assert links == {script["plcyNo"]: None, userinfo["plcyNo"]: None, bare["plcyNo"]: "https://youth.incheon.go.kr/apply"}
+    assert sorted(str(v.fields.apply_url) for v in policy_store.versions) == ["None", "None", "https://youth.incheon.go.kr/apply"]
+    dropped = [w for w in result.warnings if "http(s) 주소가 아니어서" in w]
+    assert len(dropped) == 1 and "신청 주소" in dropped[0]  # 같은 칸은 회차에 한 번
+    assert not any("javascript" in w or "evil.example" in w for w in result.warnings)  # 경고·슬랙 알림에 주소 자체는 넣지 않아요
+    for event in policy_store.events:
+        validate_event(event)  # 계약 raw.policy.collected의 detailUrl·applyUrl은 http(s) 패턴이에요
+        assert event["payload"]["detailUrl"].startswith("https://www.youthcenter.go.kr/")

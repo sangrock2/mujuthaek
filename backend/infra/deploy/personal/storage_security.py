@@ -6,6 +6,8 @@ from pathlib import Path
 
 from aws_personal import AWS
 
+BOUNDARY_POLICY = 'AppCannotAccessReleaseOrOperations'
+
 
 def tls_policy(bucket, existing=None):
     policy = copy.deepcopy(existing or {'Version': '2012-10-17', 'Statement': []})
@@ -49,9 +51,8 @@ def main():
         if 'NoSuchBucketPolicy' not in str(error):
             raise
         existing = None
-    policy_name = 'AppCannotAccessReleaseOrOperations'
     try:
-        old_identity = aws.call('iam', 'get-user-policy', '--user-name', user, '--policy-name', policy_name)['PolicyDocument']
+        old_identity = aws.call('iam', 'get-user-policy', '--user-name', user, '--policy-name', BOUNDARY_POLICY)['PolicyDocument']
     except RuntimeError as error:
         if 'NoSuchEntity' not in str(error):
             raise
@@ -62,7 +63,7 @@ def main():
     # All validation happens before either mutation. Existing policy statements are preserved.
     transport = tls_policy(bucket, existing)
     aws.call('s3api', 'put-bucket-policy', '--bucket', bucket, '--policy', json.dumps(transport))
-    aws.call('iam', 'put-user-policy', '--user-name', user, '--policy-name', policy_name,
+    aws.call('iam', 'put-user-policy', '--user-name', user, '--policy-name', BOUNDARY_POLICY,
              '--policy-document', json.dumps(identity))
     print('HTTPS-only bucket policy and app/deployment storage boundary applied; existing data and keys retained.')
 

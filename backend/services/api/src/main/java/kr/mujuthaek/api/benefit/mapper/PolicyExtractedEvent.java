@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import kr.mujuthaek.api.common.text.ExternalUrl;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -116,6 +117,8 @@ public record PolicyExtractedEvent(
 
   /** 봉투에서 값을 꺼내요. 계약에 맞지 않으면 InvalidEventException (오류 메시지에 받은 값은 넣지 않아요). */
   public static PolicyExtractedEvent from(JsonNode envelope) {
+    // 링크 칸이 계약 모양이 아니면(예전 추출 서비스가 보낸 scheme 없는 주소 등) 그 칸만 비우고 받아요 (보안 감사 L-4)
+    ExternalUrl.clearOffContract(envelope, "/payload/source/detailUrl", "/payload/source/applyUrl");
     var errors = EVENT.validate(envelope);
     if (!errors.isEmpty()) {
       var first = errors.getFirst();
@@ -167,8 +170,8 @@ public record PolicyExtractedEvent(
         strings(source.path("regionNames")),
         strings(source.path("regionCodes")),
         strings(source.path("categories")),
-        text(source.path("detailUrl")),
-        text(source.path("applyUrl")),
+        ExternalUrl.safe(text(source.path("detailUrl"))), // http·https만 (보안 감사 L-4)
+        ExternalUrl.safe(text(source.path("applyUrl"))),
         p.path("relevant").asBoolean(),
         text(p.path("summary")),
         supports,

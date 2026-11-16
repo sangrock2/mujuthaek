@@ -4,6 +4,8 @@
  * 관리자 API는 ADMIN 로그인이 필요해요(토큰은 공통 API 클라이언트가 붙여요).
  */
 import { api } from "@/shared/lib/api/client";
+// 경로의 ID는 apiPath로 인코딩해 넣어요 (「../」 같은 값이 다른 관리자 API를 부르지 않게, 2026-11-16 보안 감사 L-6)
+import { apiPath } from "@/shared/lib/api/path";
 import { routes } from "@/shared/lib/routes";
 import type {
   BotTrafficData,
@@ -561,9 +563,9 @@ export async function liveReviewQueuePage(
 export async function liveReviewDetail(itemId: string): Promise<ReviewItem> {
   const id = itemId.slice(2);
   if (itemId.startsWith("n:")) {
-    return noticeItem(await api.get<NoticeReviewDetail>(`/api/admin/reviews/${id}`));
+    return noticeItem(await api.get<NoticeReviewDetail>(apiPath`/api/admin/reviews/${id}`));
   }
-  const d = await api.get<BenefitReviewDetail>(`/api/admin/benefit-reviews/${id}`);
+  const d = await api.get<BenefitReviewDetail>(apiPath`/api/admin/benefit-reviews/${id}`);
   return benefitItem({ ...d, sourceCode: benefitSourceCodes.get(itemId) ?? null });
 }
 
@@ -617,9 +619,11 @@ export async function decideReview(
   } else if (rejectReason) {
     body.reason = REJECT[rejectReason] ?? null;
   }
-  const base = meta.kind === "notice" ? "/api/admin/reviews/" : "/api/admin/benefit-reviews/";
+  const action = approve ? "approve" : "reject";
   return api.post<{ pendingCount: number }>(
-    `${base}${meta.id}/${approve ? "approve" : "reject"}`,
+    meta.kind === "notice"
+      ? apiPath`/api/admin/reviews/${meta.id}/${action}`
+      : apiPath`/api/admin/benefit-reviews/${meta.id}/${action}`,
     body,
   );
 }
@@ -704,13 +708,13 @@ export async function liveReports(): Promise<{
     groupCount: r.groupCount,
     // 「원문 보기」: 공고 · 혜택(혜택 ID, 아직 없으면 혜택 목록) · 사업 지원 상세
     link: r.noticeId
-      ? routes.notice(r.noticeId)
+      ? routes.notice(encodeURIComponent(r.noticeId))
       : r.benefitPolicyId
         ? r.benefitId
-          ? routes.benefit(r.benefitId)
+          ? routes.benefit(encodeURIComponent(r.benefitId))
           : routes.benefits
         : r.programId
-          ? `${routes.bizSupport}/${r.programId}`
+          ? `${routes.bizSupport}/${encodeURIComponent(r.programId)}`
           : "",
     notes: [],
     reply: "",
@@ -755,7 +759,7 @@ async function liveAreaReports(): Promise<(ReportItem & { at: string })[]> {
           .get<{
             header: { title: string };
             sites: { id: string; name: string | null }[];
-          }>(`/api/v1/notices/${id}`)
+          }>(apiPath`/api/v1/notices/${id}`)
           .then((d) => [id, d] as const)
           .catch(() => [id, null] as const),
       ),
@@ -777,7 +781,7 @@ async function liveAreaReports(): Promise<(ReportItem & { at: string })[]> {
       summary: r.summary ?? r.field,
       age: ago(r.createdAt),
       groupCount: r.groupCount,
-      link: routes.notice(r.noticeId),
+      link: routes.notice(encodeURIComponent(r.noticeId)),
       notes: [],
       reply: "",
     };
@@ -848,13 +852,13 @@ export async function liveReportQueuePage(
       groupCount: r.groupCount,
       // 「원문 보기」: 공고 · 혜택(혜택 ID, 아직 없으면 혜택 목록) · 사업 지원 상세
       link: r.noticeId
-        ? routes.notice(r.noticeId)
+        ? routes.notice(encodeURIComponent(r.noticeId))
         : r.benefitPolicyId
           ? r.benefitId
-            ? routes.benefit(r.benefitId)
+            ? routes.benefit(encodeURIComponent(r.benefitId))
             : routes.benefits
           : r.programId
-            ? `${routes.bizSupport}/${r.programId}`
+            ? `${routes.bizSupport}/${encodeURIComponent(r.programId)}`
             : "",
       notes: [],
       reply: "",
@@ -886,8 +890,10 @@ export async function liveReportDetail(
   summary: string,
 ): Promise<Pick<ReportItem, "source" | "notes" | "reply">> {
   const d = isAreaReport(id)
-    ? await api.get<AreaReportDetail>(`/api/admin/area-reports/${id.slice(AREA_REPORT.length)}`)
-    : await api.get<ReportDetail>(`/api/admin/reports/${id}`);
+    ? await api.get<AreaReportDetail>(
+        apiPath`/api/admin/area-reports/${id.slice(AREA_REPORT.length)}`,
+      )
+    : await api.get<ReportDetail>(apiPath`/api/admin/reports/${id}`);
   return {
     source: d.note ?? summary,
     notes: (d.notes ?? []).map((n) => ({ text: n.text, meta: `사용자 · ${when(n.createdAt)}` })),
@@ -898,8 +904,8 @@ export async function liveReportDetail(
 /** 처리 끝: 고침(FIXED)·그대로(KEPT)와 답장. 처리 시작 전이면 먼저 시작해요. */
 export async function resolveReport(id: string, fixed: boolean, reply: string) {
   const path = isAreaReport(id)
-    ? `/api/admin/area-reports/${id.slice(AREA_REPORT.length)}/resolve`
-    : `/api/admin/reports/${id}/resolve`;
+    ? apiPath`/api/admin/area-reports/${id.slice(AREA_REPORT.length)}/resolve`
+    : apiPath`/api/admin/reports/${id}/resolve`;
   return api.post(path, {
     result: fixed ? "FIXED" : "KEPT",
     reply: reply.trim() || null,
@@ -909,7 +915,9 @@ export async function resolveReport(id: string, fixed: boolean, reply: string) {
 /** 다시 검수로 보내기(고치기): 공고·혜택 정책의 검수를 다시 열어요. */
 export async function reopenFromReport(id: string) {
   if (isAreaReport(id)) throw new Error("생활권 제보는 AI 추출 값이 아니라 검수로 보낼 수 없어요");
-  return api.post<{ reviewId: string; reopened: boolean }>(`/api/admin/reports/${id}/review`);
+  return api.post<{ reviewId: string; reopened: boolean }>(
+    apiPath`/api/admin/reports/${id}/review`,
+  );
 }
 
 // ---------- 사이드바 숫자·개요 ----------
@@ -1064,12 +1072,12 @@ async function doneReports(): Promise<{ fixed7: number; today: number }> {
   const at = await Promise.all([
     ...n.items.map((i) =>
       api
-        .get<{ handledAt: string | null }>(`/api/admin/reports/${i.id}`)
+        .get<{ handledAt: string | null }>(apiPath`/api/admin/reports/${i.id}`)
         .then((d) => ({ result: i.result, at: d.handledAt })),
     ),
     ...a.items.map((i) =>
       api
-        .get<{ handledAt: string | null }>(`/api/admin/area-reports/${i.id}`)
+        .get<{ handledAt: string | null }>(apiPath`/api/admin/area-reports/${i.id}`)
         .then((d) => ({ result: i.result, at: d.handledAt })),
     ),
   ]);
@@ -1199,7 +1207,7 @@ export async function liveSources() {
 }
 
 export const sourceAction = (code: string, action: "run" | "pause" | "resume") =>
-  api.post(`/api/admin/sources/${code}/${action}`);
+  api.post(apiPath`/api/admin/sources/${code}/${action}`);
 
 // ---------- 기준값 ----------
 type CriteriaYears = {
@@ -1282,7 +1290,7 @@ export const scheduleMedianIncome = (
   monthlyWon: Record<string, number>,
   source: string,
 ) =>
-  api.put(`/api/admin/criteria/MEDIAN_INCOME/${year}`, {
+  api.put(apiPath`/api/admin/criteria/MEDIAN_INCOME/${year}`, {
     validFrom: `${year}-01-01`,
     data: { monthlyWon },
     source,
@@ -1358,7 +1366,7 @@ export async function noticeTitles(ids: string[]) {
   const pairs = await Promise.all(
     ids.map((id) =>
       api
-        .get<{ header: { title: string } }>(`/api/v1/notices/${id}`)
+        .get<{ header: { title: string } }>(apiPath`/api/v1/notices/${id}`)
         .then((d) => [id, d.header.title] as const)
         .catch(() => [id, null] as const),
     ),
@@ -1401,7 +1409,7 @@ export async function liveChatReports(status: ChatReviewStatus) {
 
 /** 가림 유지(KEEP_HIDDEN) 또는 다시 보이기(RESTORE). 그 메시지의 검토 전 신고가 모두 처리돼요 */
 export const reviewChatMessage = (messageId: string, action: ChatReviewAction) =>
-  api.patch(`/api/admin/chat/messages/${messageId}`, { action });
+  api.patch(apiPath`/api/admin/chat/messages/${messageId}`, { action });
 
 // ---------- 회원 관리 (백엔드 user 모듈) ----------
 export function liveUsers(query: string, filter: AdminUserFilter, page: number) {
@@ -1411,25 +1419,30 @@ export function liveUsers(query: string, filter: AdminUserFilter, page: number) 
   return api.get<AdminUsersPage>(`/api/admin/users?${q}`);
 }
 
-/** 이름만 (처리 기록의 관리자 이름). 최대 100명, 관리자 누구나 */
+/**
+ * 이름만 (처리 기록의 관리자 이름). 최대 100명.
+ * 처리 기록·회원 조회·관리자 지정·권한 부여/회수·이용 정지 권한(ACTIVITY·USERS_VIEW·ADMIN_APPOINT·PERMISSION_GRANT·
+ * PERMISSION_REVOKE·USERS_SUSPEND) 가운데 하나가 있어야 해요. 없으면 403이고, 화면은 회원 ID 앞부분으로 보여요
+ */
 export function liveUserNames(ids: string[]) {
-  return api.get<AdminUserName[]>(`/api/admin/users/names?ids=${ids.slice(0, 100).join(",")}`);
+  const q = ids.slice(0, 100).map(encodeURIComponent).join(",");
+  return api.get<AdminUserName[]>(`/api/admin/users/names?ids=${q}`);
 }
 
 /** 관리자 지정(ADMIN)·해제(USER) — 「관리자 지정」 */
 export const changeUserRole = (id: string, role: "USER" | "ADMIN") =>
-  api.patch<AdminUser>(`/api/admin/users/${id}/role`, { role });
+  api.patch<AdminUser>(apiPath`/api/admin/users/${id}/role`, { role });
 
 /** 일반 관리자의 권한을 이 목록으로 맞춰요 — 「권한 부여」, 내가 가진 권한만 */
 export const setUserPermissions = (id: string, permissions: AdminPermission[]) =>
-  api.put<AdminUser>(`/api/admin/users/${id}/permissions`, { permissions });
+  api.put<AdminUser>(apiPath`/api/admin/users/${id}/permissions`, { permissions });
 
 /** 이용 정지 (until 비우면 해제할 때까지) — 「이용 정지」 */
 export const suspendUser = (id: string, reason: string, until: string | null) =>
-  api.put<AdminUser>(`/api/admin/users/${id}/suspension`, { reason, until });
+  api.put<AdminUser>(apiPath`/api/admin/users/${id}/suspension`, { reason, until });
 
 export const unsuspendUser = (id: string) =>
-  api.delete<AdminUser>(`/api/admin/users/${id}/suspension`);
+  api.delete<AdminUser>(apiPath`/api/admin/users/${id}/suspension`);
 
 /** 최상위 관리자 넘기기 — 최상위만, 로그인한 지 10분 안에 */
 export const transferSuperAdmin = (userId: string) =>
@@ -1473,7 +1486,7 @@ export const decidePolicyDuplicate = (
   later: string,
   earlier: string,
   action: "KEEP_BOTH" | "HIDE_LATER",
-) => api.post(`/api/admin/policy-duplicates/${later}/${earlier}/decide`, { action });
+) => api.post(apiPath`/api/admin/policy-duplicates/${later}/${earlier}/decide`, { action });
 
 export function liveNotificationStats(days: number): Promise<NotificationStats> {
   return api.get<NotificationStats>(`/api/admin/notifications/stats?days=${days}`);
@@ -1489,7 +1502,7 @@ export async function liveActivity(days: number): Promise<ActivityData> {
       .catch(() => null),
     Promise.all(
       Object.keys(CRITERIA_KINDS).map((k) =>
-        api.get<CriteriaChanges>(`/api/admin/criteria/${k}/history`).catch(() => null),
+        api.get<CriteriaChanges>(apiPath`/api/admin/criteria/${k}/history`).catch(() => null),
       ),
     ),
     liveAdminChanges(days).catch(() => null),

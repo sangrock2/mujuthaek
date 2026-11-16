@@ -536,8 +536,9 @@ function PopularNotices({ items }: { items: NoticeView[] }) {
         <li key={i.noticeId} className="flex flex-col gap-[4px]">
           <div className="flex items-baseline justify-between gap-[12px] text-[14px]">
             <Link
-              href={routes.notice(i.noticeId)}
+              href={routes.notice(encodeURIComponent(i.noticeId))}
               target="_blank"
+              rel="noopener noreferrer"
               className="text-text hover:text-text min-w-0 truncate font-semibold no-underline"
               title={titles?.[i.noticeId] ?? i.noticeId}
             >

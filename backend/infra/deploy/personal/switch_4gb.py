@@ -26,7 +26,7 @@ def main():
     try:
         execute("old", f"cd {BASE} && sudo python3 migration_data.py snapshot final && sudo systemctl stop mujuthaek-certbot-prod.timer mujuthaek-personal-backup.timer")
         transfer(f"sudo tar -C {BASE} -czf - runtime/migration-final", f"sudo tar -xzf - -C {BASE}")
-        execute("new", f"cd {BASE} && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml stop --timeout 30 nginx api notification && sudo python3 migration_data.py restore final && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml up -d --no-build --pull never api notification frontend nginx")
+        execute("new", f"cd {BASE} && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml stop --timeout 30 nginx api notification && sudo python3 migration_data.py restore final && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml up -d --no-build --pull never api notification nginx")
         execute("new", "for attempt in $(seq 1 40); do if curl --fail --silent --max-time 3 http://127.0.0.1:8080/actuator/health > /dev/null; then exit 0; fi; sleep 3; done; exit 1")
         client.call("lightsail", "detach-static-ip", "--static-ip-name", STATIC)
         client.call("lightsail", "attach-static-ip", "--static-ip-name", STATIC, "--instance-name", NEW)
@@ -47,7 +47,7 @@ def main():
                 client.call("lightsail", "detach-static-ip", "--static-ip-name", STATIC)
             client.call("lightsail", "attach-static-ip", "--static-ip-name", STATIC, "--instance-name", OLD)
         invalidate_connections()
-        execute("old", f"cd {BASE} && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml up -d api notification frontend nginx && sudo systemctl start mujuthaek-certbot-prod.timer mujuthaek-personal-backup.timer")
+        execute("old", f"cd {BASE} && sudo docker compose --env-file .env --env-file versions.env -f compose.prod.yml up -d api notification nginx && sudo systemctl start mujuthaek-certbot-prod.timer mujuthaek-personal-backup.timer")
         raise
 
 

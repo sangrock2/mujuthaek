@@ -25,6 +25,7 @@ import {
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
+import { safeAppPath } from "@/shared/lib/safeUrl";
 
 /** 2px 테두리 선택 칩 */
 export const outlineChip = (on: boolean) =>
@@ -88,6 +89,8 @@ function FavoriteRow({ f }: { f: Favorite }) {
   const fav = useFavoriteToggle(f.targetType, f.targetId);
   const deadline = deadlineOf(f);
   const gone = !f.title || f.status === "HIDDEN";
+  // 서버가 준 화면 경로는 앱 안 경로일 때만 링크로 써요 (「//다른곳」이면 다른 사이트로 가요, 2026-11-16 보안 감사 L-4)
+  const href = safeAppPath(f.linkPath);
   return (
     <div className="border-line-soft flex flex-wrap items-center gap-[14px] border-b border-solid py-[16px]">
       {gone ? (
@@ -95,9 +98,9 @@ function FavoriteRow({ f }: { f: Favorite }) {
           <span className="text-text-sub text-[17px] font-bold">내려간 공고예요</span>
           <span className="text-text-sub text-[14px]">{typeLabel[f.targetType]}</span>
         </span>
-      ) : (
+      ) : href ? (
         <Link
-          href={f.linkPath}
+          href={href}
           className="text-text hover:text-text flex min-w-0 flex-1 flex-col gap-[3px] no-underline"
         >
           <span className="text-[17px] font-bold">{f.title}</span>
@@ -105,6 +108,13 @@ function FavoriteRow({ f }: { f: Favorite }) {
             {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
           </span>
         </Link>
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <span className="text-[17px] font-bold">{f.title}</span>
+          <span className="text-text-sub text-[14px]">
+            {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
+          </span>
+        </span>
       )}
       {deadline.label && (
         <span
@@ -116,7 +126,7 @@ function FavoriteRow({ f }: { f: Favorite }) {
           {deadline.label}
         </span>
       )}
-      {!gone && f.targetType === "NOTICE" && f.linkPath.startsWith("/notices/") && (
+      {!gone && f.targetType === "NOTICE" && href?.startsWith("/notices/") && (
         <div className="order-last w-full lg:order-none lg:w-auto">
           <PreparationButton noticeId={f.targetId} />
         </div>
@@ -263,11 +273,12 @@ const generalLabel = Object.fromEntries(generalReportKinds.map((k) => [k.key, k.
 function MyReportRow({ r }: { r: MyReport }) {
   const what = r.kind === "GENERAL" ? (generalLabel[r.field] ?? r.field) : r.field;
   const title = r.targetTitle ?? (r.kind === "GENERAL" ? "일반 제보" : reportKindLabel[r.kind]);
+  const href = safeAppPath(r.linkPath);
   return (
     <li className="border-line-soft flex flex-col gap-[6px] border-b border-solid py-[14px]">
       <div className="flex items-center justify-between gap-[10px]">
-        {r.linkPath ? (
-          <Link href={r.linkPath} className="text-text hover:text-text text-[16px] font-bold">
+        {href ? (
+          <Link href={href} className="text-text hover:text-text text-[16px] font-bold">
             {title}
           </Link>
         ) : (
@@ -320,6 +331,9 @@ export function ReportPanel({
   const [note, setNote] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
+  // 링크로 넘어온 화면 이름·오류 코드는 숨기지 않고 보여 주고, 빼고 보낼 수도 있어요 (2026-11-16 보안 감사 4장)
+  const [attach, setAttach] = useState(true);
+  const linked = Boolean(screen || context);
   const loggedIn = USE_MOCKS || !!session;
 
   if (!loggedIn && !isPending) return <LoginPrompt what="제보" />;
@@ -335,8 +349,8 @@ export function ReportPanel({
       await sendReport(null, {
         field: kind,
         note: note.trim(),
-        screen: screen ?? "내 정보",
-        currentValue: context,
+        screen: (attach && screen) || "내 정보",
+        currentValue: attach ? context : undefined,
       });
       setState("sent");
       setNote("");
@@ -400,6 +414,23 @@ export function ReportPanel({
               className="rounded-control border-line bg-surface text-text resize-y border border-solid px-[16px] py-[14px] text-[16px] font-medium"
             />
           </label>
+          {linked && attach && (
+            <div className="bg-bg flex flex-wrap items-center gap-x-[12px] gap-y-[4px] rounded-[14px] px-[16px] py-[12px] text-[14px]">
+              <span className="text-text-sub">
+                함께 보내요:{" "}
+                {[screen && `보낸 화면 「${screen}」`, context && `오류 코드 「${context}」`]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAttach(false)}
+                className="text-brand min-h-[32px] cursor-pointer border-0 bg-transparent p-0 text-[14px] font-bold"
+              >
+                빼고 보내기
+              </button>
+            </div>
+          )}
           {error && (
             <span role="alert" className="text-danger-text text-[14px]">
               {error}

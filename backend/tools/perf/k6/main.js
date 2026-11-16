@@ -1,7 +1,7 @@
 // k6 진입점. TEST(smoke·load·soak·stress·breakpoint·spike)로 부하 모양을 고르고, 사용자 흐름 세 가지를 섞어 돌려요.
 //   직접 부를 때: TEST=smoke k6 run tools/perf/k6/main.js   (보통은 tools/perf/run.sh <test>로 불러요: 결과를 폴더에 모아 줘요)
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
-import { PROFILES, TEST } from './lib/config.js';
+import { BASE_URL, PROFILES, TEST } from './lib/config.js';
 import { accessToken } from './lib/token.js';
 import { browse, judge, member, single } from './lib/flows.js';
 
@@ -24,7 +24,7 @@ export const options = {
 };
 
 export function setup() {
-  return { token: withMember ? accessToken(SECRET, USER_ID) : null };
+  return { token: withMember ? accessToken(BASE_URL, SECRET, USER_ID) : null };
 }
 
 export function userFlow(ctx) {

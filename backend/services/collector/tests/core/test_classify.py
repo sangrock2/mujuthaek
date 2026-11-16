@@ -1,16 +1,24 @@
+import re
+import time
 from datetime import date
 
 import pytest
 
+import mujuthaek_collector.core.classify as titles
 from mujuthaek_collector.core.classify import (
     CORRECTION,
+    CORRECTION_MARK,
     EXCLUDED,
     FOLLOW_UP,
+    NOT_IDENTITY,
     NOTICE,
+    QUALIFIER,
     classify,
     correction_base,
+    find_ref,
     norm_name,
     qualifiers,
+    ref_qualifiers,
     same_notice,
     same_qualifiers,
     title_ref,
@@ -92,3 +100,69 @@ def test_follow_up_points_to_original_notice():
 
 def test_correction_base_matches_original_name():
     assert correction_base("2026년 행복주택 입주자 모집공고 [정정공고]") == norm_name("2026년 행복주택 입주자 모집공고")
+
+
+# 2026-11-16 이전의 공고일 정규식. find_ref가 이것과 같은 결과를 내는지 견줘요 (짧은 제목이라 이 정규식도 금방 끝나요)
+OLD_REF = re.compile(r"(?P<name>.+?)\s*\(\s*(?:공고일?\s*:?\s*)?[‘'’]?(?P<y>\d{2,4})\s*[._]\s*(?P<m>\d{1,2})\s*[._]\s*(?P<d>\d{1,2})\s*\.?\s*(?:공고)?\s*\)")
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "성북구 연극인주택 잔여세대 입주자 모집공고(26. 7. 8.) 당첨자발표 및 계약안내",
+        "[정정] 행복주택 입주자 모집공고(A-2블록)(2026.10.01 공고)(당첨자 발표일 변경)",
+        "행복주택 모집공고 (공고일: ‘26.08.21 공고) 서류심사 대상자 발표",
+        "모집공고( 2026 . 10 . 01 . 공고 ) 결과",
+        "모집공고(2026_10_01)(2026.10.02) 결과",
+        "모집공고(2026.13.40) 발표",
+        "모집공고(12345.1.1) 발표",
+        "모집공고 (2026.10.01",
+        "첫 줄\n모집공고 \t　(2026. 10. 1.) 당첨자 발표",
+        "모집공고\n(2026.10.01) 줄바꿈 뒤 괄호",
+        " (2026.10.01) 이름 없이 공백만",
+        "\n\n(2026.10.01)\n \t(2026.10.02)",
+        "(2026.10.01)",
+        "",
+    ],
+)
+def test_find_ref_gives_the_old_pattern_result(title):
+    """2026-11-16 M-6: 예전 정규식은 시작 글자마다 공고명(.+?)과 공백(\\s*)을 나눠 보며 끝까지 훑어서
+    공백이 긴 제목에서 세제곱으로 느려졌어요(공백 4천 자 25초)."""
+    old = OLD_REF.search(title)
+    assert find_ref(title) == ((old["name"], old["y"], old["m"], old["d"], old.end()) if old else None)
+
+
+def test_unclosed_brackets_do_not_change_qualifiers():
+    """짝 없는 여는 괄호(마지막 닫는 괄호 뒤)는 예전에도 구분 말이 되지 못했어요. 그 앞까지만 봐도 결과가 같아요."""
+    title = "[정정] 행복주택 입주자 모집공고(A-2블록)(수요자맞춤형)(2026.10.01) [당첨자 (미완 ["
+
+    def old_qualifiers(text):
+        found = (re.sub(r"[^0-9A-Za-z가-힣]", "", q) for q in QUALIFIER.findall(CORRECTION_MARK.sub("", text)) if not NOT_IDENTITY.search(q))
+        return frozenset(q for q in found if q)
+
+    assert qualifiers(title) == old_qualifiers(title) == frozenset({"A2블록", "수요자맞춤형"})
+    assert ref_qualifiers(title) == frozenset({"A2블록", "수요자맞춤형"})
+
+
+def test_only_the_head_of_a_very_long_title_is_classified():
+    """제목 판단은 앞 MAX_TITLE_CHARS자만 봐요(실제 제목은 수백 자를 넘지 않아요). 저장하는 제목은 그대로예요."""
+    head = "2026년 행복주택 입주자 모집공고"
+    assert classify(head + " " * 100 + "[정정공고]") == CORRECTION
+    assert classify(head + " " * titles.MAX_TITLE_CHARS + "[정정공고]") == NOTICE
+
+
+@pytest.mark.parametrize("limit", [titles.MAX_TITLE_CHARS, 10**9])
+def test_title_checks_stay_fast_on_hostile_titles(monkeypatch, limit):
+    """2026-11-16 M-6: 목록 제목마다 도는 정규식이 긴 공백·괄호·숫자에서 제곱~세제곱으로 느려졌어요(공백 4천 자 classify 25초, '(' 8천 개 1.9초).
+    잘라 보는 길이를 없애도(정규식만으로도) 빨라야 해요."""
+    monkeypatch.setattr(titles, "MAX_TITLE_CHARS", limit)
+    hostile = [" " * 100_000, "가" * 100_000, "(" * 100_000, "[" * 100_000, "(1" * 50_000, "(정정 " * 20_000, "동" + " " * 100_000 + "x"]
+    hostile.append("가" * 100_000 + "(2026.10.01) 당첨자 발표")
+    started = time.perf_counter()
+    for title in hostile:
+        classify(title)
+        title_ref(title)
+        ref_qualifiers(title)
+        qualifiers(title)
+    assert time.perf_counter() - started < 1
+    assert (title_ref(hostile[-1]) is not None) == (limit > 100_000)  # 잘라 보면 10만 자 뒤의 공고일은 안 봐요

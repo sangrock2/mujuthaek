@@ -59,6 +59,7 @@ EXCHANGE = outbox.EXCHANGE
 DLX = "mujuthaek.dlx"
 QUEUE = "mujuthaek.raw.collected"
 DLQ = QUEUE + ".dlq"
+RETRY_EXCHANGE = "mujuthaek.extraction.retry"
 ROUTING_KEY = "raw.notice.collected"
 # 정책 원본(raw.policy.collected). 이 큐를 꺼내 판정 틀을 만듭니다(받을 큐가 없으면 collector 발행기(mandatory)가 거절당해 같은 묶음의
 # 공고 이벤트까지 막히므로 선언도 유지). 큐는 dev에서 인자 없이 먼저 만들어져 있어, 인자를 바꾸면 다시 선언할 때 거절당합니다(PRECONDITION_FAILED).
@@ -90,6 +91,13 @@ def _db_errors() -> tuple[type[BaseException], ...]:
 
 
 def declare(channel) -> None:
+    if broker.managed_topology():
+        # 격리 배포는 준비 도구가 모든 바인딩을 먼저 만들어요. 다른 서비스 큐·공통 exchange를 변경하지 않아요.
+        channel.exchange_declare(exchange=EXCHANGE, passive=True)
+        channel.exchange_declare(exchange=RETRY_EXCHANGE, passive=True)
+        for queue in (QUEUE, DLQ, POLICY_QUEUE, POLICY_DLQ):
+            channel.queue_declare(queue=queue, passive=True)
+        return
     channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
     channel.exchange_declare(exchange=DLX, exchange_type="topic", durable=True)
     channel.queue_declare(queue=DLQ, durable=True)
@@ -110,6 +118,16 @@ def declare(channel) -> None:
 DLQ_TARGETS = {"notice": (DLQ, QUEUE), "policy": (POLICY_DLQ, POLICY_QUEUE)}
 
 
+def publish_to_owned_queue(channel, queue: str, body: bytes, properties: Any) -> None:
+    """기본 exchange 허용은 모든 큐로 직접 주입할 수 있어 격리 모드에서는 자기 topic 경로만 써요."""
+    if broker.managed_topology():
+        if queue not in {QUEUE, POLICY_QUEUE, POLICY_DLQ}:
+            raise ValueError("Not an extraction retry destination")
+        channel.basic_publish(exchange=RETRY_EXCHANGE, routing_key=queue, body=body, properties=properties)
+    else:
+        channel.basic_publish(exchange="", routing_key=queue, body=body, properties=properties)
+
+
 def replay_dlq(channel, dlq: str, queue: str, limit: int) -> int:
     """.dlq 메시지를 원래 큐로 최대 limit건 되돌립니다(원인을 고친 뒤 운영자가 실행). 옮긴 뒤에만 .dlq에서 지웁니다.
     같은 정책·공고 버전은 처리 기록으로 걸러지므로, 이미 끝난 것이 섞여 있어도 AI를 다시 부르지 않습니다."""
@@ -118,7 +136,7 @@ def replay_dlq(channel, dlq: str, queue: str, limit: int) -> int:
         method, properties, body = channel.basic_get(queue=dlq, auto_ack=False)
         if method is None:
             break
-        channel.basic_publish(exchange="", routing_key=queue, body=body, properties=properties)
+        publish_to_owned_queue(channel, queue, body, properties)
         channel.basic_ack(method.delivery_tag)
         moved += 1
     return moved
@@ -133,7 +151,7 @@ def finish_policy(channel, delivery_tag: int, decision: str, body: bytes, proper
     elif decision == "requeue":
         channel.basic_nack(delivery_tag, requeue=True)
     else:
-        channel.basic_publish(exchange="", routing_key=POLICY_DLQ, body=body, properties=failure_properties(properties, reason))
+        publish_to_owned_queue(channel, POLICY_DLQ, body, failure_properties(properties, reason))
         channel.basic_ack(delivery_tag)
 
 

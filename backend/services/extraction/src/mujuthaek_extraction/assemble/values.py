@@ -23,6 +23,8 @@ UNIT_SCALES = {
 # "1억 2,000만", "3억5천만원"처럼 단위가 섞인 표기. 억·만으로 큰 묶음을 나누고, 묶음 안은 천·백·십으로 읽습니다.
 LARGE = re.compile(r"(?:(?P<eok>[^억만]+)억)?(?:(?P<man>[^억만]+)만)?(?P<rest>[^억만]*)")
 SMALL = re.compile(r"(?:(?P<cheon>[\d.]*)천)?(?:(?P<baek>[\d.]*)백)?(?:(?P<sip>[\d.]*)십)?(?P<one>[\d.]*)")
+MAX_AMOUNT_CHARS = 256
+MAX_UNIT_CHARS = 64
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,8 @@ def _small(text: str) -> Decimal | None:
 def point_readings(source_amount: str | None, source_unit: str | None) -> tuple[int, ...]:
     """마침표 뒤 숫자가 세 자리라 모호한 금액(「18,400.000」)의 두 읽기: 마침표를 자릿수 쉼표로 본 값과, 소수점으로 본 값(그 1/1000,
     원 단위로 떨어질 때만). 모호한 금액이 아니면 빈 튜플. 어느 읽기인지는 부른 쪽이 다른 근거(같은 요금안의 합)로 정합니다."""
+    if len(source_amount or "") > MAX_AMOUNT_CHARS or len(source_unit or "") > MAX_UNIT_CHARS:
+        return ()
     compact = "".join(unicodedata.normalize("NFKC", source_amount or "").split())
     if not POINT_OR_COMMA.search(compact):
         return ()
@@ -83,6 +87,8 @@ def point_readings(source_amount: str | None, source_unit: str | None) -> tuple[
 
 def to_krw(source_amount: str | None, source_unit: str | None) -> AmountResult:
     """원문 금액과 단위를 원 단위 정수로 환산합니다. 모호하거나 읽을 수 없으면 금액 대신 검수 사유를 담아 돌려줍니다."""
+    if len(source_amount or "") > MAX_AMOUNT_CHARS or len(source_unit or "") > MAX_UNIT_CHARS:
+        return AmountResult(None, "금액 또는 단위가 너무 길어 해석하지 않습니다.")
     if source_amount is None or not _clean(source_amount):
         return AmountResult(None, "원문 금액이 없습니다.")
     # 칸 하나에 금액 두 개(「12,614 2,614」: 전환 증액·감액이 위아래로 한 칸)를 붙여 읽으면 126,142,614처럼 엉뚱한 금액이 됩니다
@@ -145,6 +151,8 @@ RANGE = re.compile(r"^\s*(.+?)\s*(?:~|∼|～|〜|-|－)\s*(.+?)\s*$")
 def range_krw(source_amount: str | None, source_unit: str | None) -> tuple[int, int] | None:
     """「1,200만~1,500만」「12,000,000 ~ 15,000,000」처럼 범위로만 적은 금액 → (작은 값, 큰 값). 양쪽을 같은 단위로 읽습니다.
     한쪽만 단위가 붙은 「1,200~1,500만원」은 뒤쪽 단위를 앞쪽에도 씁니다. 읽지 못하거나 거꾸로면 None."""
+    if len(source_amount or "") > MAX_AMOUNT_CHARS or len(source_unit or "") > MAX_UNIT_CHARS:
+        return None
     match = RANGE.match(source_amount or "")
     if not match:
         return None

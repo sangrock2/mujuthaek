@@ -2,7 +2,10 @@
  * 방문 통계(Google Analytics 4). 측정 ID(NEXT_PUBLIC_GA_ID)가 있고 사용자가 동의했을 때만 GA 스크립트를 불러요.
  * 보내는 것은 화면 이동과 아래 이벤트뿐이에요. 회원 ID·소득·자산·나이 같은 입력값은 보내지 않아요.
  */
-export const GA_ID = process.env.NEXT_PUBLIC_GA_ID ?? "";
+import { safeGaId } from "./securityHeaders";
+
+/** GA4 모양(G-…)이 아니면 GA를 쓰지 않아요. 이 값은 인라인 초기화 스크립트에 들어가요 (2026-11-16 보안 감사 4장) */
+export const GA_ID = safeGaId(process.env.NEXT_PUBLIC_GA_ID);
 /** 개발 중 확인용: 1이면 이벤트가 GA 「DebugView」에만 보이고 보고서 숫자에는 섞이지 않아요 */
 export const GA_DEBUG = process.env.NEXT_PUBLIC_GA_DEBUG === "1";
 
@@ -26,7 +29,33 @@ export function writeConsent(consent: "granted" | "denied") {
   } catch {
     // 저장이 막힌 브라우저면 이번 방문 동안만 적용돼요
   }
+  if (consent === "denied") stopAnalytics();
   window.dispatchEvent(new CustomEvent(CONSENT_EVENT, { detail: consent }));
+}
+
+/**
+ * 동의를 철회하면(또는 거부하면) 이미 불러온 GA도 바로 멈추고 GA 쿠키(_ga, _ga_…)를 지워요 (2026-11-16 보안 감사 4장).
+ * 불러온 gtag.js는 페이지를 새로 열 때까지 남지만 ga-disable 표시가 있으면 아무것도 보내지 않아요
+ */
+function stopAnalytics() {
+  if (typeof window === "undefined") return;
+  if (GA_ID) (window as unknown as Record<string, unknown>)[`ga-disable-${GA_ID}`] = true;
+  try {
+    const names = document.cookie
+      .split(";")
+      .map((part) => part.split("=")[0].trim())
+      .filter((name) => name === "_ga" || name.startsWith("_ga_"));
+    // GA는 쿠키를 가장 상위 도메인(예: .mujuthaek.store)에 둬요. 호스트의 상위 도메인마다 지워 봐요
+    const labels = location.hostname.split(".");
+    const domains = [""];
+    for (let i = 0; i < labels.length - 1; i++)
+      domains.push(`; domain=.${labels.slice(i).join(".")}`);
+    for (const name of names)
+      for (const domain of domains)
+        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/${domain}`;
+  } catch {
+    // 쿠키를 못 읽는 환경이면 지울 것도 없어요
+  }
 }
 
 export function onConsentChange(listener: (consent: Consent) => void) {
@@ -57,12 +86,13 @@ type GaWindow = Window & {
  */
 export function track(name: AnalyticsEvent, params: Record<string, string | number> = {}) {
   if (typeof window === "undefined") return;
+  // 철회한 뒤에는 이미 불러온 gtag가 있어도 보내지 않아요
+  if (!GA_ID || readConsent() !== "granted") return;
   const w = window as GaWindow;
   if (w.gtag) {
     w.gtag("event", name, params);
     return;
   }
-  if (!GA_ID || readConsent() !== "granted") return;
   const queue = (w[QUEUE_KEY] ??= []);
   if (queue.length < QUEUE_MAX) queue.push([name, params]);
 }

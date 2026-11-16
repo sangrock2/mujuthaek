@@ -8,4 +8,6 @@ db         connect(url)                     PostgreSQL 연결
 logging    setup(service)                   JSON 한 줄 로그
 contracts  validate_event(event)            contracts/events/의 JSON 스키마로 이벤트 검사
 slack      SlackNotifier.from_env().send()  슬랙 수신 웹훅으로 알림 (주소 없으면 보내지 않음, 실패는 SlackError)
+archives   check_zip_bytes(data, max_entries=…)  ZipFile을 만들기 전에 중앙 디렉터리 크기·항목 수 확인 (HWPX·XLSX)
+http_server BoundedHTTPServer               내부 HTTP의 연결 수·소켓 대기·요청 전체 시한
 """

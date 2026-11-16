@@ -1,9 +1,13 @@
 """V9 값–인용 대조: 인용문은 진짜인데 값을 잘못 옮긴 결과가 자동 완료되지 않아야 합니다(검토 2026-10-16)."""
 
 import copy
+import re
+import time
+
+import pytest
 
 from mujuthaek_extraction.verify import verify_extraction
-from mujuthaek_extraction.verify.claims import _count_bound, _has_date, _has_number, _krw_found, _price_unit_ok, check_claims
+from mujuthaek_extraction.verify.claims import NUMBER, UNIT_AFTER, _count_bound, _has_date, _has_number, _krw_found, _price_unit_ok, check_claims
 from mujuthaek_extraction.verify.model import SourceBundle
 from mujuthaek_extraction.verify.tables import place_of
 from tests.verify.test_verify import assembled, clock
@@ -251,6 +255,42 @@ def test_amount_must_match_its_written_unit():
     assert not _krw_found([(row, None)], 379_000_000)  # 단위 근거 없음
     # 2026-11-09 유료 확인 gh-809: 「자동차가액이 4,542」 다음 줄 「만원 이하」를 담당이 검증할 수 없다며 조건식을 비움. 이어 인용하면 한 금액으로 읽음
     assert _krw_found([("총 자산 중 자동차가액이 4,542\n만원 이하 일 것", None)], 45_420_000)
+
+
+# 2026-11-16 이전의 숫자 뒤 단위 정규식. UNIT_AFTER가 같은 단위를 같은 자리까지 읽는지 견줍니다
+OLD_UNIT_AFTER = re.compile(r"\s*\)?\s*(백\s*만\s*원|천\s*만\s*원|천\s*원|만\s*원|억\s*원|원|억|만)")
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "개별 자동차가액 ( 4,563 )만원 이하",
+        "자동차가액 3,708만원 이하",
+        "자동차가액이 4,542\n만원 이하 일 것",
+        "임대보증금 12,000 천원",
+        "총자산 2억 4천5백만원",
+        "총자산합산기준 ( 337 )백만원 이하",
+        "월임대료 150,000원 (관리비 별도)",
+        "보증금 1,000) 원",
+        "| 52C | 38,025 | 391,800 |",
+        "5 백 만 원　이하",
+    ],
+)
+def test_unit_after_reads_the_same_unit_as_before(quote):
+    """2026-11-16 M-6: 공백을 한 번에만 읽게(*+) 바꿨어요. 숫자마다 읽는 단위와 끝 자리가 예전과 같아야 합니다."""
+    for number in NUMBER.finditer(quote):
+        old, new = OLD_UNIT_AFTER.match(quote, number.end()), UNIT_AFTER.match(quote, number.end())
+        assert (old and (old.span(), old[1])) == (new and (new.span(), new[1]))
+
+
+def test_number_unit_check_stays_fast_on_long_whitespace():
+    """2026-11-16 M-6: 숫자 뒤 긴 공백(전각 공백은 수집기의 공백 정리에도 남아요)에서 두 \\s*를 나눠 보느라 제곱으로 느려졌어요(8천 자 0.55초).
+    추출 일꾼이 묶여 있는 동안 RabbitMQ 연결 유지·점유 연장이 멈춰 같은 공고를 두 번 처리할 수 있었어요."""
+    quote = "보증금 1" + "　" * 50_000 + "x " + ("2" + " " * 1_000) * 50
+    started = time.perf_counter()
+    assert not _krw_found([(quote, None)], 5.0)
+    assert not _price_unit_ok("1", "천원", [(quote, None)])
+    assert time.perf_counter() - started < 1
 
 
 def test_price_unit_must_come_from_the_same_column_or_table():

@@ -1,6 +1,9 @@
 package kr.mujuthaek.api.user.security;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.user.domain.SocialProvider;
@@ -52,17 +55,26 @@ final class SocialProfiles {
     return new SocialProfile(SocialProvider.NAVER, id, text(response.get("nickname")));
   }
 
-  /** 구글 /oauth2/v3/userinfo (scope profile): {"sub": "1078…", "name": "…", "given_name": "…"}. */
+  /**
+   * 구글 /oauth2/v3/userinfo (scope profile): {"sub": "1078…", "name": "…", "given_name": "…"}.
+   *
+   * <p>구글의 name·given_name은 대개 실명이라 닉네임으로 쓰지 않아요. 예전에는 이 이름이 공개 채팅의 작성자 이름이 돼서, 로그인 없이 주거 관련 대화와
+   * 실명을 이을 수 있었어요(2026-11-16 보안 감사 L-8). 닉네임은 비워 두고(가입할 때 별칭을 만들어요), 실명은 예전에 실명을 닉네임으로 저장한 회원을 찾는
+   * 데만 넘겨요.
+   */
   private static SocialProfile google(Map<String, Object> attributes) {
     String id = text(attributes.get("sub"));
     if (id == null) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "구글 회원번호가 없어요");
     }
-    String nickname = text(attributes.get("name"));
-    return new SocialProfile(
-        SocialProvider.GOOGLE,
-        id,
-        nickname != null ? nickname : text(attributes.get("given_name")));
+    Set<String> realNames = new HashSet<>();
+    for (String key : List.of("name", "given_name")) {
+      String name = text(attributes.get(key));
+      if (name != null) {
+        realNames.add(name.strip());
+      }
+    }
+    return new SocialProfile(SocialProvider.GOOGLE, id, null, realNames);
   }
 
   @SuppressWarnings("unchecked")

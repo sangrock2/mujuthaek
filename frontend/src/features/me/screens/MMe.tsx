@@ -11,10 +11,15 @@ import { MTabBar } from "@/shared/layout/MTabBar";
 import { MTopBar } from "@/shared/layout/MTopBar";
 import { MPage } from "@/shared/layout/Responsive";
 import { Toggle } from "@/shared/ui/Toggle";
-import { clearConditions, setSaveOnDevice } from "@/features/conditions/store";
+import {
+  clearConditions,
+  setSaveOnDevice,
+  useHasStoredConditions,
+} from "@/features/conditions/store";
 import { useConditionSummary } from "@/features/conditions/useConditionSummary";
 import { useFavorites } from "@/features/favorites/queries";
 import { useMyReports } from "@/features/me/api";
+import { AnalyticsConsentSetting } from "@/shared/analytics/Analytics";
 import { cn } from "@/shared/lib/cn";
 import { providerLabel, useLogout, useSession } from "@/features/auth/session";
 import { routes } from "@/shared/lib/routes";
@@ -44,6 +49,7 @@ function RowInner({ label, value, accent }: { label: string; value: string; acce
 }
 
 export function MMe() {
+  const hasStoredConditions = useHasStoredConditions();
   const { logout, logoutError } = useLogout();
   const router = useRouter();
   const params = useSearchParams();
@@ -163,7 +169,7 @@ export function MMe() {
             </span>
             <Toggle checked={saveOnDevice} onChange={setSaveOnDevice} label="이 기기에 조건 저장" />
           </div>
-          {conditions.status === "ready" && conditions.hasConditions && (
+          {hasStoredConditions && (
             <button
               type="button"
               onClick={clearConditions}
@@ -187,6 +193,7 @@ export function MMe() {
         <section aria-label="저장된 정보" className="rounded-card bg-surface px-[18px] py-[14px]">
           <StoredInfoList compact />
         </section>
+        <AnalyticsConsentSetting className="rounded-card bg-surface px-[18px] py-[14px]" />
 
         <nav aria-label="고객센터" className="rounded-card bg-surface flex flex-col p-[6px]">
           {supportLinks.map((l) => (

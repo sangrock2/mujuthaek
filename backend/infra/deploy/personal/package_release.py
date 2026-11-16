@@ -5,19 +5,27 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
-EXCLUDED = {".git", ".venv", ".gradle", ".next", "node_modules", "__pycache__", "build", "test-results", "runtime", "playwright-report"}
-PREFIXES = ("frontend/", "backend/services/", "backend/libs/", "backend/contracts/", "backend/infra/deploy/personal/")
-EXTRA = {"backend/.dockerignore", "backend/infra/deploy/certificates.py", "backend/infra/deploy/nginx/acme.conf"}
+EXCLUDED = {".git", ".venv", ".gradle", ".next", "node_modules", "__pycache__", "build", "test-results", "runtime", "playwright-report",
+            # Certificate state the certbot helper creates next to the compose file when run with --base-dir:
+            # ACME account keys (accounts/**/private_key.json), registrations, issued keys and challenge files.
+            "letsencrypt", "letsencrypt-work", "letsencrypt-logs", "tls", "acme-webroot", "accounts", "backups"}
+# The host runs no frontend container (Vercel serves the site), so frontend source is never shipped to it.
+# The port-80 nginx file the compose mounts is personal/nginx/acme.conf, inside the personal prefix.
+PREFIXES = ("backend/services/", "backend/libs/", "backend/contracts/", "backend/infra/deploy/personal/")
+EXTRA = {"backend/.dockerignore", "backend/infra/deploy/certificates.py"}
+SECRET_NAMES = {"private_key.json", "regr.json", "release-host.env", "backup-aws.env"}
 
 
 def allowed(name):
     path = Path(name)
+    lowered = path.name.lower()
     return (
         not path.is_absolute() and ".." not in path.parts
         and (name.startswith(PREFIXES) or name in EXTRA)
         and not EXCLUDED.intersection(path.parts)
         and not any(part.startswith(".env") for part in path.parts)
-        and path.suffix.lower() not in {".pem", ".key", ".p12", ".jks", ".log"}
+        and path.suffix.lower() not in {".pem", ".key", ".p12", ".jks", ".log", ".env", ".dump"}
+        and lowered not in SECRET_NAMES and "private_key" not in lowered
         and not path.name.startswith(("tls-contact", "tls-settings", "credentials"))
     )
 

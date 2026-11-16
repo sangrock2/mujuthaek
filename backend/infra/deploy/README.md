@@ -18,7 +18,7 @@ nginx는 API를 443 TLS에서만 제공합니다. 80 포트는 `/.well-known/acm
 
 1. 새 서버와 이미지 저장소·DB·객체 저장소 등 배포 환경을 먼저 준비합니다. 인증 대상은 본인 소유 API 도메인 또는 고정 공인 IP입니다. IP 인증서는 Let's Encrypt shortlived 프로필을 사용하므로 약 6일마다 만료하며 자동 갱신이 필수입니다.
 2. 서버의 전용 디렉터리(예: `/opt/mujuthaek/tls`)에 `fullchain.pem`, `privkey.pem`을 준비합니다. 디렉터리는 root 소유 700, 개인키는 600을 권장합니다. Certbot live 디렉터리의 링크만 단독 마운트하면 archive 경로가 끊길 수 있으므로 실제 파일을 복사하거나 갱신 훅으로 배치합니다. 인증서는 Git·Docker 이미지·로그에 넣지 않습니다.
-3. 서버 `.env`에 `API_TLS_CERT_DIR=/opt/mujuthaek/tls`를 설정합니다. Compose는 이를 read-only로 마운트합니다. 값이 없으면 구성 검증이 실패하며 인증서가 없거나 키가 불일치하면 nginx가 시작되지 않습니다. `deploy.sh`는 앱 교체 전과 프록시 시작 전에 `nginx -t`를 수행합니다.
+3. 서버 `.env`에 `API_TLS_CERT_DIR=/opt/mujuthaek/tls`와 인증서 이름과 같은 `API_PUBLIC_HOST=api.example.org`를 설정합니다. Compose는 인증서를 read-only로 마운트하고 공식 Nginx entrypoint가 허용한 Host만 사용하는 설정을 렌더링합니다. 값이 없으면 구성 검증이 실패하며 인증서가 없거나 키가 불일치하면 nginx가 시작되지 않습니다. `deploy.sh`는 앱 교체 전과 프록시 시작 전에 `nginx -t`를 수행합니다. `certificates.py issue`는 검증한 identifier를 이 Host 설정에도 기록합니다.
 4. 새 서버의 보안 그룹에서 ACME용 80과 HTTPS용 443을 허용합니다. 백엔드 API 포트 8080은 loopback에만 둡니다. 80을 사용하는 앱 프록시는 두지 않습니다.
 5. Vercel Production·Preview 각각 `API_ORIGIN=https://<해당 API 도메인>`으로 바꿔 재배포합니다. 트래픽 수집을 사용하면 `TRAFFIC_INGEST_URL`도 HTTPS로 바꾸고, Vercel의 `NEXT_PUBLIC_API_BASE_URL`은 비웁니다. `FRONTEND_URL`, `OAUTH_REDIRECT_BASE_URL`, 제공자 콘솔 콜백은 실제 프론트 주소를 유지합니다.
 6. 인증서 검증을 끄지 않은 `curl -fsS https://<API 도메인>/actuator/health`와 프론트의 로그인·refresh·로그아웃을 확인합니다. Production·Preview 양쪽 모두 확인합니다. HTTPS가 실패할 때 HTTP로 되돌리지 않습니다.

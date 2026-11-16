@@ -4,11 +4,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 import kr.mujuthaek.api.chat.domain.ChatRoom;
 import kr.mujuthaek.api.chat.domain.MessageStatus;
-import kr.mujuthaek.api.chat.domain.PersonalInfo;
 import kr.mujuthaek.api.chat.dto.request.ReportRequest;
 import kr.mujuthaek.api.chat.dto.request.SendMessageRequest;
 import kr.mujuthaek.api.chat.dto.response.ChatMessageResponse;
@@ -25,6 +25,8 @@ import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.common.id.UuidV7;
 import kr.mujuthaek.api.common.pagination.CursorKey;
 import kr.mujuthaek.api.common.pagination.CursorQuery;
+import kr.mujuthaek.api.common.text.ControlChars;
+import kr.mujuthaek.api.common.text.PersonalInfo;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +43,16 @@ public class ChatService {
   static final int SEND_LIMIT = 5;
   static final Duration SEND_WINDOW = Duration.ofMinutes(1);
   static final int REPORTS_TO_HIDE = 3;
+
+  /**
+   * 회원 한 명이 하루(24시간)에 낼 수 있는 신고 수. 상한이 없어서 계정 하나로 모든 글을 신고해 검토 대기열을 묻어 버릴 수 있었어요(2026-11-16 보안 감사
+   * L-11).
+   */
+  static final int DAILY_REPORT_LIMIT = 20;
+
+  /** 신고 기타 사유 길이 (ReportRequest와 같아요) */
+  static final int MAX_DETAIL_LENGTH = 200;
+
   static final int DEFAULT_PAGE_SIZE = 30;
 
   /** 재연결 때 한 번에 다시 보낼 놓친 메시지 수. 더 놓쳤으면 화면이 목록을 다시 불러 맞춰요. */
@@ -56,6 +68,7 @@ public class ChatService {
   private final ChatSseHub hub;
   private final ApplicationEventPublisher events;
   private final Clock clock;
+  private final ChatActionLimiter limiter;
 
   public ChatService(
       ChatRooms rooms,
@@ -63,13 +76,15 @@ public class ChatService {
       ChatReportRepository reports,
       ChatSseHub hub,
       ApplicationEventPublisher events,
-      Clock clock) {
+      Clock clock,
+      ChatActionLimiter limiter) {
     this.rooms = rooms;
     this.messages = messages;
     this.reports = reports;
     this.hub = hub;
     this.events = events;
     this.clock = clock;
+    this.limiter = limiter;
   }
 
   public ChatRoomResponse room(UUID noticeId) {
@@ -146,6 +161,7 @@ public class ChatService {
   /** 좋아요. 여러 번 불러도 결과가 같아요. 보이는 메시지만, 읽기 전용 방은 409. */
   @Transactional
   public LikeResponse like(UUID messageId, UUID userId) {
+    limitLikes(userId);
     MessageRow row =
         messages
             .find(messageId, null)
@@ -163,6 +179,7 @@ public class ChatService {
   /** 좋아요 취소. 여러 번 불러도 결과가 같아요. 읽기 전용 방은 409. */
   @Transactional
   public LikeResponse unlike(UUID messageId, UUID userId) {
+    limitLikes(userId);
     MessageRow row = messages.find(messageId, null).orElseThrow(messageNotFound());
     requireWritable(findRoom(row.noticeId()));
     if (!messages.removeLike(messageId, userId)) {
@@ -173,16 +190,26 @@ public class ChatService {
     return new LikeResponse(messageId, count, false);
   }
 
-  /** 신고 (읽기 전용 방에서도 돼요). 검토 전 신고 3건째에 자동으로 가리고 관리자 검토를 기다려요. 같은 회원이 두 번 신고하면 409. */
+  /**
+   * 신고 (읽기 전용 방에서도 돼요). 검토 전 신고 3건째에 자동으로 가리고 관리자 검토를 기다려요. 같은 회원이 두 번 신고하면 409, 하루 {@value
+   * #DAILY_REPORT_LIMIT}건을 넘기면 429. 기타 사유에 휴대폰 번호·주민등록번호나 제어 문자가 있으면 400.
+   */
   @Transactional
   public void report(UUID messageId, UUID userId, ReportRequest request) {
+    String detail = checkedDetail(request.detail());
+    messages.lockSender(userId);
+    messages.lockMessage(messageId);
     MessageRow row =
         messages
             .find(messageId, null)
             .filter(m -> m.status() != MessageStatus.DELETED)
             .orElseThrow(messageNotFound());
-    if (!reports.insert(
-        UuidV7.next(), messageId, userId, request.reason(), request.detail(), now())) {
+    OffsetDateTime now = now();
+    if (reports.countSince(userId, now.minusDays(1)) >= DAILY_REPORT_LIMIT) {
+      throw new CustomException(
+          ErrorCode.RATE_LIMITED, "신고는 하루에 " + DAILY_REPORT_LIMIT + "건까지 할 수 있어요");
+    }
+    if (!reports.insert(UuidV7.next(), messageId, userId, request.reason(), detail, now)) {
       throw new CustomException(ErrorCode.CHAT_ALREADY_REPORTED);
     }
     MessageStatus after = messages.countReport(messageId, REPORTS_TO_HIDE);
@@ -198,25 +225,40 @@ public class ChatService {
    */
   public SseEmitter subscribe(UUID noticeId, String lastEventId) {
     ChatRoom room = findRoom(noticeId);
-    SseEmitter emitter = hub.subscribe(room.noticeId());
     UUID after = eventId(lastEventId);
-    if (after != null) {
-      for (MessageRow row : messages.after(room.noticeIds(), after, RESUME_LIMIT)) {
+    // 놓친 메시지는 자리를 잡기 전에 읽어요. 자리를 잡은 뒤 DB 조회가 실패하면 그 연결을 스프링이 모르게 되어 자리가 영영 남았어요(보안 감사 M-4)
+    List<MessageRow> missed =
+        after == null ? List.of() : messages.after(room.noticeIds(), after, RESUME_LIMIT);
+    SseEmitter emitter = hub.subscribe(room.noticeId());
+    try {
+      for (MessageRow row : missed) {
         hub.send(emitter, ChatEvent.created(ChatMessageMapper.toResponse(row, null)));
       }
+    } catch (RuntimeException e) {
+      hub.release(emitter);
+      throw e;
     }
     return emitter;
   }
 
   /**
-   * 탈퇴한 회원의 채팅 데이터 줄을 지워요 (요구사항 3-16: 탈퇴 후 데이터 0건). 보고 있는 사람 화면에서도 내려가게 지운 메시지를 방송해요(방송은 커밋 뒤). 탈퇴
-   * 트랜잭션에 함께 들어가요(커밋 직전에 불림, notice·area 제보 지우기와 같아요).
+   * 탈퇴한 회원의 메시지·좋아요와 신고의 개인 정보를 지워요. 신고는 회원 ID·자유 문구 없이 검토 작업으로 남겨, 숨긴 글이 검토 큐에서 사라지지 않게 해요. 보고 있는
+   * 사람 화면에서도 내려가게 지운 메시지를 방송해요(방송은 커밋 뒤). 탈퇴 트랜잭션에 함께 들어가요(커밋 직전에 불림, notice·area 제보 지우기와 같아요).
    */
   @Transactional
   public void forget(UUID userId) {
     for (var message : messages.forget(userId)) {
       events.publishEvent(ChatEvent.deleted(message.noticeId(), message.id()));
     }
+  }
+
+  /**
+   * 회원 닉네임을 별칭으로 바꾸면 지난 글의 작성자 이름도 바꿔요 (2026-11-16 보안 감사 L-8). 실시간 방송은 하지 않아요 — 보고 있는 화면은 다시 열 때
+   * 바뀌어요.
+   */
+  @Transactional
+  public void renameAuthor(UUID userId, String nickname) {
+    messages.renameAuthor(userId, nickname);
   }
 
   private ChatRoom findRoom(UUID noticeId) {
@@ -229,17 +271,44 @@ public class ChatService {
     }
   }
 
-  /** 앞뒤 공백을 지우고 1~500자인지 봐요 (글자 수는 이모지도 한 글자). */
+  /**
+   * 앞뒤 공백을 지우고 1~500자인지 봐요 (글자 수는 이모지도 한 글자). 줄바꿈·탭이 아닌 제어 문자(NUL 등)는 받지 않아요 — NUL은 DB가 받지 않아 500이
+   * 났어요(2026-11-16 보안 감사 L-12).
+   */
   private static String checkedContent(String content) {
     String stripped = content == null ? "" : content.strip();
     int length = stripped.codePointCount(0, stripped.length());
-    if (length == 0 || length > MAX_LENGTH) {
+    if (length == 0 || length > MAX_LENGTH || ControlChars.present(stripped)) {
       throw new CustomException(ErrorCode.CHAT_INVALID_CONTENT);
     }
     if (PersonalInfo.contains(stripped)) {
       throw new CustomException(ErrorCode.CHAT_PERSONAL_INFO);
     }
     return stripped;
+  }
+
+  /** 신고 기타 사유: 비면 null. 채팅 본문과 같은 개인정보·제어 문자 검사를 해요 (2026-11-16 보안 감사 L-7·L-12). */
+  private static String checkedDetail(String detail) {
+    if (detail == null || detail.isBlank()) {
+      return null;
+    }
+    String stripped = detail.strip();
+    if (stripped.length() > MAX_DETAIL_LENGTH || ControlChars.present(stripped)) {
+      throw new CustomException(
+          ErrorCode.VALIDATION_FAILED, "신고 사유는 " + MAX_DETAIL_LENGTH + "자까지 글자로 써 주세요");
+    }
+    if (PersonalInfo.contains(stripped)) {
+      throw new CustomException(ErrorCode.CHAT_PERSONAL_INFO);
+    }
+    return stripped;
+  }
+
+  private void limitLikes(UUID userId) {
+    if (!limiter.tryLike(userId)) {
+      throw new CustomException(
+          ErrorCode.RATE_LIMITED,
+          "좋아요는 1분에 " + ChatActionLimiter.LIKES_PER_MINUTE + "번까지 누를 수 있어요. 잠시 뒤에 다시 해 주세요");
+    }
   }
 
   private static UUID eventId(String value) {

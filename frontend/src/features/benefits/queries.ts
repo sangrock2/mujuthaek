@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { mockQuery } from "@/features/mock-query";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { safeExternalUrl } from "@/shared/lib/safeUrl";
 import { formatWon } from "@/features/notice/format";
 import {
   benefitsSummary,
@@ -106,6 +107,12 @@ export const useBenefit: (id: string | undefined, base?: Benefit) => BenefitStat
   ? useMockBenefit
   : useApiBenefit;
 
-/** 「신청하러 가기」 주소: 신청 주소, 없으면 정책 원문. 둘 다 없으면 버튼을 숨겨요(누를 수 없는 버튼이 되지 않게) */
-export const applyHref = (b: { applyUrl?: string | null; policyUrl?: string | null }) =>
-  (b.applyUrl && b.applyUrl !== "#" ? b.applyUrl : b.policyUrl) || undefined;
+/**
+ * 「신청하러 가기」 주소: 신청 주소, 없으면 정책 원문. 둘 다 없으면 버튼을 숨겨요(누를 수 없는 버튼이 되지 않게).
+ * http·https 주소만 써요 (data:·intent: 같은 주소는 건너뛰어요, 2026-11-16 보안 감사 L-4)
+ */
+export const applyHref = (b: { applyUrl?: string | null; policyUrl?: string | null }) => {
+  // 시연 데이터는 주소 자리에 「#」을 둬요
+  if (USE_MOCKS) return (b.applyUrl && b.applyUrl !== "#" ? b.applyUrl : b.policyUrl) || undefined;
+  return safeExternalUrl(b.applyUrl) ?? safeExternalUrl(b.policyUrl) ?? undefined;
+};

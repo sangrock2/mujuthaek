@@ -15,11 +15,13 @@ import kr.mujuthaek.api.TestcontainersConfiguration;
 import kr.mujuthaek.api.common.id.UuidV7;
 import kr.mujuthaek.api.notification.repository.InboxRepository;
 import kr.mujuthaek.api.notification.service.internal.InboxService;
+import kr.mujuthaek.api.user.TermsFixture;
 import kr.mujuthaek.api.user.domain.SocialProvider;
 import kr.mujuthaek.api.user.service.AuthTokenService;
 import kr.mujuthaek.api.user.service.LoginUser;
 import kr.mujuthaek.api.user.service.SocialLoginService;
 import kr.mujuthaek.api.user.service.SocialProfile;
+import kr.mujuthaek.api.user.service.TermsAgreementService;
 import kr.mujuthaek.api.user.service.WithdrawalService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +43,7 @@ class NotificationInboxApiTest {
 
   @Autowired MockMvc mvc;
   @Autowired SocialLoginService logins;
+  @Autowired TermsAgreementService terms;
   @Autowired AuthTokenService tokens;
   @Autowired WithdrawalService withdrawals;
   @Autowired InboxRepository repository;
@@ -120,7 +123,9 @@ class NotificationInboxApiTest {
   @Test
   void withdrawalRemovesTheInbox() throws Exception {
     String socialId = "inbox-" + UUID.randomUUID();
-    LoginUser me = logins.login(new SocialProfile(SocialProvider.KAKAO, socialId, "닉네임"));
+    LoginUser me =
+        TermsFixture.agreed(
+            terms, logins.login(new SocialProfile(SocialProvider.KAKAO, socialId, "닉네임")));
     add(me.userId(), 2, Instant.now());
 
     withdrawals.withdraw(me.userId(), SocialProvider.KAKAO, socialId);
@@ -196,8 +201,9 @@ class NotificationInboxApiTest {
   }
 
   private LoginUser login() {
-    return logins.login(
-        new SocialProfile(SocialProvider.KAKAO, "inbox-" + UUID.randomUUID(), "닉네임"));
+    return TermsFixture.agreed(
+        terms,
+        logins.login(new SocialProfile(SocialProvider.KAKAO, "inbox-" + UUID.randomUUID(), "닉네임")));
   }
 
   private String bearer(LoginUser user) {

@@ -17,6 +17,8 @@
 - 같은 알림을 한 번만 보내는 일(예: 달마다 한 번)은 부르는 쪽이 정해요(extraction cost_alert.py는 DB 기록으로 막아요).
 - 운영 오류 알림은 QuietAlerts로 보내요: 같은 종류는 10분에 한 번만, 머리에 [환경 서비스]를 붙이고,
   실패해도 예외를 내지 않아요. api(Spring OpsAlert)와 같은 웹훅·같은 규칙이에요.
+- send(text)의 text는 슬랙 서식(mrkdwn) 글 그대로 나가요. 수집한 제목·주소, 오류 문구처럼
+  바깥에서 온 글은 escape_text로 감싸서 넣어요(QuietAlerts는 알아서 감싸요. 2026-11-16 보안 감사 L-22).
 """
 
 from __future__ import annotations
@@ -31,15 +33,31 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from mujuthaek_platform.logging import redact_secrets
+
 log = logging.getLogger(__name__)
 DEFAULT_ENV_NAME = "SLACK_WEBHOOK_URL"
 DEFAULT_TIMEOUT_SECONDS = 5.0
 ENVIRONMENT_ENV_NAME = "MUJUTHAEK_ENV"  # 알림 머리의 환경 이름(prod · dev). 없으면 local
 DEFAULT_QUIET_SECONDS = 600.0
+DETAIL_CHARS = 2000  # QuietAlerts 내용(코드 블록) 글자 수 상한
 
 
 class SlackError(RuntimeError):
     """슬랙 전송 실패. 문구에는 오류 종류·응답 코드만 넣고 웹훅 주소는 넣지 않아요."""
+
+
+BACKTICK_STANDIN = "ˋ"  # U+02CB. 백틱(`)과 비슷하게 보이지만 슬랙이 코드 표시로 읽지 않아요
+
+
+def escape_text(text: str) -> str:
+    """바깥에서 온 글을 슬랙 글에 넣어도 무해하게(2026-11-16 보안 감사 L-22).
+    수집기 경고에는 크롤링한 제목·주소가 들어 있어요.
+    - 비밀 값은 로그와 같은 규칙으로 가려요(logging.redact_secrets). 알림 글은 로그 형식기를 거치지 않아요
+    - &·<·>는 슬랙 규칙대로 &amp;·&lt;·&gt;로 바꿔요. <!channel>·<@U…>·<주소|글자> 같은 호출·링크가 안 생겨요
+    - 백틱은 BACKTICK_STANDIN으로 바꿔요. 코드 블록(```)을 닫고 밖으로 나가거나 새 코드 표시를 열지 못해요"""
+    text = redact_secrets(text)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("`", BACKTICK_STANDIN)
 
 
 def read_env_value(names: str | Sequence[str], env_file: Path | str | None = None) -> str | None:
@@ -90,7 +108,8 @@ class SlackNotifier:
         return f"SlackNotifier(enabled={self.enabled}, timeout={self.timeout})"  # 주소는 넣지 않아요
 
     def send(self, text: str) -> bool:
-        """글 하나를 보내고 True. 주소가 없으면 보내지 않고 False(경고 로그는 처음 한 번만). 실패하면 SlackError."""
+        """글 하나를 보내고 True. 주소가 없으면 보내지 않고 False(경고 로그는 처음 한 번만). 실패하면 SlackError.
+        text는 서식 글 그대로 보내요. 바깥에서 온 글은 escape_text로 감싸서 넣으세요."""
         if self._url is None:
             self._warn_once()
             return False
@@ -119,7 +138,8 @@ class SlackNotifier:
 
 class QuietAlerts:
     """운영 오류 알림. 같은 종류(kind)는 quiet초 안에 한 번만 보내고, 그동안 생긴 횟수는 다음 알림에 붙여요.
-    보내지 못해도 경고 로그 한 줄로 끝나요(알림이 본 작업을 막지 않게). 내용에 개인 정보·비밀 값을 넣지 마세요."""
+    보내지 못해도 경고 로그 한 줄로 끝나요(알림이 본 작업을 막지 않게). 내용에 개인 정보·비밀 값을 넣지 마세요.
+    머리·제목·내용은 escape_text로 감싸요(내용은 코드 블록 안에, 가리고 DETAIL_CHARS자까지 자른 뒤 이스케이프)."""
 
     def __init__(
         self,
@@ -151,11 +171,13 @@ class QuietAlerts:
                 self._windows[kind] = (sent_at, suppressed + 1)
                 return None
             self._windows[kind] = (now, 0)
-        text = f"{self.prefix} {title}"
+        text = f"{escape_text(self.prefix)} {escape_text(title)}"
         if suppressed:
             text += f" (지난 알림 뒤 같은 일 {suppressed}번 더)"
         if detail:
-            text += f"\n```{detail.strip()[:2000]}```"
+            # 가린 뒤 자르기(자른 뒤 가리면 잘린 비밀 값이 남아요). 이스케이프는 맨 끝(자르다 &amp;가 깨지지 않게)
+            body = redact_secrets(detail).strip()[:DETAIL_CHARS]
+            text += f"\n```{escape_text(body)}```"
         return text
 
     def send(self, kind: str, title: str, detail: str | None = None) -> bool:

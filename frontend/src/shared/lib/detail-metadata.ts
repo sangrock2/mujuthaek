@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { pathSegment } from "@/shared/lib/api/path";
 import { notices } from "@/features/notice/mocks/notice";
 import { benefitsSummary } from "@/features/benefits/mocks/benefits";
 
@@ -15,7 +16,7 @@ export async function detailMetadata(kind: "notices" | "benefits", id: string): 
     if (origin) {
       try {
         const response = await fetch(
-          `${origin.replace(/\/$/, "")}/api/v1/${kind}/${encodeURIComponent(id)}`,
+          `${origin.replace(/\/$/, "")}/api/v1/${kind}/${pathSegment(id)}`,
           { signal: AbortSignal.timeout(3000) },
         );
         if (response.ok) {

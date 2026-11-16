@@ -1,12 +1,22 @@
+import gzip
+import time
+import tracemalloc
+import zlib
+
 import httpx
 import pytest
 
-from mujuthaek_collector.core.http_client import PoliteClient
+from mujuthaek_collector.core.http_client import PoliteClient, clear_robots_cache
 from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected
 
 
-def make_client(handler):
-    return PoliteClient(delay_seconds=0, transport=httpx.MockTransport(handler), sleep=lambda _: None)
+def make_client(handler, **options):
+    return PoliteClient(delay_seconds=0, transport=httpx.MockTransport(handler), sleep=lambda _: None, **options)
+
+
+def streamed(raw: bytes, **headers) -> httpx.Response:
+    """실제 전송처럼 본문을 아직 읽지 않은(압축된 그대로의) 응답. content=로 만들면 httpx가 미리 풀어 버려요."""
+    return httpx.Response(200, headers=headers, stream=httpx.ByteStream(raw))
 
 
 def robots(body="User-agent: *\nDisallow: /upload/\n"):
@@ -92,3 +102,157 @@ def test_robots_txt_is_fetched_once_across_clients():
         with make_client(handler) as client:
             client.text("https://a.kr/list.do")
     assert robots_requests == ["a.kr"]
+
+
+def test_stacked_compression_is_refused_before_inflating():
+    # 2026-11-16 보안 감사 H-5: httpx는 'gzip, gzip'을 상한 없이 한 조각에 풀어 591바이트가 268MB가 됐어요
+    bomb = gzip.compress(gzip.compress(b"\0" * 1_000_000))
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        return streamed(bomb, **{"Content-Type": "application/pdf", "Content-Encoding": "gzip, gzip"})
+
+    with make_client(handler) as client:
+        with pytest.raises(FileRejected, match="압축"):
+            client.download("https://bomb.example/notice.pdf")
+        with pytest.raises(httpx.DecodingError):
+            client.text("https://bomb.example/list.do")
+
+
+def test_gzip_body_is_inflated_in_small_pieces_and_capped():
+    bomb = gzip.compress(b"\0" * 30 * 1024 * 1024)  # 약 30KB가 30MB로 풀려요
+    plain = "공고 목록 " * 1000
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if request.url.path == "/list.do":
+            return streamed(gzip.compress(plain.encode()), **{"Content-Encoding": "gzip", "Content-Type": "text/html; charset=utf-8"})
+        return streamed(bomb, **{"Content-Type": "application/pdf", "Content-Encoding": "gzip"})
+
+    with make_client(handler, max_file_bytes=1024 * 1024) as client:
+        assert client.text("https://zip.example/list.do") == plain
+        tracemalloc.start()
+        try:
+            with pytest.raises(FileRejected, match="1MB"):
+                client.download("https://zip.example/notice.pdf")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    assert peak < 8 * 1024 * 1024  # 한 조각에 30MB를 풀던 예전과 달리 상한 근처에서 멈춰요
+
+
+def test_deflate_with_or_without_zlib_header_and_page_cap():
+    text = "청년 매입임대 " * 200
+    raw_deflate = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    raw_body = raw_deflate.compress(text.encode()) + raw_deflate.flush()
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if request.url.path == "/zlib":
+            return streamed(zlib.compress(text.encode()), **{"Content-Encoding": "deflate"})
+        if request.url.path == "/raw":
+            return streamed(raw_body, **{"Content-Encoding": "deflate"})
+        return streamed(b"x" * 5000)
+
+    with make_client(handler, max_page_bytes=4096) as client:
+        assert client.text("https://deflate.example/zlib") == text
+        assert client.text("https://deflate.example/raw") == text
+        with pytest.raises(httpx.DecodingError, match="0MB"):
+            client.text("https://deflate.example/big")
+
+
+class SlowStream(httpx.SyncByteStream):
+    def __iter__(self):
+        for _ in range(100):
+            time.sleep(0.02)
+            yield b"x" * 10
+
+
+def test_slow_body_is_cut_at_the_request_deadline():
+    # 보안 감사 M-7: 본문을 조금씩 끝없이 보내도 페이지 하나가 전체 시한을 넘기지 못해요
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        return httpx.Response(200, stream=SlowStream())
+
+    started = time.monotonic()
+    with make_client(handler, page_seconds=0.2) as client, pytest.raises(httpx.ReadTimeout):
+        client.text("https://slow.example/list.do")
+    assert time.monotonic() - started < 1.5
+
+
+def test_robots_txt_with_stacked_compression_is_unavailable_and_long_one_is_cut():
+    clear_robots_cache()
+
+    def stacked(request):
+        if request.url.path == "/robots.txt":
+            return streamed(gzip.compress(gzip.compress(b"User-agent: *\nDisallow:\n")), **{"Content-Encoding": "gzip, gzip"})
+        return streamed(b"%PDF")
+
+    with make_client(stacked) as client:
+        with pytest.raises(BlockedError):
+            client.text("https://stacked-robots.example/list.do")
+        with pytest.raises(FileNotReady):
+            client.download("https://stacked-robots.example/a.pdf")
+
+    def long_robots(request):
+        if request.url.path == "/robots.txt":
+            body = b"User-agent: *\nDisallow: /early\n#" + b"x" * (600 * 1024) + b"\nDisallow: /late\n"
+            return streamed(gzip.compress(body), **{"Content-Encoding": "gzip"})
+        return streamed("<table><tr><td>공고</td></tr></table>".encode())
+
+    with make_client(long_robots) as client:
+        assert "공고" in client.text("https://long-robots.example/late/list.do")
+        with pytest.raises(BlockedError):
+            client.text("https://long-robots.example/early/list.do")
+
+
+def test_legacy_tls_is_limited_to_named_hosts():
+    """낮춘 TLS 설정은 정한 호스트에만 쓰고, 인증서 확인은 켜 둬요(2026-11-16 보안 감사 4장)."""
+    import ssl
+
+    with PoliteClient(legacy_tls_hosts=("old.example.kr",)) as client:
+        legacy = client._client._transport_for_url(httpx.URL("https://old.example.kr/notice"))
+        others = [client._client._transport_for_url(httpx.URL(url)) for url in ("https://files.example.kr/a.pdf", "https://a.old.example.kr/", "http://old.example.kr/")]
+        assert all(other is not legacy for other in others)
+        context = legacy.pool._ssl_context
+        assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+        assert len(context.get_ciphers()) >= len(others[0].pool._ssl_context.get_ciphers())
+    with PoliteClient() as client:
+        assert not client._client._mounts
+
+
+@pytest.mark.parametrize("host", ["*.example.kr", "Old.Example.kr", "old.example.kr:8443", "old.example.kr/path", ""])
+def test_legacy_tls_hosts_must_be_exact_names(host):
+    with pytest.raises(ValueError):
+        PoliteClient(legacy_tls_hosts=(host,))
+
+
+def test_redirect_referer_drops_query_and_cross_host_path():
+    """이동 뒤 Referer에 이전 주소의 쿼리(serviceKey 등)를 싣지 않아요(2026-11-16 보안 감사 5장)."""
+    seen = {}
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if request.url.host == "api.example.kr":
+            return httpx.Response(302, headers={"Location": "https://files.example.kr/list?page=1"})
+        if request.url.path == "/list":
+            seen["cross"] = request.headers.get("Referer")
+            return httpx.Response(302, headers={"Location": "/final"})
+        seen["same"] = request.headers.get("Referer")
+        return httpx.Response(200, text="ok")
+
+    with make_client(handler) as client:
+        assert client.text("https://api.example.kr/v1/items?serviceKey=placeholder-value&page=1") == "ok"
+    assert seen == {"cross": "https://api.example.kr/", "same": "https://files.example.kr/list"}
+
+
+def test_redirect_referer_is_not_sent_on_downgrade():
+    from mujuthaek_collector.core.http_client import redirect_referer
+
+    assert redirect_referer("https://a.example.kr/x?k=v", "http://a.example.kr/y") is None
+    assert redirect_referer("http://a.example.kr/x?k=v#f", "http://a.example.kr/y") == "http://a.example.kr/x"

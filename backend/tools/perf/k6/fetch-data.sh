@@ -4,7 +4,8 @@
 #   tools/perf/k6/fetch-data.sh [BASE_URL]
 set -euo pipefail
 
-BASE_URL="${1:-${BASE_URL:-http://3.37.131.73}}"
+BASE_URL="${1:-${BASE_URL:-}}"
+[ -n "$BASE_URL" ] || { echo "BASE_URL을 인자나 환경변수로 줘요 (서버 주소는 저장소에 적지 않아요)" >&2; exit 1; }
 OUT="$(cd "$(dirname "$0")" && pwd)/data/data.json"
 
 regions="$(curl -fsS "$BASE_URL/api/v1/regions")"

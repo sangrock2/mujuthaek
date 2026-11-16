@@ -8,6 +8,7 @@ import {
   refreshAccessToken,
 } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { apiPath, isUuid, pathSegment } from "@/shared/lib/api/path";
 
 export type TraceToolCall = { name: string | null; args: string | null };
 export type TraceToolResult = { name: string | null; result: string | null; failed: boolean };
@@ -128,18 +129,34 @@ export function splitRefs(text: string, refs: Record<string, TraceRef> | undefin
 /** 관리자 원문 PDF 주소 (GET /api/admin/reviews/{jobId}/files/{fileId}). 목업이면 그 파일 ID의 시연용 예시 PDF (public/mock) */
 export function tracePdfUrl(jobId: string | null, fileId: string) {
   return USE_MOCKS || !jobId
-    ? `/mock/${encodeURIComponent(fileId)}.pdf`
-    : `${API_BASE_URL}/api/admin/reviews/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}`;
+    ? `/mock/${pathSegment(fileId)}.pdf`
+    : `${API_BASE_URL}${apiPath`/api/admin/reviews/${jobId}/files/${fileId}`}`;
 }
 
 /** 로그인이 필요한 관리자 원문 PDF를 받아요 (토큰이 끝났으면 한 번 다시 받아서) */
 export async function fetchAdminPdf(src: string): Promise<ArrayBuffer> {
+  const base = API_BASE_URL || window.location.origin;
+  const url = new URL(src, base);
+  const reviewFile = /^\/api\/admin\/reviews\/[^/]+\/files\/[^/]+$/.test(url.pathname);
+  const demoFile = USE_MOCKS && /^\/mock\/[^/]+\.pdf$/.test(url.pathname);
+  if (
+    url.origin !== new URL(base).origin ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (!reviewFile && !demoFile)
+  ) {
+    throw new Error("검수 원문 주소를 확인하지 못했어요.");
+  }
   const send = () =>
-    fetch(src, {
+    fetch(url.href, {
       headers: {
         ...(authToken.get() && { Authorization: `Bearer ${authToken.get()}` }),
       },
       credentials: "include",
+      // 검수 원문은 서버가 private 캐시를 허용해도 브라우저 캐시에 남기지 않아요 (공용 PC, 2026-11-16 보안 감사 4장)
+      cache: "no-store",
     });
   let res = await send();
   if (res.status === 401 && (await refreshAccessToken())) res = await send();
@@ -152,14 +169,19 @@ export function traceJobOf(reviewItemId: string): string | null {
   return reviewItemId.startsWith("n:") ? reviewItemId.slice(2) : null;
 }
 
+/**
+ * 작업 하나의 추출 과정. 작업 ID는 주소(?job=)에서 오니 UUID일 때만 부르고 경로에 인코딩해 넣어요
+ * (2026-11-16 보안 감사 L-6: 「..%2Fusers%3F…」 같은 값이 관리자 토큰으로 다른 API를 부르던 문제)
+ */
 export function useExtractionTrace(jobId: string | null) {
+  const valid = isUuid(jobId);
   return useQuery({
     queryKey: ["admin", "extractionTrace", USE_MOCKS ? "mock" : "live", jobId],
     queryFn: () =>
       USE_MOCKS
         ? Promise.resolve(mockTrace)
-        : api.get<ExtractionTrace>(`/api/admin/reviews/${jobId}/trace`),
-    enabled: USE_MOCKS || Boolean(jobId),
+        : api.get<ExtractionTrace>(apiPath`/api/admin/reviews/${jobId ?? ""}/trace`),
+    enabled: USE_MOCKS || valid,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

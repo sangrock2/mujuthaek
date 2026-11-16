@@ -6,7 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 트래픽 설정.
  *
- * @param ipSalt IP 해시에 섞는 비밀 값(TRAFFIC_IP_SALT). 날짜와 함께 섞어 날마다 해시가 달라져요(오래 따라가지 못하게)
+ * @param ipSalt IP 해시에 섞는 비밀 값(TRAFFIC_IP_SALT). 날짜와 함께 섞어 날마다 해시가 달라져요(오래 따라가지 못하게). 비었거나 16자보다
+ *     짧으면 쓰지 않고 JWT 비밀값에서 따로 만든 값을 써요(log.IpSalt)
  * @param rawIpDays 원본 IP 보관 일수. 지나면 지워요(보안 대응용)
  * @param keepDays 요청 기록 보관 일수
  * @param ingestToken 프론트 서버가 화면 요청을 넘길 때 쓰는 비밀 값(TRAFFIC_INGEST_TOKEN). 비면 화면 요청을 받지 않아요

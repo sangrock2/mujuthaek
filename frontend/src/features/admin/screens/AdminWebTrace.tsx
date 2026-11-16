@@ -20,6 +20,7 @@ import {
 } from "@/features/admin/trace";
 import { usePdfViewer } from "@/features/notice/usePdfViewer";
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { isUuid } from "@/shared/lib/api/path";
 import { cn } from "@/shared/lib/cn";
 
 /** 근거 id → 원문 PDF 위치와 여는 함수 (차례별 대화 안의 id를 누르면 원문을 열어요) */
@@ -82,7 +83,10 @@ function toolLabel(name: string | null) {
 
 /** 관리자 「추출 과정 보기」: 담당 에이전트들이 무엇을 넣고, 무엇이 거절돼 어떻게 고쳤고, 얼마가 들었는지 */
 export function AdminWebTrace() {
-  const job = useSearchParams().get("job");
+  // 주소의 작업 ID는 UUID일 때만 써요 (다른 값은 작업이 없는 것으로 보여요, 2026-11-16 보안 감사 L-6)
+  const requested = useSearchParams().get("job");
+  const job = isUuid(requested) ? requested : null;
+  const invalid = !USE_MOCKS && !job;
   const trace = useExtractionTrace(job);
   const pdf = usePdfViewer();
   const documents = trace.data?.documents ?? [];
@@ -110,9 +114,9 @@ export function AdminWebTrace() {
         </Link>
       </AdminTitleRow>
 
-      {trace.isPending ? (
+      {trace.isPending && !invalid ? (
         <p className="text-text-sub m-0 text-[15px]">불러오는 중이에요…</p>
-      ) : trace.isError || !trace.data ? (
+      ) : invalid || trace.isError || !trace.data ? (
         <p className="text-text-sub m-0 text-[15px]">
           추출 과정을 불러오지 못했어요. 작업이 없거나 추출 서버에 연결하지 못했어요.
         </p>

@@ -1,4 +1,4 @@
-package kr.mujuthaek.api.chat.domain;
+package kr.mujuthaek.api.common.text;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,6 +23,33 @@ class PersonalInfoTest {
         "외국인 000315-5123456"
       })
   void catchesMobileAndResidentNumbers(String text) {
+    assertThat(PersonalInfo.contains(text)).isTrue();
+  }
+
+  /** 예전 검사를 지나가던 모양 (2026-11-16 보안 감사 L-7). */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "\uFF10\uFF11\uFF10-\uFF11\uFF12\uFF13\uFF14-\uFF15\uFF16\uFF17\uFF18",
+        "010 / 1234 / 5678",
+        "010_1234_5678",
+        "010\u00A01234\u00A05678",
+        "010\u200B1234\u200B5678",
+        "0\u200B1\u200B0\u200B1234\u200B5678",
+        "+82 10-1234-5678",
+        "+82-010-1234-5678",
+        "+821012345678",
+        "0082 10 1234 5678",
+        "010\u20141234\u20145678",
+        "010\u22121234\u22125678",
+        "010\u31611234\u31615678",
+        "(010) 1234-5678",
+        "\u0660\u0661\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668",
+        "\uFF19\uFF17\uFF10\uFF11\uFF10\uFF11\uFF0D\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17",
+        "970101\u2014 1234567",
+        "970101 / 1234567"
+      })
+  void catchesDisguisedNumbers(String text) {
     assertThat(PersonalInfo.contains(text)).isTrue();
   }
 

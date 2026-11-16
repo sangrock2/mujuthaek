@@ -39,6 +39,11 @@ public record Applicant(
     Map<String, Answer> answers,
     YearMonth birthMonth) {
 
+  @Override
+  public String toString() {
+    return "Applicant[REDACTED]";
+  }
+
   public Applicant {
     childBirthDates = childBirthDates == null ? null : List.copyOf(childBirthDates);
     household = household == null ? Household.EMPTY : household;
@@ -123,12 +128,22 @@ public record Applicant(
 
     static final Household EMPTY =
         new Household(null, null, null, null, null, null, null, null, null, null, null, null, null);
+
+    @Override
+    public String toString() {
+      return "Household[REDACTED]";
+    }
   }
 
   /** 청약통장. 통장이 없으면 months 0. */
   public record Subscription(Integer months, Integer payments, Long balanceWon) {
 
     static final Subscription EMPTY = new Subscription(null, null, null);
+
+    @Override
+    public String toString() {
+      return "Subscription[REDACTED]";
+    }
   }
 
   /**
@@ -154,6 +169,11 @@ public record Applicant(
       history = history == null ? null : List.copyOf(history);
       revenueByYear = revenueByYear == null ? null : Map.copyOf(revenueByYear);
     }
+
+    @Override
+    public String toString() {
+      return "Business[REDACTED]";
+    }
   }
 
   /**
@@ -162,7 +182,12 @@ public record Applicant(
    * @param openedOn 개업일 (개인은 사업자등록증의 개업연월일, 법인은 설립등기일)
    * @param closedOn 폐업일. 영업 중이면 null
    */
-  public record BusinessRecord(LocalDate openedOn, LocalDate closedOn) {}
+  public record BusinessRecord(LocalDate openedOn, LocalDate closedOn) {
+    @Override
+    public String toString() {
+      return "BusinessRecord[REDACTED]";
+    }
+  }
 
   public enum MaritalStatus {
     /** 미혼. */

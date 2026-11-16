@@ -320,7 +320,7 @@ function MSpaceDetailView({ data, back }: { data: SpaceDetail; back: Back }) {
         <a
           href={data.sourceUrl ?? "#"}
           target={data.sourceUrl ? "_blank" : undefined}
-          rel={data.sourceUrl ? "noreferrer" : undefined}
+          rel={data.sourceUrl ? "noopener noreferrer" : undefined}
           onClick={() => track("notice_source_open", { notice_kind: "space", via: "site" })}
           className="rounded-control bg-fill text-text hover:text-text flex min-h-[56px] min-w-0 items-center justify-center text-[15px] font-bold no-underline"
           style={{ flex: "1 1 0%" }}

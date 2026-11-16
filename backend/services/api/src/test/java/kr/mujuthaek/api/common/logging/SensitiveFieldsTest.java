@@ -9,6 +9,43 @@ import org.junit.jupiter.api.Test;
 class SensitiveFieldsTest {
 
   @Test
+  void masksEveryDeclaredSensitiveFieldInJsonAndRecords() {
+    for (String name : SensitiveFields.NAMES) {
+      assertThat(SensitiveFields.mask("{\"" + name + "\":{\"value\":987654321}}"))
+          .as(name)
+          .doesNotContain("987654321");
+      assertThat(SensitiveFields.mask("Input[" + name + "=[987654321]]"))
+          .as(name)
+          .doesNotContain("987654321");
+    }
+  }
+
+  @Test
+  void directFrameAndLoanObjectsDoNotExposeSensitiveInputs() {
+    var loan =
+        new kr.mujuthaek.api.eligibility.rule.loan.Borrower(
+            java.time.LocalDate.of(1999, 1, 1),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            987654321L,
+            987654321L,
+            987654321L,
+            null);
+    assertThat(loan.toString()).isEqualTo("Borrower[REDACTED]");
+    assertThat(
+            new kr.mujuthaek.api.eligibility.dto.request.JudgmentApplicantRequest.LoanRequest(
+                    987654321L, 987654321L, 987654321L, null)
+                .toString())
+        .doesNotContain("987654321");
+    assertThat(kr.mujuthaek.api.eligibility.rule.frame.Applicant.empty().toString())
+        .isEqualTo("Applicant[REDACTED]");
+  }
+
+  @Test
   void masksJsonValues() {
     String json =
         """

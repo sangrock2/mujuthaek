@@ -9,7 +9,10 @@ import kr.mujuthaek.api.chat.dto.response.ChatReportResponse;
 import kr.mujuthaek.api.chat.repository.ChatMessageRepository.MessageRow;
 import kr.mujuthaek.api.chat.repository.ChatReportRepository.ReportRow;
 
-/** 저장한 메시지·신고 → 응답. 삭제·가린 메시지는 본문을 내보내지 않아요. */
+/**
+ * 저장한 메시지·신고 → 응답. 삭제·가린 메시지는 본문도 쓴 사람 이름도 내보내지 않아요. 예전에는 이름은 남아서, 로그인 없이 지운 글·가린 글의 작성자 이름(구글 가입자는
+ * 대개 실명)을 모을 수 있었어요(2026-11-16 보안 감사 L-8). 관리자 신고 화면({@link #toResponse(ReportRow)})은 그대로 보여요.
+ */
 public final class ChatMessageMapper {
 
   /** 답장 미리보기 길이 (글자). */
@@ -23,11 +26,12 @@ public final class ChatMessageMapper {
    * @param viewer 보는 회원 (내 글 여부용). 비로그인·SSE로 보내는 메시지는 null
    */
   public static ChatMessageResponse toResponse(MessageRow row, UUID viewer) {
+    boolean visible = row.status() == MessageStatus.VISIBLE;
     return new ChatMessageResponse(
         row.id(),
         row.noticeId(),
-        row.authorNickname(),
-        row.status() == MessageStatus.VISIBLE ? row.content() : null,
+        visible ? row.authorNickname() : null,
+        visible ? row.content() : null,
         row.status(),
         row.likeCount(),
         row.likedByViewer(),
@@ -41,10 +45,11 @@ public final class ChatMessageMapper {
     if (row.parentStatus() == null) {
       return new ChatMessageResponse.Parent(row.parentId(), null, null, MessageStatus.DELETED);
     }
+    boolean visible = row.parentStatus() == MessageStatus.VISIBLE;
     return new ChatMessageResponse.Parent(
         row.parentId(),
-        row.parentNickname(),
-        row.parentStatus() == MessageStatus.VISIBLE ? preview(row.parentContent()) : null,
+        visible ? row.parentNickname() : null,
+        visible ? preview(row.parentContent()) : null,
         row.parentStatus());
   }
 

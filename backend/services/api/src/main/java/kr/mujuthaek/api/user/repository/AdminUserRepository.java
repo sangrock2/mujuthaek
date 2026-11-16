@@ -253,18 +253,34 @@ public class AdminUserRepository {
   }
 
   /** 이용 정지 (이미 정지 중이면 이유·기간을 새 값으로). */
-  public void suspend(UUID userId, String reason, Instant until, UUID by, Instant now) {
+  /** 이용 정지 (이미 정지 중이면 덮어써요). bySuper = 최상위 관리자가 내렸는지 (그러면 최상위만 바꾸거나 풀어요) */
+  public void suspend(
+      UUID userId, String reason, Instant until, UUID by, boolean bySuper, Instant now) {
     jdbc.sql(
-            "insert into account.suspensions (user_id, reason, until, suspended_by, suspended_at)"
-                + " values (:id, :reason, :until, :by, :now) on conflict (user_id) do update set"
+            "insert into account.suspensions (user_id, reason, until, suspended_by,"
+                + " suspended_by_super, suspended_at)"
+                + " values (:id, :reason, :until, :by, :bySuper, :now) on conflict (user_id) do update set"
                 + " reason = excluded.reason, until = excluded.until,"
-                + " suspended_by = excluded.suspended_by, suspended_at = excluded.suspended_at")
+                + " suspended_by = excluded.suspended_by,"
+                + " suspended_by_super = excluded.suspended_by_super,"
+                + " suspended_at = excluded.suspended_at")
         .param("id", userId)
         .param("reason", reason)
         .param("until", until == null ? null : Timestamp.from(until))
         .param("by", by)
+        .param("bySuper", bySuper)
         .param("now", Timestamp.from(now))
         .update();
+  }
+
+  /** 지금 정지가 최상위 관리자가 내린 것인지 (정지 중이 아니면 false) */
+  public boolean suspendedBySuper(UUID userId) {
+    return jdbc.sql(
+            "select suspended_by_super from account.suspensions where user_id = :id for update")
+        .param("id", userId)
+        .query(Boolean.class)
+        .optional()
+        .orElse(false);
   }
 
   /** 이용 정지 해제. 정지 중이 아니었으면 0. */

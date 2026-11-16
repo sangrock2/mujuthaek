@@ -27,6 +27,11 @@ _SECRET_NAMES = (
     "AWS_SECRET_ACCESS_KEY",
     "DB_URL",
     "RABBITMQ_URL",
+    # 2026-11-16 보안 감사(4장 로그 가림, L-22): 슬랙 알림 글(slack.escape_text)에도 같은 목록을 써요
+    "RABBITMQ_PASSWORD",
+    "SLACK_WEBHOOK_URL",
+    "EXTRACTION_SLACK_WEBHOOK_URL",
+    "LANGSMITH_API_KEY",
 )
 
 

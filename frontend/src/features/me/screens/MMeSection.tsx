@@ -10,7 +10,7 @@ import {
   NotificationSettingsPanel,
   ReportPanel,
 } from "@/features/me/components/MePanels";
-import { reportKindParam } from "@/features/me/tabs";
+import { reportKindParam, reportScreenParam, reportCodeParam } from "@/features/me/tabs";
 import { routes } from "@/shared/lib/routes";
 
 export type MeSection = "favorites" | "preparations" | "interests" | "notifications" | "reports";
@@ -41,8 +41,8 @@ export function MMeSection({ section }: { section: MeSection }) {
         {section === "reports" && (
           <ReportPanel
             initialKind={reportKindParam(params.get("kind"))}
-            screen={params.get("from") ?? undefined}
-            context={params.get("code") ?? undefined}
+            screen={reportScreenParam(params.get("from"))}
+            context={reportCodeParam(params.get("code"))}
           />
         )}
       </main>

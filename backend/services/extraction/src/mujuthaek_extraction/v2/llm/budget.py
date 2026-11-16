@@ -15,7 +15,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from mujuthaek_extraction.model.pricing import IMAGE_TOKENS, PRICES
+from mujuthaek_extraction.model.pricing import IMAGE_TOKENS, PRICES, input_token_ceiling
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4_000
 CACHE_HIT = "v2CacheHit"  # 파일 캐시에서 꺼낸 답 표시(비용 0)
@@ -101,13 +101,14 @@ class BudgetMiddleware(AgentMiddleware):
 
 
 def worst_case_usd(request: Any, model: str, max_output_tokens: int) -> float:
-    """입력 전부를 캐시 쓰기로, 출력 한도 전부를 쓴다고 보고 셉니다(V1 Budget.worst_case와 같은 기준: 글자 수 ≥ 토큰 수)."""
-    chars = sum(_chars(message) for message in request.messages)
+    """입력 전부를 캐시 쓰기로, 출력 한도 전부를 쓴다고 보고 셉니다(V1 Budget.worst_case와 같은 기준: UTF-8 바이트 수 ≥ 토큰 수,
+    pricing.input_token_ceiling. 2026-11-16 보안 감사 L-21: 예전엔 글자 수라 드문 한자 글에서 약 4배 낮게 잡혔어요)."""
+    tokens = sum(_tokens(message) for message in request.messages)
     if request.system_message is not None:
-        chars += _chars(request.system_message)
+        tokens += _tokens(request.system_message)
     if request.tools:
-        chars += sum(len(json.dumps(convert_to_openai_tool(tool), ensure_ascii=False)) for tool in request.tools)
-    return PRICES[model].worst_usd(chars, max_output_tokens)
+        tokens += sum(input_token_ceiling(json.dumps(convert_to_openai_tool(tool), ensure_ascii=False)) for tool in request.tools)
+    return PRICES[model].worst_usd(tokens, max_output_tokens)
 
 
 def cost_usd(model: str, usage: dict[str, Any]) -> float:
@@ -116,17 +117,20 @@ def cost_usd(model: str, usage: dict[str, Any]) -> float:
     return PRICES[model].usd(usage.get("input_tokens", 0), details.get("cache_read", 0), details.get("cache_creation", 0), usage.get("output_tokens", 0))
 
 
-def _chars(message: BaseMessage) -> int:
+def _tokens(message: BaseMessage) -> int:
+    """메시지 하나의 입력 토큰 상한(글은 UTF-8 바이트 수, 그림은 IMAGE_TOKENS)."""
     content = message.content
     if isinstance(content, str):
-        size = len(content)
+        size = input_token_ceiling(content)
     else:
         size = sum(
-            IMAGE_TOKENS if isinstance(block, dict) and block.get("type") in ("image", "image_url") else len(json.dumps(block, ensure_ascii=False))
+            IMAGE_TOKENS
+            if isinstance(block, dict) and block.get("type") in ("image", "image_url")
+            else input_token_ceiling(json.dumps(block, ensure_ascii=False))
             for block in content
         )
     calls = getattr(message, "tool_calls", None) or []
-    return size + sum(len(json.dumps(call.get("args", {}), ensure_ascii=False)) + len(call.get("name", "")) for call in calls)
+    return size + sum(input_token_ceiling(json.dumps(call.get("args", {}), ensure_ascii=False) + call.get("name", "")) for call in calls)
 
 
 def _from_cache(message: AIMessage | None) -> bool:

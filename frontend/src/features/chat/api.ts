@@ -92,6 +92,8 @@ export function chatErrorMessage(error: unknown): string {
   switch (error.code) {
     case "UNAUTHENTICATED":
       return "로그인이 풀렸어요. 다시 로그인해 주세요";
+    case "TERMS_NOT_AGREED":
+      return "약관에 동의하면 채팅을 쓸 수 있어요. 동의 화면으로 이동해요";
     case "ACCOUNT_SUSPENDED":
       return "이용이 정지된 계정이라 채팅을 쓸 수 없어요";
     case "CHAT_RATE_LIMITED":

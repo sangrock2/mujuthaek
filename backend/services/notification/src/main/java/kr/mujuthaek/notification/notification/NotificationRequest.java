@@ -2,6 +2,7 @@ package kr.mujuthaek.notification.notification;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * notification.requested의 payload (contracts/schemas/notification-events.draft.md).
@@ -19,6 +20,12 @@ public record NotificationRequest(
     List<Recipient> recipients) {
 
   static final int MAX_RECIPIENTS = 500;
+
+  /**
+   * 앱 안 화면 경로만 받아요 (예: /notices/{id}, /me?tab=reports). 예전엔 「/」로 시작하는지만 봐서 「//다른곳」·「/\다른곳」이 통과했고,
+   * 서비스 워커가 그 주소를 열어 우리 VAPID 키로 서명된 피싱 알림이 될 수 있었어요(2026-11-16 보안 감사 M-8).
+   */
+  private static final Pattern LINK_PATH = Pattern.compile("/(?![/\\\\])[A-Za-z0-9\\-._~/?=&%]*");
 
   public record Target(TargetType type, UUID id) {}
 
@@ -69,7 +76,9 @@ public record NotificationRequest(
     require(notBlank(dedupKey), "dedupKey가 없어요");
     require(target != null && target.type() != null && target.id() != null, "target이 없어요");
     require(notBlank(title) && notBlank(body), "title·body가 없어요");
-    require(linkPath != null && linkPath.startsWith("/"), "linkPath가 이상해요");
+    require(
+        linkPath != null && linkPath.length() <= 300 && LINK_PATH.matcher(linkPath).matches(),
+        "linkPath가 이상해요");
     require(recipients != null && !recipients.isEmpty(), "recipients가 비었어요");
     require(recipients.size() <= MAX_RECIPIENTS, "recipients는 " + MAX_RECIPIENTS + "명까지예요");
     require(

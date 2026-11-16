@@ -23,6 +23,7 @@ from typing import Any
 
 from mujuthaek_extraction.model.base import ModelError, ModelRequest, ModelResponse, StopReason, ToolCall
 from mujuthaek_extraction.model.call_cache import canonical, response_code_hash, sha256_text
+from mujuthaek_extraction.model.pricing import input_token_ceiling
 from mujuthaek_extraction.model.strict_schema import drop_null_optionals, to_strict
 from mujuthaek_extraction.model.strict_schema import keep_own as _keep_own
 
@@ -46,7 +47,6 @@ QUOTES_SUFFIX = "-quotes"
 RUNAWAY_CHECK_CHARS = 3_000
 # 끊은 호출은 제공자가 사용량을 주지 않아 추정합니다. 응답 글자 2자를 1토큰으로(실측 중앙값 2.8자, 비용을 적게 잡지 않게 낮춤)
 CHARS_PER_OUTPUT_TOKEN = 2.0
-CHARS_PER_INPUT_TOKEN = 1.5  # 같은 원문을 앞서 보낸 기록이 없을 때 입력 추정(캐시 없이 전부 새 입력으로 셈)
 
 
 def read_api_key(env_file: Path, name: str = "OPENAI_API_KEY") -> str | None:
@@ -276,7 +276,9 @@ class OpenAIResponsesModel:
             input_tokens, cached = known
         else:
             text = request.system + request.user + request.instructions
-            input_tokens, cached = int(len(text) / CHARS_PER_INPUT_TOKEN) + 1, 0
+            # 같은 원문을 앞서 보낸 기록이 없으면 캐시 없이 전부 새 입력으로, 보내기 전 예약과 같은 상한(UTF-8 바이트 수)으로 셉니다.
+            # 예전 글자 수 추정(1.5자 = 1토큰)은 드문 한자 글(글자당 약 4토큰)에서 실제보다 적게 잡혔어요(2026-11-16 보안 감사 L-21)
+            input_tokens, cached = input_token_ceiling(text), 0
         return ModelResponse(
             raw_text=raw,
             model_id=self.model,

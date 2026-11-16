@@ -23,9 +23,11 @@ def main():
     if not openssl:
         raise RuntimeError("OpenSSL is required")
     name = "mujuthaek-tls-check-" + uuid.uuid4().hex[:12]
-    config = str(deploy / "nginx" / "default.conf")
     with tempfile.TemporaryDirectory(prefix="tls-", dir=artifacts) as directory:
         root = Path(directory)
+        config = root / 'default.conf'
+        config.write_text((deploy / 'nginx/default.conf').read_text(encoding='utf-8')
+                          .replace('${API_PUBLIC_HOST}', 'localhost'), encoding='utf-8')
         certs = root / "certs"
         certs.mkdir()
         run(

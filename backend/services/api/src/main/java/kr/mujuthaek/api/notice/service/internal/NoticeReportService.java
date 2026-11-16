@@ -16,6 +16,8 @@ import kr.mujuthaek.api.common.event.ProgramReportAnswered;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.common.id.UuidV7;
+import kr.mujuthaek.api.common.text.ControlChars;
+import kr.mujuthaek.api.common.text.PersonalInfo;
 import kr.mujuthaek.api.notice.client.ExtractionReviewClient;
 import kr.mujuthaek.api.notice.dto.request.AdminReportResolveRequest;
 import kr.mujuthaek.api.notice.dto.request.GeneralReportRequest;
@@ -130,21 +132,27 @@ public class NoticeReportService {
   public NoticeReportCreatedResponse reportBenefit(
       UUID targetId, NoticeReportRequest request, String reporter) {
     UUID reporterId = reporterId(reporter);
-    UUID policyId = benefits.findRawPolicyId(targetId).orElse(targetId);
     if (blank(request.reportedValue()) && blank(request.note())) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "맞는 값이나 설명 중 하나는 적어 주세요");
     }
-    // 제목은 이 서버의 혜택에서 먼저 찾아요. 예전에는 늘 추출 서비스에 물어서, 그쪽에 결과가 없는 환경(운영 결과를 받아 쓰는 개발 서버)에서는
-    // 혜택 제보가 모두 404였어요(2026-10-29 QA). 이 서버에 없을 때만 추출 서비스에 물어요
-    String title = benefits.findSummaryByRawPolicyId(policyId).map(b -> b.title()).orElse(null);
-    if (title == null) {
-      title = extractionBenefitTitle(policyId);
-    }
+    checkText(request);
+    // 하루 상한을 먼저 봐요. 예전에는 상한 확인 전에 추출 서비스를 불러서, 상한과 상관없이 내부 요청을 무제한으로 만들 수 있었어요(2026-11-16 보안 감사
+    // L-13)
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
       throw new CustomException(ErrorCode.RATE_LIMITED, "제보는 하루에 " + DAILY_LIMIT + "건까지 보낼 수 있어요");
     }
+    // 화면에 보이는(이 서버에 있고 숨기지 않은) 혜택에만 받아요. 예전에는 이 서버에 없으면 추출 서비스에 물어서, 숨긴 정책이나 추출 서비스에만 있는 정책
+    // ID로도 제보가 접수되고 그쪽 오류 문구가 회원에게 그대로 갔어요(보안 감사 L-13)
+    UUID policyId = benefits.findRawPolicyId(targetId).orElse(targetId);
+    String title =
+        benefits
+            .findSummaryByRawPolicyId(policyId)
+            .filter(b -> !"HIDDEN".equals(b.status()))
+            .map(b -> b.title())
+            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND, "정책을 찾을 수 없어요"));
     UUID id = UuidV7.next();
     boolean added =
         reports.insert(
@@ -167,23 +175,6 @@ public class NoticeReportService {
     return new NoticeReportCreatedResponse(id, "NEW");
   }
 
-  /** 이 서버에 없는 정책의 제목을 추출 서비스에서 찾아요. 거기에도 없으면 404. */
-  private String extractionBenefitTitle(UUID policyId) {
-    try {
-      return extraction.benefit(policyId.toString()).path("title").asString();
-    } catch (CustomException e) {
-      if (e.errorCode() == ErrorCode.NOTICE_REVIEW_NOT_FOUND) {
-        throw new CustomException(ErrorCode.NOT_FOUND, "정책을 찾을 수 없어요");
-      }
-      if (e.errorCode() == ErrorCode.NOTICE_REVIEW_UNAVAILABLE) {
-        // 회원에게 「검수 서버」라는 내부 사정 대신 제보를 지금 받을 수 없다고 알려요
-        throw new CustomException(
-            ErrorCode.NOTICE_REVIEW_UNAVAILABLE, "지금은 정책 제보를 받을 수 없어요. 잠시 뒤에 다시 보내 주세요");
-      }
-      throw e;
-    }
-  }
-
   /** 회원 제보 받기. 로그인한 회원만, 공개된 공고에만. */
   @Transactional
   public NoticeReportCreatedResponse report(
@@ -192,9 +183,11 @@ public class NoticeReportService {
     if (blank(request.reportedValue()) && blank(request.note())) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "맞는 값이나 설명 중 하나는 적어 주세요");
     }
+    checkText(request);
     if (reports.publishedTitle(noticeId).isEmpty()) {
       throw new CustomException(ErrorCode.NOTICE_NOT_FOUND);
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -230,9 +223,11 @@ public class NoticeReportService {
     if (blank(request.reportedValue()) && blank(request.note())) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "맞는 값이나 설명 중 하나는 적어 주세요");
     }
+    checkText(request);
     if (reports.programTitle(programId).isEmpty()) {
       throw new CustomException(ErrorCode.NOT_FOUND, "창업지원 사업을 찾을 수 없어요");
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -267,11 +262,14 @@ public class NoticeReportService {
   @Transactional
   public NoticeReportCreatedResponse reportGeneral(GeneralReportRequest request, String reporter) {
     UUID reporterId = reporterId(reporter);
+    checkText(request.field(), request.currentValue(), request.note(), request.screen());
+    checkNote(request.note());
     String kind = request.field().trim();
     if (!GENERAL_KINDS.contains(kind)) {
       throw new CustomException(
           ErrorCode.VALIDATION_FAILED, "field는 MISSING_NOTICE·WRONG_INFO·APP_ERROR·ETC 중 하나예요");
     }
+    reports.lockReporter(reporterId);
     Instant now = clock.instant();
     Instant todayStart = LocalDate.ofInstant(now, SEOUL).atStartOfDay(SEOUL).toInstant();
     if (reports.countSince(reporterId, todayStart) >= DAILY_LIMIT) {
@@ -293,6 +291,30 @@ public class NoticeReportService {
             trim(request.screen()),
             now));
     return new NoticeReportCreatedResponse(id, "NEW");
+  }
+
+  private static void checkText(NoticeReportRequest request) {
+    checkText(
+        request.field(),
+        request.currentValue(),
+        request.reportedValue(),
+        request.note(),
+        request.screen());
+    checkNote(request.note());
+  }
+
+  /** 제보 글의 제어 문자 검사: NUL 등은 DB가 받지 않아 400이 아니라 500이 났어요(2026-11-16 보안 감사 L-12). */
+  private static void checkText(String... texts) {
+    if (ControlChars.anyPresent(texts)) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "제보에 쓸 수 없는 문자(제어 문자)가 있어요");
+    }
+  }
+
+  /** 설명 칸에는 채팅처럼 휴대폰 번호·주민등록번호를 받지 않아요(보안 감사 L-7). 맞는 값 칸은 공고의 문의 번호를 고쳐 적을 수 있어 막지 않아요. */
+  private static void checkNote(String note) {
+    if (PersonalInfo.contains(note)) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "설명에 휴대폰 번호·주민등록번호는 적지 말아 주세요");
+    }
   }
 
   /** 관리자 목록 (최근 것부터 최대 100건). status가 없으면 모두. */

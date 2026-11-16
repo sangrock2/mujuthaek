@@ -6,16 +6,16 @@ global:
 scrape_configs:
   - job_name: api
     metrics_path: /actuator/prometheus
+    # 운영 지표는 지표 토큰(METRICS_TOKEN)이 있어야 읽혀요. run.sh가 .env 값을 secrets/metrics-token에 적어요(2026-11-16 보안 감사 4장)
+    authorization: { type: Bearer, credentials_file: /etc/prometheus/secrets/metrics-token }
     static_configs: [{ targets: ["host.docker.internal:18080"] }]
 
   - job_name: notification
     metrics_path: /actuator/prometheus
+    # 운영 지표는 지표 토큰(METRICS_TOKEN)이 있어야 읽혀요. run.sh가 .env 값을 secrets/metrics-token에 적어요(2026-11-16 보안 감사 4장)
+    authorization: { type: Bearer, credentials_file: /etc/prometheus/secrets/metrics-token }
     static_configs: [{ targets: ["host.docker.internal:18081"] }]
 
   # 서버 CPU·메모리·네트워크 (steal이 오르면 CPU 크레딧이 바닥난 거예요)
   - job_name: node
     static_configs: [{ targets: ["host.docker.internal:19100"] }]
-
-  # 컨테이너별 CPU·메모리
-  - job_name: cadvisor
-    static_configs: [{ targets: ["host.docker.internal:19101"] }]

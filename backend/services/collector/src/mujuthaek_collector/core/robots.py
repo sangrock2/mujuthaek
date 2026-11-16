@@ -4,10 +4,15 @@
 - 우리 수집기 이름과 맞는 그룹이 있으면 그 그룹, 없으면 '*' 그룹
 - 주소의 경로+쿼리에 맞는 규칙 중 가장 긴 것을 따르고, 길이가 같으면 Allow
 - 맞는 규칙이 없으면 허용
+
+패턴은 정규식으로 바꾸지 않고 앞에서부터 차례로 찾아 맞춰요(입력 길이에 비례하는 시간). 예전엔 '*'를 '.*'로 바꿔
+re.match로 맞췄는데, 'Disallow: /*a*a*a…b' 같은 몇십 바이트 규칙 하나로 역추적이 폭증해 수집기 전체가 멈췄어요
+(2026-11-16 보안 감사 H-4). robots.txt는 RFC 9309가 요구하는 앞 500KiB까지만 읽어요.
 """
 
-import re
 import urllib.parse
+
+MAX_ROBOTS_CHARS = 500 * 1024
 
 
 class RobotRules:
@@ -15,7 +20,7 @@ class RobotRules:
         groups: list[dict] = []
         current: dict | None = None
         rules_started = False
-        for raw in text.splitlines():
+        for raw in text[:MAX_ROBOTS_CHARS].splitlines():
             line = raw.split("#", 1)[0].strip()
             if ":" not in line:
                 continue
@@ -37,10 +42,29 @@ class RobotRules:
 
     @staticmethod
     def _matches(pattern: str, path: str) -> bool:
-        regex = re.escape(pattern).replace(r"\*", ".*")
-        if regex.endswith(r"\$"):
-            regex = regex[:-2] + "$"
-        return re.match(regex, path) is not None
+        """경로가 패턴으로 시작하는지. '*'는 아무 글자나 0개 이상, 끝의 '$'는 경로의 끝이에요(가운데 '$'는 글자 그대로).
+
+        '*'로 나눈 조각을 왼쪽부터 가장 먼저 나오는 자리에 맞춰요. 앞 조각을 가장 이르게 맞춰야 뒤 조각이 맞을 자리가 가장 넓어서,
+        맞는 방법이 하나라도 있으면 이 방법도 맞아요.
+        """
+        anchored = pattern.endswith("$")
+        if anchored:
+            pattern = pattern[:-1]
+        first, *rest = pattern.split("*")
+        if not path.startswith(first):
+            return False
+        position = len(first)
+        if not rest:
+            return not anchored or position == len(path)
+        *middle, last = rest
+        for part in middle:
+            found = path.find(part, position)
+            if found < 0:
+                return False
+            position = found + len(part)
+        if anchored:
+            return len(path) - len(last) >= position and path.endswith(last)
+        return path.find(last, position) >= 0
 
     def can_fetch(self, url: str) -> bool:
         parts = urllib.parse.urlsplit(url)
