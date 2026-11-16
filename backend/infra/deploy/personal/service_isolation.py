@@ -198,6 +198,12 @@ def check_broker(observed, passwords):
     for kind in ('exchanges', 'queues'):
         for item in wanted[kind]:
             matches = [value for value in observed.get(kind, []) if value.get('name') == item['name'] and value.get('vhost') == VHOST]
+            if kind == 'queues':
+                # RabbitMQ 4 exports its effective default queue type as an argument even when the
+                # original declaration omitted it. Accept only that implicit classic default.
+                matches = [dict(value, arguments={key: argument for key, argument in value.get('arguments', {}).items()
+                    if not (key == 'x-queue-type' and argument == 'classic')})
+                    for value in matches if value.get('type', 'classic') == 'classic']
             checks['mq.' + kind + '.' + item['name']] = len(matches) == 1 and all(matches[0].get(key) == value for key, value in item.items())
     owned = {item['name'] for item in wanted['queues']}
     actual = [item for item in observed.get('bindings', []) if item.get('vhost') == VHOST and item.get('destination') in owned]
