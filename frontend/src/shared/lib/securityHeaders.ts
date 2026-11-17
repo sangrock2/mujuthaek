@@ -28,11 +28,11 @@ const GA_CONNECT = [
   "https://*.googletagmanager.com",
 ];
 const GA_IMG = ["https://*.google-analytics.com", "https://*.googletagmanager.com"];
-// 카카오맵: sdk.js(dapi) → 본체 스크립트(t1.daumcdn.net) → 지도 타일·표시 이미지(*.daumcdn.net).
-// SDK가 「//t1.daumcdn.net」처럼 스킴 없이 불러서 스킴 없이 적어요 (https 화면에서는 https만 맞아요)
-const KAKAO_SCRIPT = ["dapi.kakao.com", "t1.daumcdn.net"];
+// 카카오맵: SDK → 본체(t1.kakaocdn.net/기존 t1.daumcdn.net) → 지도 타일(mts.kakaocdn.net)·표시 이미지.
+// SDK가 스킴 없이 불러오기도 해서 호스트로 적어요. HTTPS 화면에서는 HTTPS만 맞아요.
+const KAKAO_SCRIPT = ["dapi.kakao.com", "t1.daumcdn.net", "t1.kakaocdn.net"];
 const KAKAO_CONNECT = ["dapi.kakao.com"];
-const KAKAO_IMG = ["*.daumcdn.net"];
+const KAKAO_IMG = ["*.daumcdn.net", "t1.kakaocdn.net", "mts.kakaocdn.net"];
 
 const join = (name: string, sources: string[]) => `${name} ${[...new Set(sources)].join(" ")}`;
 
