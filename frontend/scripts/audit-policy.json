@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "advisory": "GHSA-fc5q-39xc-vjpf",
+  "package": "picomatch",
+  "versions": ["2.3.2", "4.0.7"],
+  "pathPrefix": ".>eslint-config-next>",
+  "issuedAt": "2026-11-18T00:00:00+09:00",
+  "expiresAt": "2026-11-25T00:00:00+09:00",
+  "reason": "공식 수정 버전이 아직 배포되지 않은 개발용 ESLint 하위 의존성 한 건에 대해 소유자가 한시 허용을 명시 승인했다. 운영 의존성·새 경보·경로/버전 변경·만료는 차단한다."
+}
