@@ -18,7 +18,7 @@
 
 서버가 보고서를 읽으려면 Google Analytics Data API를 활성화하고 서비스 계정에 해당 운영 GA4 속성의 뷰어 권한을 부여한다. 속성 ID는 측정 ID와 다르며, 운영 서버의 `.env`에 숫자 `GA_PROPERTY_ID`와 `GA_CREDENTIALS_FILE=/run/mujuthaek-analytics/service-account.json`을 지정한다. 설정을 비워 두면 기존처럼 서버 통계만 제공한다.
 
-서비스 계정 JSON은 Git·Vercel 환경변수·GitHub secrets·로그에 넣지 않는다. 서버 전용 `runtime/analytics/service-account.json`에 보관하고 API에만 디렉터리를 읽기 전용으로 마운트한다. 서버 디렉터리는 root 소유·그룹 10001·0750, 파일은 root 소유·그룹 10001·0440으로 만들어 UID 10001의 API 프로세스가 읽게 한다. PC 원본 파일과 상위 폴더의 권한은 변경하지 않는다.
+서비스 계정 JSON은 Git·Vercel 환경변수·GitHub secrets·로그에 넣지 않는다. 서버 전용 `runtime/analytics/service-account.json`에 보관하고 API에만 디렉터리를 읽기 전용으로 마운트한다. API 컨테이너에서 `id -u`·`id -g`로 실제 실행 계정을 먼저 확인한다. UID 10001이라고 GID도 같다고 가정하지 않는다. 현재 이미지의 GID는 999다. 서버 디렉터리는 root 소유·API의 실제 GID·0750, 파일은 root 소유·같은 GID·0440으로 만들어 API가 읽게 한다. PC 원본 파일과 상위 폴더의 권한은 변경하지 않는다.
 
 반영 전 서비스 계정의 일반·실시간 보고서 접근을 확인하고, Compose 해석 결과에서 API 외 서비스에 GA 자격증명이 전달되지 않는지 확인한다. 기존 MQ/S3 분리·이미지 버전·DB를 유지하며 API 설정만 갱신한다. 실패 시 이전 환경·인증 파일로 복원한다. 일반 보고서에는 처리 지연과 서버의 1시간 캐시가 있으므로 실시간 보고서도 별도로 확인한다.
 
