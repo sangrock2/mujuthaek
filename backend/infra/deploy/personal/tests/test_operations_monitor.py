@@ -70,6 +70,9 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result['configured_node_version'], '24.x')
         self.assertEqual(result['configured_function_regions'], ['icn1'])
         get.assert_called_once_with(f'/v9/projects/{monitor.PROJECT}?teamId={monitor.TEAM}', 'synthetic')
+        with patch.object(monitor, 'vercel_get', return_value={'id': monitor.PROJECT, 'resourceConfig': None}), \
+                patch.dict(monitor.os.environ, {'VERCEL_TOKEN_EXPIRES_AT': '2040-01-01T00:00:00+00:00'}):
+            self.assertEqual(monitor.vercel_status('synthetic')['configured_function_regions'], [])
         for expiry in ('', 'not-a-date', '2040-01-01'):
             with patch.object(monitor, 'vercel_get', return_value={'id': monitor.PROJECT}), \
                     patch.dict(monitor.os.environ, {'VERCEL_TOKEN_EXPIRES_AT': expiry}), self.assertRaises(monitor.CheckError):

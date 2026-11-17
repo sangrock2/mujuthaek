@@ -124,7 +124,8 @@ def vercel_status(token):
         raise CheckError('Vercel project access could not be verified.')
     node = project.get('nodeVersion')
     node = node if isinstance(node, str) and re.fullmatch(r'[0-9]{2}\.x', node) else None
-    regions = project.get('resourceConfig', {}).get('functionDefaultRegions', [])
+    resources = project.get('resourceConfig')
+    regions = resources.get('functionDefaultRegions', []) if isinstance(resources, dict) else []
     regions = regions if isinstance(regions, list) and len(regions) <= 10 and all(
         isinstance(region, str) and re.fullmatch(r'[a-z]{3}[0-9]', region) for region in regions) else []
     runtime = {'configured_node_version': node, 'configured_function_regions': regions}
