@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 import urllib.error
@@ -41,10 +42,6 @@ def configure(config):
 
 class CheckError(Exception):
     """Safe fixed message only; never expose CLI/HTTP response bodies."""
-
-
-class ProjectTokenMetadataUnavailable(CheckError):
-    """A project token may access its project but not the user's token-management API."""
 
 
 def aws(*args, region=REGION, missing_ok=False):
@@ -112,8 +109,6 @@ def vercel_get(path, token):
         with urllib.request.urlopen(request, timeout=20) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        if error.code == 403 and path == '/v5/user/tokens/current':
-            raise ProjectTokenMetadataUnavailable('User token metadata is unavailable to the project token.') from None
         if error.code in (401, 403):
             raise CheckError('Vercel token authentication or permission failed; replace/check VERCEL_TOKEN.') from None
         raise CheckError('Vercel provider request failed; check service availability or metadata access.') from None
@@ -127,18 +122,25 @@ def vercel_status(token):
     project = vercel_get(f'/v9/projects/{PROJECT}?teamId={TEAM}', token)
     if project.get('id') != PROJECT:
         raise CheckError('Vercel project access could not be verified.')
-    try:
-        metadata = vercel_get('/v5/user/tokens/current', token)['token']
-    except ProjectTokenMetadataUnavailable:
-        # Keep project-only permissions. The owner verifies this date when issuing/rotating the token.
+    node = project.get('nodeVersion')
+    node = node if isinstance(node, str) and re.fullmatch(r'[0-9]{2}\.x', node) else None
+    resources = project.get('resourceConfig')
+    regions = resources.get('functionDefaultRegions', []) if isinstance(resources, dict) else []
+    regions = regions if isinstance(regions, list) and len(regions) <= 10 and all(
+        isinstance(region, str) and re.fullmatch(r'[a-z]{3}[0-9]', region) for region in regions) else []
+    runtime = {'configured_node_version': node, 'configured_function_regions': regions}
+    if 'VERCEL_TOKEN_EXPIRES_AT' in os.environ:
+        # This configured mode is for project-only tokens. Never request the user token-management API.
+        # The owner verifies the date independently when issuing/rotating the token.
         try:
             expires = datetime.fromisoformat(os.environ['VERCEL_TOKEN_EXPIRES_AT'])
             if expires.tzinfo is None:
                 raise ValueError('Timezone required')
         except (KeyError, ValueError):
             raise CheckError('Project-scoped Vercel token requires a verified expiration date.') from None
-        return {'project_access': True, 'expires_at': expires.astimezone(timezone.utc).isoformat(),
-                'expiry_status': 'owner_verified', 'metadata_status': 'project_scope_restricted'}
+        return {**runtime, 'project_access': True, 'expires_at': expires.astimezone(timezone.utc).isoformat(),
+                'expiry_status': 'owner_verified', 'metadata_status': 'not_requested_for_project_scope'}
+    metadata = vercel_get('/v5/user/tokens/current', token)['token']
     if metadata.get('revokedAt') or metadata.get('leakedAt'):
         raise CheckError('Vercel deployment token is revoked or flagged as leaked; replace it.')
     dates = [metadata.get('expiresAt')]
@@ -147,7 +149,7 @@ def vercel_status(token):
     dates = [float(value) for value in dates if value is not None]
     expires = datetime.fromtimestamp(min(dates) / 1000, tz=timezone.utc).isoformat() if dates else None
     # Explicit allowlist: no bearer, ID, token name, prefix, suffix, or response dump.
-    return {'project_access': True, 'expires_at': expires,
+    return {**runtime, 'project_access': True, 'expires_at': expires,
             'expiry_status': 'known' if expires else 'no_expiry_reported'}
 
 
@@ -272,7 +274,9 @@ def main():
                 raise CheckError('Verification cannot send a report.')
             if aws('sts', 'get-caller-identity')['Account'] != ACCOUNT:
                 raise CheckError('Account mismatch.')
-            vercel_status(os.environ.get('VERCEL_TOKEN'))
+            print('AWS OIDC identity verified.')
+            status = vercel_status(os.environ.get('VERCEL_TOKEN'))
+            print(json.dumps({key: status.get(key) for key in ('configured_node_version', 'configured_function_regions')}))
             print('AWS OIDC and protected Vercel credential verified; no mail or monitor state changes.')
             return 0
         ok = run(args.send_report)
