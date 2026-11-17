@@ -30,6 +30,8 @@ class SubmissionTests(unittest.TestCase):
                     {'package': {'ecosystem': 'Maven', 'name': 'org.example:transitive'}, 'version': '1.2.3+build'}]))
             body = submission.snapshot(path, env)
             self.assertEqual(len(body['manifests']), 2)
+            for name in body['manifests']:
+                self.assertTrue((Path(__file__).resolve().parents[4] / name).is_file())
             dep = next(iter(next(iter(body['manifests'].values()))['resolved'].values()))
             self.assertEqual(dep['package_url'], 'pkg:maven/org.example/transitive@1.2.3%2Bbuild')
             self.assertNotIn('relationship', dep)

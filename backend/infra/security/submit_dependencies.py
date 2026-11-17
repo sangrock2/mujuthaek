@@ -42,7 +42,7 @@ def snapshot(directory, env):
             purl = f'pkg:maven/{quote(parts[0], safe=".")}/{quote(parts[1], safe="")}@{quote(version, safe="")}'
             # Inventory contains resolved runtime artifacts, not enough information to label edges direct/indirect.
             resolved[purl] = {'package_url': purl, 'scope': 'runtime'}
-        name = f'backend/services/{service}/build.gradle'
+        name = f'backend/services/{service}/build.gradle.kts'
         manifests[name] = {'name': name, 'file': {'source_location': name}, 'resolved': resolved}
     return {'version': 0, 'sha': sha, 'ref': 'refs/heads/main',
             'job': {'id': f'{run_id}-{attempt}', 'correlator': 'mujuthaek-resolved-maven-runtime',

@@ -60,6 +60,32 @@ class OperationsTests(unittest.TestCase):
         with patch.object(monitor, 'vercel_get', side_effect=[{'id': monitor.PROJECT}, {'token': {}}]):
             self.assertEqual(monitor.vercel_status('test')['expiry_status'], 'no_expiry_reported')
 
+    def test_project_token_keeps_project_access_check_and_verified_expiry(self):
+        denied = monitor.ProjectTokenMetadataUnavailable('restricted')
+        with patch.object(monitor, 'vercel_get', side_effect=[{'id': monitor.PROJECT}, denied]), \
+                patch.dict(monitor.os.environ, {'VERCEL_TOKEN_EXPIRES_AT': '2040-01-01T00:00:00+00:00'}):
+            result = monitor.vercel_status('synthetic')
+        self.assertEqual(result['expiry_status'], 'owner_verified')
+        self.assertEqual(result['expires_at'], '2040-01-01T00:00:00+00:00')
+        for expiry in ('', 'not-a-date', '2040-01-01'):
+            with patch.object(monitor, 'vercel_get', side_effect=[{'id': monitor.PROJECT}, denied]), \
+                    patch.dict(monitor.os.environ, {'VERCEL_TOKEN_EXPIRES_AT': expiry}), self.assertRaises(monitor.CheckError):
+                monitor.vercel_status('synthetic')
+        with patch.object(monitor, 'vercel_get', side_effect=monitor.CheckError('project denied')), \
+                patch.dict(monitor.os.environ, {'VERCEL_TOKEN_EXPIRES_AT': '2040-01-01T00:00:00+00:00'}), \
+                self.assertRaises(monitor.CheckError):
+            monitor.vercel_status('synthetic')
+
+    def test_only_metadata_403_has_project_scope_fallback(self):
+        import urllib.error
+        for path, status, special in [('/v5/user/tokens/current', 403, True),
+                                      ('/v5/user/tokens/current', 401, False),
+                                      ('/v9/projects/expected', 403, False)]:
+            error = urllib.error.HTTPError('https://api.vercel.com', status, 'private-response', {}, None)
+            with patch.object(monitor.urllib.request, 'urlopen', side_effect=error), self.assertRaises(monitor.CheckError) as caught:
+                monitor.vercel_get(path, 'synthetic')
+            self.assertEqual(isinstance(caught.exception, monitor.ProjectTokenMetadataUnavailable), special)
+
     def test_missing_budget_recipient_is_detected(self):
         notifications = [{'NotificationType': kind, 'Threshold': threshold,
                           'ComparisonOperator': 'GREATER_THAN'}
