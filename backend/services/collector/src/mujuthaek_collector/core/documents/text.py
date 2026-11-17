@@ -1,12 +1,16 @@
 """공고문 원본에서 글자를 뽑아요. 표는 행·열을 '칸 | 칸'으로 살려서 AI 추출 단계가 표를 읽을 수 있게 해요."""
 
+import json
 import re
+import subprocess
+import sys
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
-from mujuthaek_collector.core.documents.hwp import hwp_to_html, hwp_to_plain_text
+from mujuthaek_collector.core.documents.hwp import OutputTooLarge, hwp_to_html, hwp_to_plain_text, run_converter
 from mujuthaek_collector.core.html import body_text, soup
 from mujuthaek_platform.archives import check_zip_path
 
@@ -19,6 +23,10 @@ SAFE_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 READ_CHUNK = 64 * 1024
 MAX_XML_NODES = 500_000
 MAX_XML_DEPTH = 128
+MAX_PDF_PAGES = 200
+MAX_PDF_TEXT_CHARS = 2_000_000
+MAX_PDF_OUTPUT_BYTES = 8 * 1024 * 1024
+_PDF_SLOTS = threading.BoundedSemaphore(1)  # 초기·정기·정책 수집이 동시에 파서 메모리를 쓰지 않아요.
 
 
 class _HwpxText:
@@ -102,19 +110,45 @@ def _table_lines(rows: list[list[str | None]]) -> str:
     return "\n".join(" | ".join(re.sub(r"\s+", " ", cell or "").strip() for cell in row) for row in rows if any(row))
 
 
-def pdf_text(path: Path) -> tuple[str | None, str]:
+def _pdf_text(path: Path) -> tuple[str | None, str]:
     import pdfplumber
 
     parts = []
+    size = 0
     with pdfplumber.open(path) as pdf:
+        if len(pdf.pages) > MAX_PDF_PAGES:
+            raise ValueError("PDF page limit exceeded")
         for number, page in enumerate(pdf.pages, 1):
-            parts.append(f"--- {number}쪽 ---\n{page.extract_text() or ''}")
-            for table in page.extract_tables() or []:
-                parts.append("[표]\n" + _table_lines(table))
+            try:
+                additions = [f"--- {number}쪽 ---\n{page.extract_text() or ''}"]
+                additions.extend("[표]\n" + _table_lines(table) for table in page.extract_tables() or [])
+                size += sum(map(len, additions))
+                if size > MAX_PDF_TEXT_CHARS:
+                    raise ValueError("PDF text limit exceeded")
+                parts.extend(additions)
+            finally:
+                # pdfplumber는 페이지마다 해석한 객체를 보관하므로 다음 쪽 전에 해제해요.
+                page.close()
     text = "\n".join(parts)
     if len(re.sub(r"\s|---\s*\d+쪽\s*---", "", text)) < MIN_CHARS:
         return None, "PDF에 글자가 거의 없음 (스캔본 가능성)"
     return text, "PDF 텍스트·표"
+
+
+def pdf_text(path: Path) -> tuple[str | None, str]:
+    """PDF 파서의 압축 해제·표 탐색을 메모리/시간이 제한된 별도 프로세스에서 실행해요."""
+    worker = Path(__file__).with_name("pdf_worker.py")
+    try:
+        with _PDF_SLOTS:
+            done = run_converter([sys.executable, str(worker), str(path.resolve())], path.parent, timeout=180, max_stdout=MAX_PDF_OUTPUT_BYTES, max_stderr=4096)
+    except (subprocess.TimeoutExpired, OutputTooLarge):
+        return None, "PDF 읽기 자원 한도 초과"
+    if done.returncode:
+        return None, "PDF 읽기 실패 또는 자원 한도 초과"
+    result = json.loads(done.stdout)
+    if not isinstance(result, list) or len(result) != 2 or (result[0] is not None and not isinstance(result[0], str)) or not isinstance(result[1], str):
+        raise ValueError("Invalid PDF worker result")
+    return result[0], result[1]
 
 
 def hwpx_text(path: Path) -> tuple[str | None, str]:
