@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any
 from urllib.parse import urlparse
 
+from mujuthaek_collector.core.run_ownership import source_lock
 from mujuthaek_platform.http_server import BoundedHTTPServer
 
 log = logging.getLogger(__name__)
@@ -129,10 +130,15 @@ class Runner:
             return 409, {"error": "멈춘 출처예요. 다시 켠 뒤 수집하세요."}
         now = now or datetime.now(UTC)
         running = conn.execute(
-            "select 1 from crawl_runs where source_code = %s and status = 'RUNNING' and started_at > %s limit 1", (code, now - RUNNING_WITHIN)
+            "select 1 from crawl_runs where source_code = %s and status = 'RUNNING' "
+            "and owner_instance is null and started_at > %s limit 1", (code, now - RUNNING_WITHIN)
         ).fetchone()
         if running:
             return 409, {"error": "이 출처는 지금 수집 중이에요."}
+        key = source_lock(code)
+        if not conn.execute("select pg_try_advisory_lock(%s, %s)", key).fetchone()[0]:
+            return 409, {"error": "이 출처는 지금 수집 중이에요."}
+        conn.execute("select pg_advisory_unlock(%s, %s)", key)
         if not self.locks.acquire(code):
             return 409, {"error": "이 출처는 지금 수집 중이에요."}
         run = self.collect_policy if code in self.policy_codes else self.collect

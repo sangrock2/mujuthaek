@@ -22,6 +22,8 @@ jobs:
     uses: ./.github/workflows/web.yml
   backend:
     uses: ./.github/workflows/ci.yml
+  collector-native:
+    uses: ./.github/workflows/collector-native.yml
   contracts:
     uses: ./.github/workflows/contracts.yml
   e2e:
@@ -31,13 +33,14 @@ jobs:
   ready:
     name: CI ready
     if: always()
-    needs: [dependencies, web, backend, contracts, e2e, secrets]
+    needs: [dependencies, web, backend, collector-native, contracts, e2e, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Require every check
         env:
           WEB: ${{ needs.web.result }}
           BACKEND: ${{ needs.backend.result }}
+          COLLECTOR_NATIVE: ${{ needs.collector-native.result }}
           CONTRACTS: ${{ needs.contracts.result }}
           E2E: ${{ needs.e2e.result }}
           SECRETS: ${{ needs.secrets.result }}
@@ -46,6 +49,7 @@ jobs:
         run: |
           test "$WEB" = success
           test "$BACKEND" = success
+          test "$COLLECTOR_NATIVE" = success
           test "$CONTRACTS" = success
           test "$E2E" = success
           test "$SECRETS" = success

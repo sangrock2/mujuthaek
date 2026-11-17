@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from mujuthaek_collector.core.files import FileRef
+from mujuthaek_collector.core.run_ownership import RunOwnership
 from mujuthaek_platform import outbox
 from mujuthaek_platform.ids import uuid7
 
@@ -145,6 +146,7 @@ class PostgresStore:
 
         self.conn = db.connect(db_url)
         self.conn.autocommit = True
+        self._runs = RunOwnership(self.conn)
 
     def close(self) -> None:
         self.conn.close()
@@ -157,15 +159,10 @@ class PostgresStore:
 
     # ── 수집 회차 ──────────────────────────────────────────────
     def start_run(self, source_code: str) -> UUID:
-        run_id = uuid7()
-        self.conn.execute("insert into crawl_runs (id, source_code) values (%s, %s)", (run_id, source_code))
-        return run_id
+        return self._runs.start(source_code)
 
     def finish_run(self, run_id: UUID, status: str, new_count: int, warnings: list[str]) -> None:
-        self.conn.execute(
-            "update crawl_runs set finished_at = now(), status = %s, new_count = %s, error = %s where id = %s",
-            (status, new_count, "\n".join(warnings)[:10000] or None, run_id),
-        )
+        self._runs.finish(run_id, status, new_count, warnings)
 
     # ── 처음 수집 개수 제한 ────────────────────────────────────
     def intake(self, group: str) -> Intake | None:

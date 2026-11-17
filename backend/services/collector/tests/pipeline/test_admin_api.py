@@ -134,12 +134,16 @@ class Rows:
 class RunConn:
     """sources·crawl_runs 조회만 흉내 내요."""
 
-    def __init__(self, enabled=True, running=False):
-        self.enabled, self.running = enabled, running
+    def __init__(self, enabled=True, running=False, db_busy=False):
+        self.enabled, self.running, self.db_busy = enabled, running, db_busy
 
     def execute(self, sql, params):
         if "from sources" in sql:
             return Rows(None if params[0] == "nope" else (self.enabled,))
+        if "pg_try_advisory_lock" in sql:
+            return Rows((not self.db_busy,))
+        if "pg_advisory_unlock" in sql:
+            return Rows((True,))
         return Rows((1,) if self.running else None)
 
 
@@ -177,6 +181,7 @@ def test_run_now_is_refused_when_busy_paused_running_or_unknown():
     assert runner.start(RunConn(), "nope")[0] == 404
     assert runner.start(RunConn(enabled=False), "sh")[0] == 409
     assert runner.start(RunConn(running=True), "sh")[0] == 409
+    assert runner.start(RunConn(db_busy=True), "sh")[0] == 409
     runner.locks.acquire("sh")  # 스케줄러가 이 출처를 수집하는 중
     try:
         status, body = runner.start(RunConn(), "sh")

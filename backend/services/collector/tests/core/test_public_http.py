@@ -5,11 +5,14 @@ import httpcore
 import httpx
 import pytest
 
+from mujuthaek_collector.core import public_http
 from mujuthaek_collector.core.http_client import PoliteClient
 from mujuthaek_collector.core.public_http import (
     MAX_CONNECT_ADDRESSES,
     PublicHTTPTransport,
     PublicNetworkBackend,
+    deadline_passed,
+    remaining,
     request_deadline,
     validate_public_url,
 )
@@ -141,6 +144,27 @@ class DrippingStream(RecordingStream):
         self.timeouts.append(timeout)
         time.sleep(0.05)
         return b"H"
+
+
+def test_deadline_budget_is_exact_at_large_clock_values(monkeypatch):
+    now = [10**18]
+    monkeypatch.setattr(public_http.time, "monotonic_ns", lambda: now[0])
+    with request_deadline(0.3):
+        assert remaining(None) == 0.3
+        now[0] += 50_000_000
+        assert remaining(None) == 0.25
+        assert remaining(0.1) == 0.1
+        with request_deadline(10):
+            assert remaining(None) == 0.25
+        with request_deadline(0.1):
+            assert remaining(None) == 0.1
+        assert remaining(None) == 0.25
+        now[0] += 250_000_000
+        assert deadline_passed()
+        with pytest.raises(httpcore.ReadTimeout):
+            remaining(None)
+    assert not deadline_passed()
+    assert remaining(2) == 2
 
 
 def test_a_server_dripping_bytes_cannot_outlive_the_request_deadline():
