@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from gate import verify
-from plan import FLAGS, affected, changed, python_locks, validate
+from plan import FLAGS, affected, changed, deployment_selection, python_locks, validate
 
 
 class SelectionTests(unittest.TestCase):
@@ -48,6 +48,15 @@ class SelectionTests(unittest.TestCase):
     def test_only_changed_python_dependency_manifests_are_audited(self):
         self.assertEqual(python_locks(['backend/services/collector/src/a.py', '.github/workflows/ci.yml']), [])
         self.assertEqual(python_locks(['backend/services/collector/pyproject.toml']), ['backend/services/collector/uv.lock'])
+
+    def test_production_inventory_and_initial_deployment_fail_closed(self):
+        self.assertEqual(deployment_selection({'paths': [], 'components': []}), affected([]))
+        self.assertTrue(all(deployment_selection({'paths': [], 'components': ['api']}).values()))
+        api = deployment_selection({'paths': ['backend/services/api/src/main/java/A.java'], 'components': ['api']})
+        self.assertEqual({k for k, v in api.items() if v}, {'api', 'e2e'})
+        for value in ({}, {'paths': [], 'components': ['unknown']}):
+            with self.assertRaises(ValueError):
+                deployment_selection(value)
 
     def test_filenames_are_data_not_workflow_or_shell_commands(self):
         path = 'frontend/src/a\n::warning::synthetic.ts'

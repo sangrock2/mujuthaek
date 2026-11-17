@@ -108,6 +108,21 @@ def python_locks(paths):
             if any(path in (root + '/uv.lock', root + '/pyproject.toml') for path in paths)]
 
 
+def deployment_selection(value):
+    if not isinstance(value, dict) or not isinstance(value.get('paths'), list) or not isinstance(value.get('components'), list):
+        raise ValueError('Missing deployment change inventory')
+    components = value['components']
+    if any(x not in ('frontend', 'api', 'notification') for x in components):
+        raise ValueError('Unknown deployment component')
+    # No baseline/change inventory on an initial deployment cannot justify skipping tests.
+    selection = affected(value['paths']) if value['paths'] or not components else dict.fromkeys(FLAGS, True)
+    for component in components:
+        selection[component] = True
+        if component in ('frontend', 'api'):
+            selection['e2e'] = True
+    return selection
+
+
 def emit(selection, base='', head='', paths=()):
     validate(selection)
     output = {key: str(value).lower() for key, value in selection.items()}
@@ -134,16 +149,7 @@ def main():
         emit(validate(json.loads(args.selection)))
     elif args.deployment_plan:
         value = json.loads(args.deployment_plan.read_text())
-        if not isinstance(value.get('paths'), list):
-            raise ValueError('Missing deployment change inventory')
-        selection = affected(value['paths'])
-        for component in value.get('components', []):
-            if component not in ('frontend', 'api', 'notification'):
-                raise ValueError('Unknown deployment component')
-            selection[component] = True
-            if component in ('frontend', 'api'):
-                selection['e2e'] = True
-        emit(selection, paths=value['paths'])
+        emit(deployment_selection(value), paths=value['paths'])
     elif args.all:
         emit(dict.fromkeys(FLAGS, True))
     else:
