@@ -50,6 +50,7 @@ class Selection(unittest.TestCase):
     def test_runtime_and_shared_dependencies(self):
         cases = [
             (['frontend/src/app/page.tsx'], ['frontend']),
+            (['frontend/src/content/privacy.md'], ['frontend']),
             (['frontend/pnpm-lock.yaml'], ['frontend']),
             (['backend/services/api/src/main/java/Api.java'], ['api']),
             (['backend/services/api/Dockerfile'], ['api']),

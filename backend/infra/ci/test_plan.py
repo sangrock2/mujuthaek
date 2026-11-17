@@ -20,6 +20,8 @@ class SelectionTests(unittest.TestCase):
             'backend/services/notification/src/main/java/Mail.java': {'notification'},
             'backend/services/collector/src/worker.py': {'collector'},
             'backend/services/extraction/src/review.py': {'extraction'},
+            'backend/services/extraction/src/rules/prompt.v30.md': {'extraction'},
+            'frontend/src/content/privacy.md': {'frontend', 'e2e'},
             'frontend/src/app/page.tsx': {'frontend', 'e2e'},
             'frontend/tests/ui.test.ts': {'frontend'},
             'frontend/e2e/login.spec.ts': {'e2e'},

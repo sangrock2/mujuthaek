@@ -15,7 +15,8 @@ def affected(paths):
         if path in ('.github/scripts/deployment_plan.py', '.github/workflows/production.yml'):
             # CI/selection control changes are checked as infrastructure; unchanged apps need no redeployment.
             continue
-        if path.startswith(('docs/', '.github/ISSUE_TEMPLATE/')) or path.endswith('.md'):
+        if path.startswith(('docs/', '.github/ISSUE_TEMPLATE/')) or path.rsplit('/', 1)[-1] in (
+                'README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'AGENTS.md', 'SOURCE.md'):
             continue
         if '/src/test/' in path or '/src/e2e/' in path or path.startswith(('frontend/tests/', 'frontend/e2e/')):
             continue

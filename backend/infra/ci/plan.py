@@ -22,9 +22,10 @@ def affected(paths):
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith('/') or '..' in path.split('/'):
             raise ValueError('Invalid repository path')
-        if path.startswith(('docs/', '.github/ISSUE_TEMPLATE/')) or path.endswith('.md') or path == 'LICENSE':
-            continue
         name = path.rsplit('/', 1)[-1]
+        if path.startswith(('docs/', '.github/ISSUE_TEMPLATE/')) or name in (
+                'README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'AGENTS.md', 'SOURCE.md', 'LICENSE'):
+            continue
         if name in ('package.json', 'pnpm-lock.yaml', 'package-lock.json', 'uv.lock', 'pyproject.toml',
                     'requirements.txt', 'requirements-dev.txt', 'build.gradle.kts', 'settings.gradle.kts',
                     'gradle.properties', 'verification-metadata.xml', 'gradle-wrapper.properties', 'libs.versions.toml'):
