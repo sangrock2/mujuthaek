@@ -26,7 +26,8 @@ _deadline = threading.local()
 def request_deadline(seconds: float):
     """Bound everything this thread sends/receives inside the block. Nested deadlines never extend an outer one."""
     outer = getattr(_deadline, "at", None)
-    at = time.monotonic() + seconds
+    # 큰 uptime 값에 소수 초를 더하면 첫 timeout이 원래 예산보다 커질 수 있어요.
+    at = time.monotonic_ns() + int(seconds * 1_000_000_000)
     _deadline.at = at if outer is None else min(outer, at)
     try:
         yield
@@ -36,7 +37,7 @@ def request_deadline(seconds: float):
 
 def deadline_passed() -> bool:
     at = getattr(_deadline, "at", None)
-    return at is not None and time.monotonic() >= at
+    return at is not None and time.monotonic_ns() >= at
 
 
 def remaining(timeout: float | None) -> float | None:
@@ -44,9 +45,10 @@ def remaining(timeout: float | None) -> float | None:
     at = getattr(_deadline, "at", None)
     if at is None:
         return timeout
-    left = at - time.monotonic()
-    if left <= 0:
+    left_ns = at - time.monotonic_ns()
+    if left_ns <= 0:
         raise httpcore.ReadTimeout("request deadline exceeded")
+    left = left_ns / 1_000_000_000
     return left if timeout is None else min(timeout, left)
 
 

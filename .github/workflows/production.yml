@@ -42,6 +42,11 @@ jobs:
     outputs:
       deploy: ${{ steps.plan.outputs.deploy }}
       frontend: ${{ steps.plan.outputs.frontend }}
+      ci_frontend: ${{ steps.ci.outputs.frontend }}
+      ci_backend: ${{ steps.ci.outputs.backend }}
+      ci_contracts: ${{ steps.ci.outputs.contracts }}
+      ci_e2e: ${{ steps.ci.outputs.e2e }}
+      ci_selection: ${{ steps.ci.outputs.selection }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -58,6 +63,9 @@ jobs:
         env:
           ROLLBACK_RELEASE: ${{ inputs.release }}
         run: python .github/scripts/release_phases.py plan
+      - name: Select checks for the deployment change inventory
+        id: ci
+        run: python3 backend/infra/ci/plan.py --deployment-plan deployment-plan.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployment-plan-${{ github.run_id }}-${{ github.run_attempt }}
@@ -68,29 +76,46 @@ jobs:
           retention-days: 90
   web-check:
     needs: plan
-    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true' && needs.plan.outputs.ci_frontend == 'true'
     uses: ./.github/workflows/web.yml
   backend-check:
     needs: plan
-    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true' && needs.plan.outputs.ci_backend == 'true'
     uses: ./.github/workflows/ci.yml
+    with:
+      selection: ${{ needs.plan.outputs.ci_selection }}
   contracts-check:
     needs: plan
-    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true' && needs.plan.outputs.ci_contracts == 'true'
     uses: ./.github/workflows/contracts.yml
   e2e-check:
     needs: plan
-    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true'
+    if: github.event_name == 'push' && needs.plan.outputs.deploy == 'true' && needs.plan.outputs.ci_e2e == 'true'
     uses: ./.github/workflows/e2e.yml
+  ci-check:
+    needs: [plan, web-check, backend-check, contracts-check, e2e-check]
+    if: always() && github.event_name == 'push' && needs.plan.result == 'success' && needs.plan.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - env:
+          CI_SELECTION: ${{ needs.plan.outputs.ci_selection }}
+          CI_RESULTS: ${{ toJSON(needs) }}
+          CI_GATE: production
+        run: python3 backend/infra/ci/gate.py
   frontend-prepare:
     environment: vercel-production
-    needs: [guard, plan, web-check, backend-check, contracts-check, e2e-check]
+    needs: [guard, plan, ci-check]
     if: >-
       always() && needs.guard.result == 'success' && needs.plan.result == 'success' &&
       needs.plan.outputs.deploy == 'true' &&
       ((github.event_name == 'workflow_dispatch') ||
-       (needs.web-check.result == 'success' && needs.backend-check.result == 'success' &&
-        needs.contracts-check.result == 'success' && needs.e2e-check.result == 'success'))
+       (needs.ci-check.result == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
