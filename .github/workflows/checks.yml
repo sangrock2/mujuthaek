@@ -8,9 +8,37 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      selection: ${{ steps.select.outputs.selection }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      backend: ${{ steps.select.outputs.backend }}
+      contracts: ${{ steps.select.outputs.contracts }}
+      e2e: ${{ steps.select.outputs.e2e }}
+      dependencies: ${{ steps.select.outputs.dependencies }}
+      workflows: ${{ steps.select.outputs.workflows }}
+      full_secrets: ${{ steps.select.outputs.full_secrets }}
+      python_locks: ${{ steps.select.outputs.python_locks }}
+      base_sha: ${{ steps.select.outputs.base_sha }}
+      head_sha: ${{ steps.select.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test CI selection and required-check gates
+        run: python3 -m unittest discover -s backend/infra/ci -p 'test_*.py' -v
+      - id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 backend/infra/ci/plan.py --base "$BASE_SHA" --head "$HEAD_SHA"
   dependencies:
+    needs: plan
+    if: needs.plan.outputs.dependencies == 'true'
     name: Dependency review
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -18,35 +46,74 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: never
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Audit only changed Python dependency manifests
+        env:
+          LOCKFILES: ${{ needs.plan.outputs.python_locks }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          paths = json.loads(os.environ['LOCKFILES'])
+          allowed = {'backend/services/collector/uv.lock', 'backend/services/extraction/uv.lock', 'backend/libs/python-platform/uv.lock'}
+          if not isinstance(paths, list) or any(p not in allowed for p in paths):
+              raise SystemExit('Invalid dependency audit scope')
+          if paths:
+              subprocess.run([sys.executable, 'backend/infra/security/audit_dependencies.py', '--uv-lock', *paths], check=True)
+          PY
   web:
+    needs: plan
+    if: needs.plan.outputs.frontend == 'true'
     uses: ./.github/workflows/web.yml
   backend:
+    needs: plan
+    if: needs.plan.outputs.backend == 'true'
     uses: ./.github/workflows/ci.yml
+    with:
+      selection: ${{ needs.plan.outputs.selection }}
   contracts:
+    needs: plan
+    if: needs.plan.outputs.contracts == 'true'
     uses: ./.github/workflows/contracts.yml
   e2e:
+    needs: plan
+    if: needs.plan.outputs.e2e == 'true'
     uses: ./.github/workflows/e2e.yml
+  workflows:
+    needs: plan
+    if: needs.plan.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate workflow syntax and expressions with pinned actionlint
+        run: |
+          curl --fail --silent --show-error --location --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/actionlint"
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/actionlint" actionlint
+          "$RUNNER_TEMP/actionlint/actionlint" -shellcheck= -pyflakes=
   secrets:
+    needs: plan
     uses: ./.github/workflows/secret-scan.yml
+    with:
+      full-history: ${{ needs.plan.outputs.full_secrets == 'true' }}
+      base-sha: ${{ needs.plan.outputs.base_sha }}
+      head-sha: ${{ needs.plan.outputs.head_sha }}
   ready:
     name: CI ready
     if: always()
-    needs: [dependencies, web, backend, contracts, e2e, secrets]
+    needs: [plan, dependencies, web, backend, contracts, e2e, workflows, secrets]
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - name: Require every check
-        env:
-          WEB: ${{ needs.web.result }}
-          BACKEND: ${{ needs.backend.result }}
-          CONTRACTS: ${{ needs.contracts.result }}
-          E2E: ${{ needs.e2e.result }}
-          SECRETS: ${{ needs.secrets.result }}
-          DEPENDENCIES: ${{ needs.dependencies.result }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          test "$WEB" = success
-          test "$BACKEND" = success
-          test "$CONTRACTS" = success
-          test "$E2E" = success
-          test "$SECRETS" = success
-          if [ "$EVENT" = pull_request ]; then test "$DEPENDENCIES" = success; fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - env:
+          CI_SELECTION: ${{ needs.plan.outputs.selection }}
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 backend/infra/ci/gate.py

@@ -1,0 +1,48 @@
+name: Collector without Docker
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres:
+    name: native PostgreSQL and collector regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      COLLECTOR_TEST_DB_URL: postgresql://collector_native:collector-test-only@127.0.0.1:5432/collector_test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.1"
+          enable-cache: false
+      - name: Start native loopback PostgreSQL (no containers)
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "create role collector_native login password 'collector-test-only';"
+          sudo -u postgres createdb --owner=collector_native collector_test
+          pg_isready -h 127.0.0.1 -p 5432
+      - name: Install locked dependencies and apply disposable DB migrations
+        working-directory: backend/services/collector
+        run: |
+          uv sync --frozen
+          uv run --frozen python - <<'PY'
+          from pathlib import Path
+          import os
+          import psycopg
+          with psycopg.connect(os.environ['COLLECTOR_TEST_DB_URL'], autocommit=True) as conn:
+              assert conn.info.dbname == 'collector_test'
+              for path in sorted(Path('migrations').glob('V*.sql')):
+                  conn.execute(path.read_text(encoding='utf-8'))
+          PY
+      - name: Deadline and run ownership lint
+        working-directory: backend/services/collector
+        run: |
+          uv run --frozen ruff check src/mujuthaek_collector/core/run_ownership.py src/mujuthaek_collector/core/public_http.py tests/core/test_public_http.py tests/storage/test_run_ownership_postgres.py
+          uv run --frozen ruff format --check src/mujuthaek_collector/core/run_ownership.py src/mujuthaek_collector/core/public_http.py tests/core/test_public_http.py tests/storage/test_run_ownership_postgres.py
+      - name: Collector regression including separate-session crash recovery
+        working-directory: backend/services/collector
+        run: uv run --frozen pytest -q

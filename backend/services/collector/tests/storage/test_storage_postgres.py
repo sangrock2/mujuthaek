@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(not DB_URL, reason="COLLECTOR_TEST_DB_URL이 없
 @pytest.fixture
 def pg():
     store = PostgresStore(DB_URL)
+    assert store.conn.info.dbname == "collector_test", "Refusing to truncate a non-test database"
     # cascade: 정책 수집 표(raw_policy_versions 등)가 crawl_runs를 가리켜 나열한 표만 비우면 실패했어요
     store.conn.execute("truncate outbox, raw_units, raw_texts, raw_files, raw_post_versions, raw_posts, crawl_runs, source_boards cascade")
     # 처음 수집 개수 제한(2026-10-27)은 고른 것으로 둬요: 고르기 전이면 새 글이 HELD라 이 시험들의 흐름(PENDING → DONE)이 돌지 않았어요

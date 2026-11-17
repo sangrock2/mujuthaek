@@ -50,6 +50,7 @@ class Selection(unittest.TestCase):
     def test_runtime_and_shared_dependencies(self):
         cases = [
             (['frontend/src/app/page.tsx'], ['frontend']),
+            (['frontend/src/content/privacy.md'], ['frontend']),
             (['frontend/pnpm-lock.yaml'], ['frontend']),
             (['backend/services/api/src/main/java/Api.java'], ['api']),
             (['backend/services/api/Dockerfile'], ['api']),
@@ -61,6 +62,8 @@ class Selection(unittest.TestCase):
             (['backend/services/api/src/test/java/Test.java', '.github/workflows/checks.yml'], []),
             (['backend/services/collector/src/main.py', 'backend/libs/python-platform/pyproject.toml'], []),
             (['backend/infra/deploy/personal/operations_monitor.py', '.github/workflows/operations.yml'], []),
+            (['.github/workflows/production.yml', '.github/scripts/deployment_plan.py', 'backend/infra/ci/plan.py'], []),
+            (['.github/scripts/backend_release.py'], list(planner.COMPONENTS)),
             (['backend/services/api/Old.java', 'backend/services/notification/New.java'], ['api', 'notification']),
             (['new-shared-build-input.json'], list(planner.COMPONENTS)),
         ]
@@ -92,6 +95,7 @@ class HostSelection(unittest.TestCase):
         obj.schema = lambda: 'same-schema'
         obj.download = Mock(side_effect=lambda key, name: obj.runtime / name)
         obj.upload = Mock()
+        obj.compose = Mock()  # isolate service-selection tests from real runtime files/processes
         obj.select = Mock()
         obj.ensure_images = Mock()
         (obj.runtime / 'candidate.json').write_text(json.dumps(target))
