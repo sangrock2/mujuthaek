@@ -1,10 +1,34 @@
 import sys
+import threading
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 
 from mujuthaek_collector.core.documents import text
+
+
+def test_concurrent_jobs_share_one_pdf_memory_budget(monkeypatch, tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(True)
+        entered.set()
+        assert release.wait(3)
+        return SimpleNamespace(returncode=0, stdout=b'[null, "bounded"]')
+
+    monkeypatch.setattr(text, "run_converter", run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(text.pdf_text, tmp_path / "one.pdf")
+        assert entered.wait(3)
+        second = pool.submit(text.pdf_text, tmp_path / "two.pdf")
+        assert len(calls) == 1
+        release.set()
+        assert first.result() == second.result() == (None, "bounded")
+    assert len(calls) == 2
 
 
 def pdf_document(stream: bytes, *, compressed=False) -> bytes:

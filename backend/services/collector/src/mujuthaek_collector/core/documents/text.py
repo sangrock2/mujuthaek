@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
@@ -25,6 +26,7 @@ MAX_XML_DEPTH = 128
 MAX_PDF_PAGES = 200
 MAX_PDF_TEXT_CHARS = 2_000_000
 MAX_PDF_OUTPUT_BYTES = 8 * 1024 * 1024
+_PDF_SLOTS = threading.BoundedSemaphore(1)  # 초기·정기·정책 수집이 동시에 파서 메모리를 쓰지 않아요.
 
 
 class _HwpxText:
@@ -137,7 +139,8 @@ def pdf_text(path: Path) -> tuple[str | None, str]:
     """PDF 파서의 압축 해제·표 탐색을 메모리/시간이 제한된 별도 프로세스에서 실행해요."""
     worker = Path(__file__).with_name("pdf_worker.py")
     try:
-        done = run_converter([sys.executable, str(worker), str(path.resolve())], path.parent, timeout=180, max_stdout=MAX_PDF_OUTPUT_BYTES, max_stderr=4096)
+        with _PDF_SLOTS:
+            done = run_converter([sys.executable, str(worker), str(path.resolve())], path.parent, timeout=180, max_stdout=MAX_PDF_OUTPUT_BYTES, max_stderr=4096)
     except (subprocess.TimeoutExpired, OutputTooLarge):
         return None, "PDF 읽기 자원 한도 초과"
     if done.returncode:
