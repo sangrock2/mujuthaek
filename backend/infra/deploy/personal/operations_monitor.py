@@ -43,6 +43,10 @@ class CheckError(Exception):
     """Safe fixed message only; never expose CLI/HTTP response bodies."""
 
 
+class ProjectTokenMetadataUnavailable(CheckError):
+    """A project token may access its project but not the user's token-management API."""
+
+
 def aws(*args, region=REGION, missing_ok=False):
     result = subprocess.run(['aws', *args, '--region', region, '--output', 'json', '--no-cli-pager'],
                             capture_output=True, text=True, timeout=90,
@@ -108,6 +112,8 @@ def vercel_get(path, token):
         with urllib.request.urlopen(request, timeout=20) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
+        if error.code == 403 and path == '/v5/user/tokens/current':
+            raise ProjectTokenMetadataUnavailable('User token metadata is unavailable to the project token.') from None
         if error.code in (401, 403):
             raise CheckError('Vercel token authentication or permission failed; replace/check VERCEL_TOKEN.') from None
         raise CheckError('Vercel provider request failed; check service availability or metadata access.') from None
@@ -121,7 +127,18 @@ def vercel_status(token):
     project = vercel_get(f'/v9/projects/{PROJECT}?teamId={TEAM}', token)
     if project.get('id') != PROJECT:
         raise CheckError('Vercel project access could not be verified.')
-    metadata = vercel_get('/v5/user/tokens/current', token)['token']
+    try:
+        metadata = vercel_get('/v5/user/tokens/current', token)['token']
+    except ProjectTokenMetadataUnavailable:
+        # Keep project-only permissions. The owner verifies this date when issuing/rotating the token.
+        try:
+            expires = datetime.fromisoformat(os.environ['VERCEL_TOKEN_EXPIRES_AT'])
+            if expires.tzinfo is None:
+                raise ValueError('Timezone required')
+        except (KeyError, ValueError):
+            raise CheckError('Project-scoped Vercel token requires a verified expiration date.') from None
+        return {'project_access': True, 'expires_at': expires.astimezone(timezone.utc).isoformat(),
+                'expiry_status': 'owner_verified', 'metadata_status': 'project_scope_restricted'}
     if metadata.get('revokedAt') or metadata.get('leakedAt'):
         raise CheckError('Vercel deployment token is revoked or flagged as leaked; replace it.')
     dates = [metadata.get('expiresAt')]

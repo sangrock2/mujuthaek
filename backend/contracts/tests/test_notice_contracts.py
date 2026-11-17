@@ -442,6 +442,17 @@ class NoticeContractTest(unittest.TestCase):
         self.notice["documents"][0]["originalUrl"] += "?serviceKey=synthetic-only"
         self.assert_error("PRIVATE_URL", "/documents/0/originalUrl")
 
+    def test_secret_diagnostics_never_echo_freeform_record_keys(self):
+        for key in ('synthetic-private-key', '123456', 'synthetic/private~key'):
+            data = {'record': {key: {'url': 'https://example.com/?serviceKey=synthetic-secret'}}}
+            errors = contract.secret_errors(data)
+            self.assertTrue(errors)
+            self.assertNotIn(key, str(errors))
+            self.assertNotIn('synthetic-secret', str(errors))
+            self.assertIn('<이름 숨김>', str(errors))
+        data = {'documents': [{'originalUrl': 'https://example.com/?serviceKey=synthetic-secret'}]}
+        self.assertEqual(contract.secret_errors(data), ['PRIVATE_URL /documents/0/originalUrl'])
+
     def test_private_url_parameter_names_are_normalized(self):
         document = self.notice["documents"][0]
         base = document["originalUrl"]

@@ -526,12 +526,30 @@ def secret_errors(data, nodes=None):
     errors = []
     for path, node in walk(data) if nodes is None else nodes:
         for key, value in node.items():
-            values = [(key, value)] if isinstance(value, str) else []
-            values += [(f"{key}/{i}", x) for i, x in enumerate(value) if isinstance(x, str)] if isinstance(value, list) else []
+            escaped_key = key.replace('~', '~0').replace('/', '~1')
+            values = [(escaped_key, value)] if isinstance(value, str) else []
+            values += [(f"{escaped_key}/{i}", x) for i, x in enumerate(value) if isinstance(x, str)] if isinstance(value, list) else []
             for sub, text in values:
                 if ((key == "url" or key.endswith("Url")) and private_url(text)) or SECRET_IN_TEXT.search(text):
-                    errors.append(f"PRIVATE_URL {path}/{sub}")
+                    errors.append(f"PRIVATE_URL {diagnostic_path(data, f'{path}/{sub}')}")
     return errors
+
+
+def diagnostic_path(data, pointer):
+    """Preserve real list indexes and schema fields, but never echo arbitrary record/map keys."""
+    current, parts = data, []
+    for escaped in pointer.split('/')[1:]:
+        key = escaped.replace('~1', '/').replace('~0', '~')
+        if isinstance(current, list) and key.isdecimal() and int(key) < len(current):
+            parts.append(str(int(key)))
+            current = current[int(key)]
+        elif isinstance(current, dict):
+            parts.append(escaped if key in schema_property_names() else '<이름 숨김>')
+            current = current.get(key)
+        else:
+            parts.append('<이름 숨김>')
+            current = None
+    return '/' + '/'.join(parts)
 
 
 def region_covers(ancestor, code):
