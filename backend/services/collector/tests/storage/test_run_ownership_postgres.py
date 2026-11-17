@@ -50,13 +50,13 @@ def test_connection_crash_recovers_managed_run_but_preserves_legacy_and_other_so
     b.conn.execute("insert into crawl_runs(id,source_code) values(%s,'gh')", (legacy,))
     b.conn.execute("insert into crawl_runs(id,source_code,owner_instance) values(%s,'sh',%s)", (unrelated, uuid4()))
     interrupted = a.start_run("gh")
-    b.conn.execute("update crawl_runs set new_count=9 where id=%s", (interrupted,))
+    b.conn.execute("update crawl_runs set new_count=9,error='Synthetic earlier diagnostic' where id=%s", (interrupted,))
     before = b.conn.execute("select id,source_code,started_at,new_count from crawl_runs where id=%s", (interrupted,)).fetchone()
     a.close()  # no finish_run: simulate process/session loss
     current = b.start_run("gh")
     assert before == b.conn.execute("select id,source_code,started_at,new_count from crawl_runs where id=%s", (interrupted,)).fetchone()
     status, finished, error = b.conn.execute("select status,finished_at,error from crawl_runs where id=%s", (interrupted,)).fetchone()
-    assert status == "FAILED" and finished and error == RECOVERY_REASON
+    assert status == "FAILED" and finished and error == "Synthetic earlier diagnostic\n" + RECOVERY_REASON
     assert b.conn.execute("select id,status,finished_at from crawl_runs where id=any(%s) order by id", ([legacy, unrelated],)).fetchall() == [
         (r, "RUNNING", None) for r in sorted([legacy, unrelated])
     ]

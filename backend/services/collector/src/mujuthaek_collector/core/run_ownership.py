@@ -50,7 +50,8 @@ class RunOwnership:
                     raise RuntimeError("Managed orphan scope exceeds automatic recovery limit")
                 if old:
                     changed = self.conn.execute(
-                        "update crawl_runs set status='FAILED', finished_at=now(), error=concat_ws(E'\\n',nullif(left(error,9800),''),%s) where id=any(%s)",
+                        "update crawl_runs set status='FAILED', finished_at=now(), "
+                        "error=concat_ws(E'\\n',nullif(left(error,9800),''),%s::text) where id=any(%s)",
                         (RECOVERY_REASON, [row[0] for row in old]),
                     ).rowcount
                     if changed != len(old):
