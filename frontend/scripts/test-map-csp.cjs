@@ -25,19 +25,22 @@ const policy = (enabled) =>
 test("enabled map permits the SDK and its observed nested Kakao script host", () => {
   const p = policy(true);
   for (const host of ["dapi.kakao.com", "t1.kakaocdn.net"])
-    assert.ok(p["script-src"].includes(host));
+    assert.ok(new Set(p["script-src"]).has(host));
 });
 test("enabled map permits the actual tile and UI image hosts", () => {
   const p = policy(true);
   for (const host of ["t1.kakaocdn.net", "mts.kakaocdn.net"])
-    assert.ok(p["img-src"].includes(host));
+    assert.ok(new Set(p["img-src"]).has(host));
 });
 test("tile permission does not grant script execution or arbitrary outbound connections", () => {
   const p = policy(true);
-  assert.ok(!p["script-src"].includes("mts.kakaocdn.net"));
+  assert.ok(!new Set(p["script-src"]).has("mts.kakaocdn.net"));
   assert.deepEqual(p["connect-src"], ["'self'", "dapi.kakao.com"]);
-  assert.ok(!p["script-src"].some((s) => s === "*" || s.includes("*.kakaocdn.net")));
-  assert.ok(!p["img-src"].includes("*.kakaocdn.net"));
+  assert.deepEqual(
+    new Set(p["script-src"]),
+    new Set(["'self'", "'unsafe-inline'", "dapi.kakao.com", "t1.daumcdn.net", "t1.kakaocdn.net"]),
+  );
+  assert.ok(!new Set(p["img-src"]).has("*.kakaocdn.net"));
 });
 test("disabled map grants no Kakao or Daum CDN permission", () => {
   for (const sources of Object.values(policy(false)))
