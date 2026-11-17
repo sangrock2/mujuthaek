@@ -12,6 +12,9 @@ COMPONENTS = ('frontend', 'api', 'notification')
 def affected(paths):
     selected = set()
     for path in paths:
+        if path in ('.github/scripts/deployment_plan.py', '.github/workflows/production.yml'):
+            # CI/selection control changes are checked as infrastructure; unchanged apps need no redeployment.
+            continue
         if path.startswith(('docs/', '.github/ISSUE_TEMPLATE/')) or path.endswith('.md'):
             continue
         if '/src/test/' in path or '/src/e2e/' in path or path.startswith(('frontend/tests/', 'frontend/e2e/')):
@@ -30,8 +33,7 @@ def affected(paths):
             continue
         elif path.startswith('backend/libs/') or path == 'backend/.dockerignore':
             selected.update(('api', 'notification'))
-        elif path.startswith('.github/scripts/') or path in (
-                '.github/workflows/production.yml', 'backend/infra/deploy/personal/release_host.py'):
+        elif path.startswith('.github/scripts/') or path == 'backend/infra/deploy/personal/release_host.py':
             # Protocol changes exercise the full release path once.
             selected.update(COMPONENTS)
         elif path.startswith(('backend/infra/', 'backend/services/collector/', 'backend/services/extraction/', '.github/')):

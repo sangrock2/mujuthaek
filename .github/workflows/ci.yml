@@ -1,20 +1,47 @@
 name: CI
-
-# Python 공통·추출·수집과 Java API·알림 서버를 검사해요.
-# 프론트(frontend/)는 web.yml이 따로 검사해요.
 on:
   workflow_call:
+    inputs:
+      selection:
+        type: string
+        default: ""
   workflow_dispatch:
-
+permissions:
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
-permissions:
-  contents: read
-
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      selection: ${{ steps.select.outputs.selection }}
+      java_any: ${{ steps.select.outputs.java_any }}
+      java_matrix: ${{ steps.select.outputs.java_matrix }}
+      collector: ${{ steps.select.outputs.collector }}
+      extraction: ${{ steps.select.outputs.extraction }}
+      platform: ${{ steps.select.outputs.platform }}
+      infra: ${{ steps.select.outputs.infra }}
+      gateway: ${{ steps.select.outputs.gateway }}
+      broker: ${{ steps.select.outputs.broker }}
+      dependencies: ${{ steps.select.outputs.dependencies }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - id: select
+        env:
+          SELECTION: ${{ inputs.selection }}
+        run: |
+          if [ -n "$SELECTION" ]; then
+            python3 backend/infra/ci/plan.py --selection "$SELECTION"
+          else
+            python3 backend/infra/ci/plan.py --all
+          fi
   gateway:
+    needs: plan
+    if: needs.plan.outputs.gateway == 'true'
     name: nginx adversarial checks (loopback only)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -35,13 +62,15 @@ jobs:
           path: backend/infra/security/build/gateway.json
           retention-days: 30
   java:
+    needs: plan
+    if: needs.plan.outputs.java_any == 'true'
     name: ${{ matrix.service }} (check)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        service: [api, notification]
+        service: ${{ fromJSON(needs.plan.outputs.java_matrix) }}
     defaults:
       run:
         working-directory: backend/services/${{ matrix.service }}
@@ -79,46 +108,73 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  python:
-    name: python (ruff · pytest)
+  collector:
+    needs: plan
+    if: needs.plan.outputs.collector == 'true'
+    uses: ./.github/workflows/collector-native.yml
+  platform:
+    needs: plan
+    if: needs.plan.outputs.platform == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: backend
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-        with:
-          enable-cache: true
-      # ruff 버전은 uv.lock과 같게 고정해요 (새 버전이 나와도 CI 결과가 갑자기 바뀌지 않게)
-      - run: uvx ruff@0.17.0 check services/extraction libs/python-platform
-      - run: uvx ruff@0.17.0 format --check services/extraction libs/python-platform
-      - name: python-platform 테스트
+      - run: uv run --frozen ruff check . && uv run --frozen ruff format --check .
         working-directory: backend/libs/python-platform
-        run: uv run --frozen pytest -q
-      - name: extraction 테스트
+      - run: uv run --frozen pytest -q
+        working-directory: backend/libs/python-platform
+  extraction:
+    needs: plan
+    if: needs.plan.outputs.extraction == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - run: uv run --frozen ruff check . && uv run --frozen ruff format --check .
         working-directory: backend/services/extraction
-        run: uv run --frozen pytest -q
-      - name: RabbitMQ service isolation denial checks (disposable loopback broker)
+      - run: uv run --frozen pytest -q
         working-directory: backend/services/extraction
-        run: uv run --frozen python ../../infra/security/test_service_isolation.py
-      - name: collector 보안·오프라인 회귀 검사
-        working-directory: backend/services/collector
-        run: |
-          uv run --frozen ruff check src/mujuthaek_collector/core/public_http.py src/mujuthaek_collector/core/http_client.py tests/core/test_public_http.py
-          uv run --frozen ruff format --check src/mujuthaek_collector/core/public_http.py src/mujuthaek_collector/core/http_client.py tests/core/test_public_http.py
-          uv run --frozen pytest -q
-      - name: 배포·롤백 안전장치 검사
-        run: python3 -m unittest discover -s infra/deploy/personal/tests -v
-      - name: Dependency audit regression tests
-        run: python3 -m unittest discover -s infra/security/tests -v
-      - name: Audit Python lockfiles
-        run: python3 infra/security/audit_dependencies.py --uv-lock services/collector/uv.lock services/extraction/uv.lock libs/python-platform/uv.lock --output security-python-audit.json
-      - name: nginx HTTPS 통합 검사
-        run: python3 infra/deploy/tests/verify_https.py
-      - name: 인증서 자동화 오프라인 검사
-        working-directory: backend/services/collector
-        run: uv run --frozen pytest -q ../../infra/deploy/tests/test_certificates.py
+  broker:
+    needs: plan
+    if: needs.plan.outputs.broker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - run: uv run --frozen python ../../infra/security/test_service_isolation.py
+        working-directory: backend/services/extraction
+  infra:
+    needs: plan
+    if: needs.plan.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s backend/infra/deploy/personal/tests -v
+      - run: python3 -m unittest discover -s backend/infra/security/tests -v
+  ready:
+    name: Backend ready
+    needs: [plan, java, collector, platform, extraction, broker, infra, gateway]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - env:
+          CI_SELECTION: ${{ needs.plan.outputs.selection }}
+          CI_RESULTS: ${{ toJSON(needs) }}
+          CI_GATE: backend
+        run: python3 backend/infra/ci/gate.py
