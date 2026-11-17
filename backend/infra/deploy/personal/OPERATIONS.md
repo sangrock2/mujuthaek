@@ -12,6 +12,16 @@
 
 모니터 역할은 main 브랜치 OIDC 단기 인증을 사용합니다. 비용·자격 메타데이터 읽기, 위 S3 파일 두 개의 읽기·쓰기, 지정 발신 주소에서 소유자 한 명에게 이메일 발송만 허용합니다. 배포용 역할·런타임 키의 권한을 확대하지 않습니다. 예산과 잔액 알림은 서버를 자동 중지하거나 삭제하는 기능이 아닙니다. AWS 집계에는 지연이 있으며 OpenAI 분석 예산은 별도입니다. 일일 점검은 유료 Cost Explorer 쿼리를 호출하지 않습니다.
 
+## GA4 관리자 통계 연결
+
+운영과 개발 속성은 분리한다. Vercel 프로젝트의 production 환경에 웹 스트림의 `NEXT_PUBLIC_GA_ID=G-…`를 설정하고 프론트를 다시 빌드한다. 기존 방문 통계 동의 흐름은 유지하며, 동의 전·거부 후·관리자 화면에서는 GA를 실행하지 않는다.
+
+서버가 보고서를 읽으려면 Google Analytics Data API를 활성화하고 서비스 계정에 해당 운영 GA4 속성의 뷰어 권한을 부여한다. 속성 ID는 측정 ID와 다르며, 운영 서버의 `.env`에 숫자 `GA_PROPERTY_ID`와 `GA_CREDENTIALS_FILE=/run/mujuthaek-analytics/service-account.json`을 지정한다. 설정을 비워 두면 기존처럼 서버 통계만 제공한다.
+
+서비스 계정 JSON은 Git·Vercel 환경변수·GitHub secrets·로그에 넣지 않는다. 서버 전용 `runtime/analytics/service-account.json`에 보관하고 API에만 디렉터리를 읽기 전용으로 마운트한다. 서버 디렉터리는 root 소유·그룹 10001·0750, 파일은 root 소유·그룹 10001·0440으로 만들어 UID 10001의 API 프로세스가 읽게 한다. PC 원본 파일과 상위 폴더의 권한은 변경하지 않는다.
+
+반영 전 서비스 계정의 일반·실시간 보고서 접근을 확인하고, Compose 해석 결과에서 API 외 서비스에 GA 자격증명이 전달되지 않는지 확인한다. 기존 MQ/S3 분리·이미지 버전·DB를 유지하며 API 설정만 갱신한다. 실패 시 이전 환경·인증 파일로 복원한다. 일반 보고서에는 처리 지연과 서버의 1시간 캐시가 있으므로 실시간 보고서도 별도로 확인한다.
+
 ## 설치와 확인
 
 개인 AWS 관리 로그인 후 `python backend/infra/deploy/personal/setup_operations.py --config <owner-only-json-path>`를 실행합니다. 계정과 기존 예산 구독을 확인한 뒤 소유 프로젝트 역할을 생성하고 `OPERATIONS_CONFIG`, `AWS_OPERATIONS_ROLE_ARN`, `AWS_OPERATIONS_ACCOUNT_ID`를 GitHub Actions secrets로 설정합니다. 실제 계정·버킷·이메일·비용 기준은 소스에 넣지 않습니다. 코드가 dev → main으로 병합된 뒤 Actions → Operations monitor → Run workflow(main)에서 실행합니다. 첫 보고 메일 수신과 워크플로 성공을 확인합니다.

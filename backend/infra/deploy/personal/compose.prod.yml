@@ -87,6 +87,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       JUSO_SEARCH_API_KEY: ${JUSO_SEARCH_API_KEY:-}
       JUSO_COORD_API_KEY: ${JUSO_COORD_API_KEY:-}
+      GA_PROPERTY_ID: ${GA_PROPERTY_ID:-}
+      GA_CREDENTIALS_FILE: ${GA_CREDENTIALS_FILE:-}
       NOTIFICATION_SERVER_URL: http://notification:8081
       PUSH_VAPID_PUBLIC_KEY: ${PUSH_VAPID_PUBLIC_KEY:-}
       NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:?required}
@@ -107,6 +109,8 @@ services:
       JUDGING_CACHE_SIZE: "2000"
       JUDGING_BENEFIT_CACHE_SIZE: "2000"
       JUDGING_PREWARM: "false"
+    volumes:
+      - ./runtime/analytics:/run/mujuthaek-analytics:ro
     ports: ["127.0.0.1:8080:8080"]
   notification:
     <<: *app
