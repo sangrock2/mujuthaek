@@ -566,7 +566,7 @@ const withThirdParties = csp({ analytics: true, kakaoMap: true });
 assert.ok(withThirdParties["script-src"].includes("https://www.googletagmanager.com"));
 assert.equal(withThirdParties["script-src"].includes("https://*.googletagmanager.com"), false);
 assert.ok(withThirdParties["connect-src"].includes("https://*.google-analytics.com"));
-assert.ok(withThirdParties["script-src"].includes("dapi.kakao.com"));
+assert.ok(new Set(withThirdParties["script-src"]).has("dapi.kakao.com"));
 assert.ok(withThirdParties["img-src"].includes("*.daumcdn.net"));
 assert.equal(withThirdParties["script-src"].includes("'unsafe-eval'"), false);
 for (const source of [...base["script-src"], ...base["connect-src"]])
