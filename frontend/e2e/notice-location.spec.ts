@@ -32,7 +32,13 @@ for (const hasUnits of [false, true]) {
     await page.route(`**/api/v1/notices/${fixture.noticeId}/units*`, (route) =>
       route.fulfill({ json: { items: [], hasNext: false, nextCursor: null } }),
     );
+    const unitsResponse = hasUnits
+      ? page.waitForResponse((response) =>
+          new URL(response.url()).pathname.endsWith(`/notices/${fixture.noticeId}/units`),
+        )
+      : null;
     await page.goto(`/notices/${fixture.noticeId}`);
+    if (unitsResponse) expect((await unitsResponse).ok()).toBeTruthy();
     const section = page.getByRole("region", { name: "공고 위치", exact: true });
     await expect(section).toBeVisible();
     await expect(section.getByLabel("단지 위치 지도", { exact: true })).toHaveCount(1);
