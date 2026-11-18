@@ -38,6 +38,7 @@ import { bySite, directionsUrl, toUnit, useNoticeUnits } from "@/features/notice
 import { UnitPrices } from "@/features/notice/components/UnitPrices";
 import { UnitPrepValue } from "@/features/notice/components/UnitPrep";
 import { SitesMap } from "@/features/notice/components/SitesMap";
+import { NoticeLocationSection } from "@/features/notice/components/NoticeLocationSection";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
 import { useNotice } from "@/features/notice/queries";
 import { track } from "@/shared/lib/analytics";
@@ -358,7 +359,7 @@ function ApiBlockUnits({
     () => (q.data?.pages ?? []).flatMap((p) => p.items.map((u) => toUnit(u, sites, judgment))),
     [q.data, sites, judgment],
   );
-  if (q.isPending || units.length === 0) return null;
+  if (q.isPending || units.length === 0) return <NoticeLocationSection sites={sites} />;
   return (
     <BlockUnits
       units={units}
@@ -520,8 +521,10 @@ export function WebDetail({ id }: { id: string }) {
               />
 
               {n.units && n.units.length > 0 && <BlockUnits units={n.units} />}
-              {n.hasUnits && (
+              {n.hasUnits ? (
                 <ApiBlockUnits notice={n} judgment={j.judgment} onShowLife={showLife} />
+              ) : (
+                <NoticeLocationSection sites={n.sites ?? []} />
               )}
 
               {n.life && (

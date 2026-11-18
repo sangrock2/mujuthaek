@@ -36,6 +36,7 @@ import {
   useNoticeUnits,
 } from "@/features/notice/units";
 import { SitesMap } from "@/features/notice/components/SitesMap";
+import { NoticeLocationSection } from "@/features/notice/components/NoticeLocationSection";
 import { unitStatus, useUnitPicker } from "@/features/notice/useUnitPicker";
 import { UnitPrices } from "@/features/notice/components/UnitPrices";
 import { UnitPrepValue } from "@/features/notice/components/UnitPrep";
@@ -80,7 +81,7 @@ function MApiUnits({
     countAll,
     countOk,
   } = useUnitPicker(units);
-  if (q.isPending || units.length === 0) return null;
+  if (q.isPending || units.length === 0) return <NoticeLocationSection sites={sites} mobile />;
   const shown = all ? filtered : filtered.slice(0, MOBILE_UNIT_COUNT);
   const located = sites.some((s) => s.lat !== null && s.lng !== null);
   const site = sites.find((s) => s.id === selected?.siteId);
@@ -388,7 +389,11 @@ export function MDetail({ id }: { id: string }) {
           onOpenPage={original.hasPdf ? openOriginal : undefined}
         />
 
-        {n.hasUnits && <MApiUnits notice={n} judgment={j.judgment} onShowLife={showLife} />}
+        {n.hasUnits ? (
+          <MApiUnits notice={n} judgment={j.judgment} onShowLife={showLife} />
+        ) : (
+          <NoticeLocationSection sites={n.sites ?? []} mobile />
+        )}
 
         {n.life && (
           <LifeCard life={n.life} variant="mobile" siteId={lifeSite} onSiteChange={setLifeSite} />
