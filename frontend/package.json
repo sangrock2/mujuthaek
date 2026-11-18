@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:ui": "node scripts/test-ui-regressions.cjs && node scripts/test-map-csp.cjs",
+    "test:ui": "node scripts/test-ui-regressions.cjs && node scripts/test-map-csp.cjs && node scripts/test-service-quality.cjs",
     "test:tooling": "node --test scripts/e2e-environment.test.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "preview:api": "node scripts/run-e2e.mjs --preview",
@@ -18,7 +18,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:map-csp": "node scripts/test-map-csp.cjs"
+    "test:map-csp": "node scripts/test-map-csp.cjs",
+    "test:service-quality": "node scripts/test-service-quality.cjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.4",

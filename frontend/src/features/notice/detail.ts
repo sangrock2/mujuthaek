@@ -280,7 +280,7 @@ const statusOf: Record<ApiNoticeDetail["header"]["status"], NoticeDoc["status"]>
 
 function dueLabelOf(h: ApiNoticeDetail["header"]) {
   if (h.status === "ALWAYS") return "상시 모집";
-  if (h.status === "UPCOMING") return "접수 예정";
+  if (h.status === "UPCOMING") return "다음 접수 예정";
   if (h.status === "CLOSED") return "마감";
   if (h.dday === null) return "마감일 확인";
   return h.dday <= 0 ? "오늘 마감" : undefined;
@@ -466,6 +466,8 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
       id: r.id,
       name: r.name,
       when: [r.appliesTo, r.submissionTime].filter(Boolean).join(" · ") || undefined,
+      appliesTo: r.appliesTo ?? undefined,
+      submissionTime: r.submissionTime ?? undefined,
       desc: r.description ?? "",
     });
     documents.set(group, g);

@@ -1,4 +1,5 @@
 "use client";
+import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
@@ -157,9 +158,13 @@ export function MHomes() {
             <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">내 집</h1>
             <span className="text-text-sub flex flex-wrap items-center gap-x-[10px] text-[15px]">
               <span>
-                지원할 수 있는 곳{" "}
-                <strong className="text-brand-strong">{list.eligibleCount}곳</strong>
-                {list.needsInputCount ? ` · 확인 필요 ${list.needsInputCount}곳` : ""}
+                <PersonalizationSummary
+                  kind="homes"
+                  loading={list.loading}
+                  error={list.error}
+                  eligible={list.eligibleCount}
+                  needsInput={list.needsInputCount}
+                />
               </span>
               <EditConditionsLink />
             </span>
@@ -173,6 +178,10 @@ export function MHomes() {
         <section aria-label="지역" className="px-[4px]">
           <RegionSelect filter={region} compact />
         </section>
+        <p className="text-text-sub m-0 px-[4px] text-[13px] leading-[1.6]">
+          예상 준비금은 대출 승인액·부대비용에 따라 달라져요. 접수 시간과 주택별 금액·조건은
+          상세에서 확인해 주세요.
+        </p>
 
         <div className="flex gap-[6px] overflow-x-auto px-[4px] pb-[2px]">
           <button
@@ -267,7 +276,7 @@ export function MHomes() {
                     </span>
                   )}
                   <span className="text-text-sub text-[13px]">
-                    {h.prepAmount ? `준비할 돈 ${h.prepAmount}` : h.prepNote}
+                    {h.prepAmount ? `예상 준비금 ${h.prepAmount}` : h.prepNote}
                   </span>
                 </span>
               </Link>

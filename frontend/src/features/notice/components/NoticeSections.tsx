@@ -2,6 +2,7 @@
 
 import { ChevronDown, CircleAlert, ExternalLink, FileText, MapPin, Phone } from "lucide-react";
 import { useEffect, useState } from "react";
+import { DocumentChecklist } from "./DocumentChecklist";
 import {
   categoryLabel,
   channelLabel,
@@ -154,7 +155,7 @@ function ScheduleList({ items, web }: { items: NoticeScheduleItem[]; web: boolea
                 )}
               >
                 {s.label}
-                {s.state === "now" && <span className="text-brand-strong"> · 진행 중</span>}
+                {s.state === "now" && <span className="text-brand-strong"> · 오늘 일정</span>}
               </span>
               <span className={cn(sub, s.state === "done" && "text-text-sub")}>
                 {period ?? "날짜 미정"}
@@ -515,6 +516,10 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
               <span className={cn("font-extrabold", web ? "text-[17px]" : "text-[15px]")}>
                 준비할 서류
               </span>
+              <p className="text-text-sub m-0 text-[14px] leading-[1.6]">
+                아래 목록은 모두에게 필수인 서류가 아니에요. 각 서류의 제출 대상·시점을 확인해
+                주세요. 신청·선정 후·계약 때 내는 서류와 대체 서류가 함께 있을 수 있어요.
+              </p>
               {apply.documents.map((g) => (
                 <details
                   key={g.group}
@@ -527,19 +532,7 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
                       {g.items.length}개
                     </span>
                   </summary>
-                  <ul className="m-0 flex list-none flex-col gap-[12px] px-[16px] pt-[4px] pb-[16px]">
-                    {g.items.map((d) => (
-                      <li key={d.id} className="flex flex-col gap-[2px]">
-                        <span className="text-[15px] font-bold">{d.name}</span>
-                        {d.when && (
-                          <span className="text-brand-strong text-[13px] font-semibold">
-                            {d.when}
-                          </span>
-                        )}
-                        <span className="text-text-sub text-[13px] leading-[1.5]">{d.desc}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <DocumentChecklist items={g.items} />
                 </details>
               ))}
             </div>

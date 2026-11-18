@@ -43,6 +43,6 @@ export const prepareNoteLabel: Record<string, string> = {
   ASSET_UNKNOWN: "자산 조건 확인 필요",
   INCOME_UNKNOWN: "소득 조건 확인 필요",
   SCORE_UNKNOWN: "청약 가점 확인 필요",
-  PRICE_NOT_ANNOUNCED: "공고에 금액이 아직 없어요",
+  PRICE_NOT_ANNOUNCED: "금액 확인 필요",
   NO_ELIGIBLE_TYPE: "신청할 수 있는 주택형이 없어요",
 };

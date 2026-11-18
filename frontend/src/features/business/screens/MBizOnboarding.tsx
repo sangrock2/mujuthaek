@@ -214,7 +214,7 @@ export function MBizOnboarding() {
         <span className="text-text-sub -mt-[12px] text-[13px]">
           {pre
             ? "예비 창업이면 업력 · 직원 수 · 매출은 입력하지 않아요"
-            : "업력은 사업자등록일부터 세요 · 매출은 저장하지 않아요 · 직원 수는 참고용"}
+            : "업력은 사업자등록일부터 세요 · 매출은 이 탭의 저장소에 임시 보관해요 · 직원 수는 참고용"}
         </span>
 
         <div className="flex flex-col gap-[8px]">

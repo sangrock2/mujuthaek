@@ -99,8 +99,8 @@ export function DeviceSaveCard({ form, compact }: { form: ProfileForm; compact?:
         className={cn("text-brand-strong leading-[1.6]", compact ? "text-[13px]" : "text-[14px]")}
       >
         {form.saveOnDevice
-          ? "소득·자산은 저장하지 않아요. 나머지 조건은 30일 동안 이 기기에만 저장해요."
-          : "이 기기에 저장하지 않아요. 탭을 닫으면 입력한 조건이 지워져요."}
+          ? "소득·자산은 이 탭의 저장소에 임시 보관하고, 판정 서버에는 구간으로 보내요. 나머지 조건은 이 기기에 30일 보관해요."
+          : "입력한 조건은 이 탭의 저장소에만 임시 보관해요. 소득·자산은 판정 서버에 구간으로 보내요. 저장한 조건 지우기로 삭제할 수 있어요."}
       </span>
       {form.hasSaved && (
         <button

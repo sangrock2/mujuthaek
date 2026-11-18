@@ -18,7 +18,15 @@ type Props = {
   onOpenOriginal: (page?: number) => void;
 };
 
-function Status({ item, web }: { item: JudgedItem; web: boolean }) {
+function Status({
+  item,
+  web,
+  onOpenOriginal,
+}: {
+  item: JudgedItem;
+  web: boolean;
+  onOpenOriginal: Props["onOpenOriginal"];
+}) {
   const text = web ? "text-[15px]" : "text-[14px]";
   if (item.status === "met") {
     return (
@@ -43,10 +51,22 @@ function Status({ item, web }: { item: JudgedItem; web: boolean }) {
       </span>
     );
   }
-  return <CheckAction inputHref={item.inputHref} web={web} />;
+  return (
+    <CheckAction inputHref={item.inputHref} web={web} onReview={() => onOpenOriginal(item.page)} />
+  );
 }
 
-function Row({ item, last, web }: { item: JudgedItem; last: boolean; web: boolean }) {
+function Row({
+  item,
+  last,
+  web,
+  onOpenOriginal,
+}: {
+  item: JudgedItem;
+  last: boolean;
+  web: boolean;
+  onOpenOriginal: Props["onOpenOriginal"];
+}) {
   return (
     <div
       className={cn(
@@ -61,13 +81,21 @@ function Row({ item, last, web }: { item: JudgedItem; last: boolean; web: boolea
           <span className="text-text-sub text-[13px] leading-[1.4]">{item.reason}</span>
         )}
       </span>
-      <Status item={item} web={web} />
+      <Status item={item} web={web} onOpenOriginal={onOpenOriginal} />
     </div>
   );
 }
 
 /** 충족·해당 안 됨으로 확실히 판정된 조건만 펼쳐 두고, 확인이 필요한 조건은 접어 둬요 */
-function Items({ items, web }: { items: JudgedItem[]; web: boolean }) {
+function Items({
+  items,
+  web,
+  onOpenOriginal,
+}: {
+  items: JudgedItem[];
+  web: boolean;
+  onOpenOriginal: Props["onOpenOriginal"];
+}) {
   const decided = items.filter((i) => i.status !== "unknown");
   const unsure = items.filter((i) => i.status === "unknown");
   return (
@@ -77,16 +105,17 @@ function Items({ items, web }: { items: JudgedItem[]; web: boolean }) {
           key={item.id}
           item={item}
           web={web}
+          onOpenOriginal={onOpenOriginal}
           last={i === decided.length - 1 && !unsure.length}
         />
       ))}
       {!decided.length && (
         <p className="text-text-sub m-0 py-[10px] text-[14px]">
-          아직 확실하게 판정된 조건이 없어요
+          입력을 보완할 조건과 원문에서 확인할 조건을 아래에서 나눠 안내해요
         </p>
       )}
       {unsure.length > 0 && (
-        <details className="group">
+        <details className="group" open={!decided.length}>
           <summary className="text-check-text flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-[8px] text-[14px] font-bold [&::-webkit-details-marker]:hidden">
             확인이 필요한 조건 {unsure.length}개
             <ChevronDown
@@ -95,8 +124,18 @@ function Items({ items, web }: { items: JudgedItem[]; web: boolean }) {
               className="flex-none transition-transform group-open:rotate-180"
             />
           </summary>
+          <p className="text-text-sub m-0 py-[8px] text-[13px] leading-[1.6]">
+            {unsure.filter((item) => item.inputHref).length}개는 조건 입력으로 확인할 수 있어요.
+            나머지는 원문·기관 확인이 필요해 개인정보를 더 입력해도 해결되지 않을 수 있어요.
+          </p>
           {unsure.map((item, i) => (
-            <Row key={item.id} item={item} web={web} last={i === unsure.length - 1} />
+            <Row
+              key={item.id}
+              item={item}
+              web={web}
+              last={i === unsure.length - 1}
+              onOpenOriginal={onOpenOriginal}
+            />
           ))}
         </details>
       )}
@@ -255,7 +294,7 @@ export function EligibilityCard({ judgment, loading, error, variant, onOpenOrigi
         </div>
       )}
 
-      {target && <Items items={target.items} web={web} />}
+      {target && <Items items={target.items} web={web} onOpenOriginal={onOpenOriginal} />}
     </section>
   );
 }
