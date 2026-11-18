@@ -142,7 +142,7 @@ export function MMe() {
           </div>
           <span className="text-text-sub flex items-center gap-[6px] text-[13px]">
             <Lock size={15} aria-hidden />
-            소득·자산은 저장하지 않아요
+            주거 소득·자산은 이 탭에 임시 보관해요
           </span>
         </section>
 

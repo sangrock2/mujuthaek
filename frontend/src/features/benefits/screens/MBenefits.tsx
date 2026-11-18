@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
+import { BenefitEmptyState } from "../components/BenefitEmptyState";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import Link from "next/link";
 import { MTabBar } from "@/shared/layout/MTabBar";
@@ -32,8 +34,12 @@ export function MBenefits() {
         <div className="flex flex-col gap-[4px] px-[4px]">
           <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">내 혜택</h1>
           <span className="text-text-sub text-[15px]">
-            받을 수 있는 혜택 <strong className="text-brand-strong">{data.total}개</strong>
-            {data.asOf && ` · ${data.asOf} 기준`}
+            <PersonalizationSummary
+              kind="benefits"
+              loading={data.loading}
+              error={data.error}
+              eligible={data.total}
+            />
           </span>
         </div>
         <div
@@ -70,9 +76,7 @@ export function MBenefits() {
           <QueryFeedback error={data.error} label="혜택" queryKey={["benefits"]} />
         )}
         {!data.loading && !data.error && shown.length === 0 && (
-          <p className="text-text-sub m-0 px-[4px] py-[24px] text-center text-[15px]">
-            지금 받을 수 있는 혜택이 없어요
-          </p>
+          <BenefitEmptyState filtered={cat !== "전체"} onReset={() => setCat("전체")} />
         )}
         {shown.map((b) => (
           <Link

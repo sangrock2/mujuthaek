@@ -260,7 +260,7 @@ export function WebMe({ initialTab }: { initialTab?: MeTab }) {
               )}
               <span className="text-text-sub inline-flex items-center gap-[6px] text-[14px]">
                 <Lock size={16} aria-hidden />
-                소득·자산은 저장하지 않아요. 판정할 때만 입력해요
+                주거 조건의 소득·자산은 이 탭에 임시 보관해요. 판정 서버에는 구간으로 보내요
               </span>
             </div>
           )}

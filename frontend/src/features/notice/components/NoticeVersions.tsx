@@ -5,7 +5,7 @@ import { useNoticeVersions } from "@/features/notice/versions";
 import { cn } from "@/shared/lib/cn";
 
 /**
- * 정정 이력: 정정 공고나 바뀐 내용이 있을 때만 보여요. 지금 화면은 마지막 버전 기준이에요.
+ * 서비스 반영 이력: 첫 반영·정정·최근 반영을 보여줘요.
  * 바뀐 항목은 목록에 보이는 값(이름 · 기관 · 지역 · 접수일 · 요약)만 알 수 있어요
  */
 export function NoticeVersions({
@@ -38,9 +38,12 @@ export function NoticeVersions({
           )}
         >
           <History size={web ? 20 : 18} className="text-text-sub" aria-hidden />
-          정정 이력
+          정보 반영·정정 이력
         </h2>
-        <span className="text-text-sub text-[14px]">지금 보이는 내용은 마지막 공고 기준이에요</span>
+        <span className="text-text-sub text-[14px] leading-[1.6]">
+          서비스가 정보를 받은 날짜예요. 기관의 원문 발표일·갱신일과 다를 수 있어요. 접수 전에는
+          원문을 다시 확인해 주세요.
+        </span>
       </div>
       <ol className="m-0 flex list-none flex-col gap-[8px] p-0">
         {versions.map((v, i) => (

@@ -1,6 +1,7 @@
 "use client";
 
 import { CardFavoriteHeart } from "@/features/favorites/components/FavoriteButtons";
+import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
 import { useCallback, useMemo, useState } from "react";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import Link from "next/link";
@@ -64,7 +65,7 @@ function ListingCard({
           <span className="text-text-sub text-[13px]">
             {item.prepAmount ? (
               <>
-                준비할 돈 <strong className="text-text">{item.prepAmount}</strong>
+                예상 준비금 <strong className="text-text">{item.prepAmount}</strong>
               </>
             ) : (
               item.prepNote
@@ -106,9 +107,13 @@ export function WebHomes() {
             <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">내 집</h1>
             <span className="text-text-sub flex flex-wrap items-center gap-x-[12px] text-[16px]">
               <span>
-                내 조건으로 지원할 수 있는 곳{" "}
-                <strong className="text-brand-strong">{list.eligibleCount}곳</strong>
-                {list.needsInputCount ? ` · 확인 필요 ${list.needsInputCount}곳` : ""}
+                <PersonalizationSummary
+                  kind="homes"
+                  loading={list.loading}
+                  error={list.error}
+                  eligible={list.eligibleCount}
+                  needsInput={list.needsInputCount}
+                />
               </span>
               <EditConditionsLink />
               <Link
@@ -159,6 +164,10 @@ export function WebHomes() {
           </div>
         </div>
 
+        <p className="text-text-sub m-0 text-[14px] leading-[1.6]">
+          예상 준비금은 대출 승인액·부대비용에 따라 달라져요. 접수 시간과 주택별 금액·조건은 상세와
+          기관 원문에서 확인해 주세요.
+        </p>
         <div className="flex flex-wrap items-start gap-[24px]">
           <aside
             aria-label="필터"

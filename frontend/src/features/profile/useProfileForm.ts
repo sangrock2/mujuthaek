@@ -11,6 +11,7 @@ import {
 } from "@/features/conditions/store";
 import type { DeviceConditions, SessionConditions } from "@/features/conditions/types";
 import { defaultDevice } from "./defaults";
+import { profileStepOf } from "@/features/conditions/needs";
 import { birthProblem } from "@/features/profile/components/BirthField";
 import { routes, safeNext } from "@/shared/lib/routes";
 import type { RankCriteria } from "@/features/profile/mocks/profile";
@@ -67,9 +68,10 @@ export function useProfileForm() {
   const { data } = useProfileFormData();
   const router = useRouter();
   /** 확인하기 뒤 갈 곳 (?next=/homes). 없으면 홈 */
-  const next = safeNext(useSearchParams().get("next")) ?? routes.home;
+  const params = useSearchParams();
+  const next = safeNext(params.get("next")) ?? routes.home;
   const stored = useConditions();
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(() => profileStepOf(params.get("step")));
   const [device, setDevice] = useState<DeviceConditions>(() => defaultDevice(data));
   const [sess, setSess] = useState<SessionConditions>(emptySession);
   const [loaded, setLoaded] = useState(false);

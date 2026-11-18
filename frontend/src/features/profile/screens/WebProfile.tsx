@@ -338,7 +338,7 @@ export function WebProfile() {
                     form.preview.updating && "opacity-50",
                   )}
                 >
-                  {count(form.preview.homes)}곳
+                  {count(form.preview.hasInput ? form.preview.homes : null)}곳
                 </span>
               </div>
               <div className="flex items-baseline justify-between">
@@ -349,24 +349,26 @@ export function WebProfile() {
                     form.preview.updating && "opacity-50",
                   )}
                 >
-                  {count(form.preview.benefits)}개
+                  {count(form.preview.hasInput ? form.preview.benefits : null)}개
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[15px]">확인이 필요한 공고</span>
                 <span className="rounded-badge bg-check-bg text-check-text px-[10px] py-[4px] text-[14px] font-extrabold">
-                  {count(form.preview.needCheck)}곳
+                  {count(form.preview.hasInput ? form.preview.needCheck : null)}곳
                 </span>
               </div>
               <span
                 role="status"
                 className="border-line-soft text-text-sub border-t border-solid pt-[12px] text-[13px]"
               >
-                {form.preview.error
-                  ? "지금은 셀 수 없어요. 확인하기를 누르면 홈에서 볼 수 있어요"
-                  : form.preview.updating
-                    ? "바뀐 조건으로 세는 중이에요"
-                    : "입력할수록 정확해져요"}
+                {!form.preview.hasInput
+                  ? "조건을 입력하면 지원 자격을 확인할 수 있어요. 모르는 칸은 비워도 돼요"
+                  : form.preview.error
+                    ? "지금은 셀 수 없어요. 확인하기를 누르면 홈에서 볼 수 있어요"
+                    : form.preview.updating
+                      ? "바뀐 조건으로 세는 중이에요"
+                      : "입력할수록 정확해져요"}
               </span>
             </section>
 
