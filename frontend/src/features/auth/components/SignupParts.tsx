@@ -89,7 +89,9 @@ export function StoredInfo({ className }: { className?: string }) {
         <li>
           입력한 조건과 최근 검색어는 이 기기에만 30일 동안 저장하고, 로그아웃하거나 탈퇴하면 지워요
         </li>
-        <li className="text-brand-strong font-bold">소득·자산은 어디에도 저장하지 않아요</li>
+        <li className="text-brand-strong font-bold">
+          금융 정보는 판정에 사용하며 서버 DB에 보관하지 않아요
+        </li>
       </ul>
     </section>
   );

@@ -19,7 +19,7 @@ export function useDeviceStatus() {
 export const saveOnDeviceNote = (on: boolean) =>
   on
     ? "나이·지역·가족·주택 조건을 30일 동안 이 기기에만 저장해요. 로그아웃하거나 탈퇴하면 지워요"
-    : "이 기기에 저장하지 않아요. 탭을 닫으면 입력한 조건이 지워져요";
+    : "이 탭의 저장소에 임시 보관해요. 저장한 조건 지우기로 삭제할 수 있어요";
 
 /** 「저장된 정보」: 어떤 정보가 어디에 저장되는지 (웹·모바일 내 정보 공통) */
 export function StoredInfoList({ compact }: { compact?: boolean }) {

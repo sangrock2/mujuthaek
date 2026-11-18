@@ -134,7 +134,7 @@ export function MMain() {
             )}
             <span className="inline-flex items-center gap-[5px]">
               <Lock size={16} className="text-brand" aria-hidden />
-              소득·자산은 저장 안 해요
+              금융 정보는 판정할 때만 사용해요
             </span>
           </div>
         </section>

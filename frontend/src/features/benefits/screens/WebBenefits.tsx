@@ -1,6 +1,8 @@
 "use client";
 
 import { useDetailTitle } from "@/shared/lib/useDetailTitle";
+import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
+import { BenefitEmptyState } from "../components/BenefitEmptyState";
 
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import { ReportButton } from "@/features/report/components/ReportButton";
@@ -238,9 +240,12 @@ export function WebBenefits({ initialId }: { initialId?: string }) {
           <div className="flex flex-col gap-[6px]">
             <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">내 혜택</h1>
             <span className="text-text-sub text-[16px]">
-              내 조건으로 받을 수 있는 혜택{" "}
-              <strong className="text-brand-strong">{data.total}개</strong>
-              {data.asOf && ` · ${data.asOf} 기준`}
+              <PersonalizationSummary
+                kind="benefits"
+                loading={data.loading}
+                error={data.error}
+                eligible={data.total}
+              />
               {data.yearlyAmount !== "–" && ` · 1년에 ${data.yearlyAmount}`}
             </span>
           </div>
@@ -276,9 +281,7 @@ export function WebBenefits({ initialId }: { initialId?: string }) {
               <QueryFeedback error={data.error} label="혜택" queryKey={["benefits"]} />
             )}
             {!data.loading && !data.error && shown.length === 0 && (
-              <p className="rounded-card bg-surface text-text-sub m-0 px-[20px] py-[36px] text-center text-[15px]">
-                지금 받을 수 있는 혜택이 없어요
-              </p>
+              <BenefitEmptyState filtered={cat !== "전체"} onReset={() => setCat("전체")} />
             )}
             {shown.map((b) => {
               const on = !opened && b.id === sel?.id;

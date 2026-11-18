@@ -71,7 +71,8 @@ export function manWonLabel(won: number) {
 
 function dueOf(item: SearchItem) {
   if (item.status === "ALWAYS") return "상시";
-  if (item.status === "UPCOMING") return "접수 예정";
+  if (item.status === "UPCOMING") return "다음 접수 예정";
+  if (item.status === "CLOSED") return "접수 마감";
   if (item.dday === null) return "마감일 확인";
   return item.dday <= 0 ? "오늘 마감" : `D-${item.dday}`;
 }
@@ -99,7 +100,9 @@ export function toListing(item: SearchItem): HomeListing {
     prepAmount: item.prepareCostWon !== null ? manWonLabel(item.prepareCostWon) : undefined,
     prepNote:
       item.prepareCostWon === null
-        ? (prepareNoteLabel[item.prepareCostNote ?? ""] ?? "준비할 돈 확인 필요")
+        ? item.prepareCostNote === "PRICE_NOT_ANNOUNCED"
+          ? "금액·주택별 조건은 상세에서 확인"
+          : (prepareNoteLabel[item.prepareCostNote ?? ""] ?? "준비할 돈 확인 필요")
         : undefined,
     due: dueOf(item),
     region: item.regionCode ?? "nationwide",
@@ -110,7 +113,7 @@ export function toListing(item: SearchItem): HomeListing {
 
 /**
  * 내 조건 맞춤 목록. 조건은 구간 값으로만 보내고(정확한 소득·자산은 브라우저에만),
- * 지역 거르기 · 판정 · 커서 페이지는 서버가 해요. 응답은 캐시하지 않는 값이라 쿼리 키에도 구간만 넣어요
+ * 지역 거르기 · 판정 · 커서 페이지는 서버가 해요. 결과는 짧게 메모리에 캐시하며 쿼리 키에도 구간만 넣어요
  */
 export function useNoticeSearch(filters: SearchFilters, enabled = true) {
   const stored = useConditions();

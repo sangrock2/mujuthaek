@@ -43,6 +43,34 @@ const BUSINESS_INPUTS = new Set([
 export function inputHrefOf(needs: readonly string[] | null | undefined): string | undefined {
   const names = (needs ?? []).map((n) => n.replace(/^applicant\./, ""));
   if (names.some((n) => BUSINESS_INPUTS.has(n))) return routes.bizOnboarding;
-  if (names.some((n) => PROFILE_INPUTS.has(n))) return routes.profile;
+  const known = names.filter((n) => PROFILE_INPUTS.has(n));
+  if (known.length) {
+    const step = known.some((n) =>
+      [
+        "income",
+        "householdIncome",
+        "assets",
+        "car",
+        "marital",
+        "children",
+        "householdSize",
+        "welfareStatuses",
+      ].includes(n),
+    )
+      ? 2
+      : known.some((n) =>
+            ["homeOwner", "homelessYears", "subscription.months", "subscription.payments"].includes(
+              n,
+            ),
+          )
+        ? 3
+        : 1;
+    return `${routes.profile}?step=${step}`;
+  }
   return undefined;
+}
+
+/** URL에는 정해진 단계 번호만 허용해요. */
+export function profileStepOf(value: string | null): number {
+  return value === "2" ? 2 : value === "3" ? 3 : 1;
 }

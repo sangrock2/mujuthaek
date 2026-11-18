@@ -92,7 +92,7 @@ export function AdminWebReview() {
   const confirmText = (kind: Done) => {
     const changed = Object.keys(curEdits);
     return kind === "ok"
-      ? `「${cur.title}」을(를) ${changed.length ? `고친 ${changed.length}칸(${changed.join(", ")})으로 ` : ""}승인할까요? 승인하면 사용자 화면에 반영돼요.`
+      ? `「${cur.title}」을(를) ${changed.length ? `고친 ${changed.length}칸(${changed.join(", ")})으로 ` : ""}승인할까요? 승인 결과를 저장하고 발행해요. 기존 공고 수정·후속 안내는 새 공고 수를 늘리지 않고, 마감 공고는 기본 목록에 나오지 않아요.`
       : `「${cur.title}」을(를) ${rejectReason ? `「${rejectReason}」 사유로 ` : "사유 없이 "}반려할까요?`;
   };
 
@@ -391,6 +391,11 @@ export function AdminWebReview() {
             <span className="text-brand-strong text-[15px]" style={{ flex: "1 1 300px" }}>
               <strong>승인하면</strong> {cur.impact}
             </span>
+            <p className="text-text-sub m-0 basis-full text-[14px] leading-[1.6]">
+              승인은 새 공고 추가와 다를 수 있어요. 이미 공개된 공고의 수정·후속 안내는 기존 공고에
+              반영하고, 마감 공고는 기본 목록에서 제외해요. 다른 출처가 기준인 중복 공고는 그 기준
+              출처의 내용을 유지할 수 있어요.
+            </p>
           </section>
 
           <section
@@ -415,8 +420,8 @@ export function AdminWebReview() {
               >
                 {curDone === "ok"
                   ? edited
-                    ? "수정 후 승인했어요 · 사용자 화면에 반영됐어요"
-                    : "승인했어요 · 사용자 화면에 반영됐어요"
+                    ? "수정한 승인 결과를 저장했어요 · 사용자 화면 반영은 별도로 진행돼요"
+                    : "승인 결과를 저장했어요 · 사용자 화면 반영은 별도로 진행돼요"
                   : "반려했어요 · 다시 수집되면 대기열에 돌아와요"}
               </div>
             )}

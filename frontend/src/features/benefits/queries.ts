@@ -33,11 +33,6 @@ export type BenefitList = {
   loadingMore: boolean;
 };
 
-const today = () => {
-  const d = new Date();
-  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
-};
-
 const countBy = (items: Benefit[]) => ({
   주거: items.filter((b) => b.cat === "주거").length,
   자산형성: items.filter((b) => b.cat === "자산형성").length,
@@ -78,7 +73,8 @@ function useApiBenefits(): BenefitList {
     total: counts.주거 + counts.자산형성 + counts.교통,
     yearlyAmount: annual > 0 ? `약 ${formatWon(annual)}` : "–",
     // 날짜는 받은 뒤에만 만들어요 (미리 그리는 단계에서 new Date()를 부르지 않게)
-    asOf: first ? today() : "",
+    // 조회한 오늘을 정책 정보의 갱신 기준일처럼 표시하지 않아요.
+    asOf: "",
     loading: q.isPending,
     error: q.isError,
     hasMore: q.hasNextPage,

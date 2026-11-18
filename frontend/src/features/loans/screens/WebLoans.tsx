@@ -34,7 +34,8 @@ export function WebLoans() {
           <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">대출 자격 확인</h1>
           <span className="text-text-sub text-[16px]">
             버팀목 · 디딤돌 같은 주택도시기금 대출을 정확한 소득 · 순자산으로 확인해요. 내 조건으로
-            채울 수 있는 칸은 미리 채웠어요
+            채울 수 있는 칸은 미리 채웠어요. 「확인하기」를 누르면 정확한 연소득·순자산과 가족
+            조건을 서버로 보내 판정해요. 입력값은 화면 메모리에만 두고 서버 DB에는 보관하지 않아요
           </span>
         </div>
 

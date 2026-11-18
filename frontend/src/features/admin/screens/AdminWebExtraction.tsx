@@ -99,9 +99,9 @@ function Dashboard({ data }: { data: ExtractionStats }) {
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}
       >
         <Stat
-          label="처리 공고"
+          label="추출 시도한 원본·버전"
           value={`${num(data.notices)}건`}
-          note={`다시 처리 포함 작업 ${num(data.jobs)}건`}
+          note="실패·검수 대기 포함 · 공개 공고 수와 달라요"
         />
         <Stat
           label="검수 없이 게시"

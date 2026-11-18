@@ -67,6 +67,9 @@ export type NoticeDocumentItem = {
   name: string;
   /** 해당하는 경우 */
   when?: string;
+  /** API가 제공한 제출 대상·시점을 분리해 보여줘요. */
+  appliesTo?: string;
+  submissionTime?: string;
   desc: string;
 };
 

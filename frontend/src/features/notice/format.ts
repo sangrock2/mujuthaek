@@ -116,7 +116,7 @@ export const selectionLabel: Record<NoticeSelectionKind, string> = {
 };
 
 export const documentGroupLabel: Record<NoticeDocumentGroup, string> = {
-  COMMON: "모두 내요",
+  COMMON: "기본 안내 서류 · 제출 대상 확인",
   CONDITIONAL: "해당하면 더 내요",
   DIRECT: "본인이 방문해서 신청할 때",
   PROXY_SPOUSE: "배우자가 대신 신청할 때",
@@ -132,7 +132,7 @@ export const channelLabel: Record<NonNullable<NoticeDoc["apply"]["channel"]>, st
 };
 
 export const statusLabel: Record<NoticeDoc["status"], string> = {
-  UPCOMING: "접수 예정",
+  UPCOMING: "다음 접수 예정",
   OPEN: "접수 중",
   CLOSED: "마감",
 };
