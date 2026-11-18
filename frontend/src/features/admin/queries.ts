@@ -167,22 +167,51 @@ export function useReviewQueue(reason: ReviewReason | null) {
     staleTime: 60 * 1000,
     gcTime: 0,
     refetchOnWindowFocus: false,
+    retry: false,
   });
   if (!LIVE) {
     const items = reviewQueue.items.filter((i) => !reason || i.reason === reason);
-    return { total: reviewQueue.total, items, more: false, loadingMore: false, loadMore: () => {} };
+    return {
+      total: reviewQueue.total,
+      items,
+      more: false,
+      loadingMore: false,
+      loading: false,
+      failed: false,
+      hasLoaded: true,
+      fetching: false,
+      reload: () => {},
+      loadMore: () => {},
+    };
   }
   const items = q.data?.pages.flatMap((p) => p.items) ?? [];
   return {
     total: q.data?.pages[0]?.total ?? 0,
     items: items.length
       ? items
-      : [{ ...EMPTY_REVIEW, title: q.isPending ? "불러오는 중…" : EMPTY_REVIEW.title }],
+      : [
+          {
+            ...EMPTY_REVIEW,
+            title: q.isPending
+              ? "불러오는 중…"
+              : q.isError
+                ? "검수 목록을 불러오지 못했어요"
+                : EMPTY_REVIEW.title,
+          },
+        ],
     more: q.hasNextPage,
     loadingMore: q.isFetchingNextPage,
+    loading: q.isPending,
+    failed: q.isError,
+    hasLoaded: !!q.data,
+    fetching: q.isFetching,
+    reload: () => {
+      if (q.isFetchNextPageError) void q.fetchNextPage();
+      else void q.refetch();
+    },
     /** 대기열 아래 끝이 보이면 다음 20건 */
     loadMore: () => {
-      if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
+      if (q.hasNextPage && !q.isFetchingNextPage && !q.isFetchNextPageError) void q.fetchNextPage();
     },
   };
 }

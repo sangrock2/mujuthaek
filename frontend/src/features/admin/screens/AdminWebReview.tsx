@@ -149,7 +149,13 @@ export function AdminWebReview() {
         >
           <div className="flex flex-col gap-[12px] px-[18px] pt-[18px] pb-[12px]">
             <div className="flex items-center justify-between">
-              <span className="text-[16px] font-extrabold">대기열 {pending}건</span>
+              <span className="text-[16px] font-extrabold">
+                {queue.hasLoaded
+                  ? `대기열 ${pending}건`
+                  : queue.loading
+                    ? "대기열 불러오는 중"
+                    : "대기열 확인 필요"}
+              </span>
               <span className="text-text-sub text-[13px]">오래된 순</span>
             </div>
             <div role="group" aria-label="검수 사유" className="flex flex-wrap gap-[6px]">
@@ -171,6 +177,19 @@ export function AdminWebReview() {
                 );
               })}
             </div>
+            {queue.failed && (
+              <div role="alert" className="text-check-text flex flex-col gap-[8px] text-[13px]">
+                <span>검수 목록을 불러오지 못했어요. 잠시 뒤 다시 시도해 주세요.</span>
+                <button
+                  type="button"
+                  onClick={queue.reload}
+                  disabled={queue.fetching}
+                  className="text-brand-strong min-h-[36px] cursor-pointer self-start border-0 bg-transparent px-0 font-bold disabled:cursor-wait disabled:opacity-50"
+                >
+                  검수 목록 다시 불러오기
+                </button>
+              </div>
+            )}
           </div>
           <div
             ref={listRef}
