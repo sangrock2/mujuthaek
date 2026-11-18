@@ -60,7 +60,7 @@ jobs:
           if not isinstance(paths, list) or any(p not in allowed for p in paths):
               raise SystemExit('Invalid dependency audit scope')
           if paths:
-              subprocess.run([sys.executable, 'backend/infra/security/audit_dependencies.py', '--uv-lock', *paths], check=True)
+              subprocess.run([sys.executable, 'backend/infra/security/audit_dependencies.py', '--output', 'dependency-audit.json', '--uv-lock', *paths], check=True)
           PY
   web:
     needs: plan
