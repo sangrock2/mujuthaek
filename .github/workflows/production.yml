@@ -20,7 +20,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
@@ -48,7 +48,7 @@ jobs:
       ci_e2e: ${{ steps.ci.outputs.e2e }}
       ci_selection: ${{ steps.ci.outputs.selection }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -100,7 +100,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - env:
@@ -121,7 +121,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -146,6 +146,9 @@ jobs:
             frontend-deployment.json
           retention-days: 7
   backend-apply:
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' &&
+      needs.plan.outputs.deploy == 'true' && needs.frontend-prepare.result == 'success'
     needs: [plan, frontend-prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -153,7 +156,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -182,6 +185,9 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
   frontend-promote:
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' &&
+      needs.plan.outputs.deploy == 'true' && needs.backend-apply.result == 'success'
     environment: vercel-production
     needs: [plan, backend-apply]
     runs-on: ubuntu-latest
@@ -189,7 +195,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -226,7 +232,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -259,3 +265,21 @@ jobs:
             deployment-plan.json
           retention-days: 90
           if-no-files-found: ignore
+
+  release-result:
+    name: Release complete
+    needs: [guard, plan, frontend-prepare, backend-apply, frontend-promote, finalize]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require applied and finalized deployment evidence
+        env:
+          RELEASE_DEPLOY: ${{ needs.plan.outputs.deploy }}
+          RELEASE_RESULTS: ${{ toJSON(needs) }}
+        run: python3 backend/infra/ci/deployment_gate.py

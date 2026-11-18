@@ -31,16 +31,16 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-amqp")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus") // 성능 테스트 지표 (/actuator/prometheus, 서버 안에서만)
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1") // API 문서(스웨거) /swagger-ui.html. 로컬·개발 서버만 켜요
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.2.0") // API 문서(스웨거) /swagger-ui.html. 로컬·개발 서버만 켜요
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-client") // 소셜 로그인 (카카오·네이버·구글)
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server") // JWT 발급·검증 (Nimbus)
     implementation("org.flywaydb:flyway-database-postgresql")
-    implementation("org.springframework.modulith:spring-modulith-starter-core:2.0.0")
+    implementation("org.springframework.modulith:spring-modulith-starter-core:2.1.2")
     implementation(platform("software.amazon.awssdk:bom:2.55.9"))
     implementation("software.amazon.awssdk:s3") // area 원천 파일 읽기 (로컬은 MinIO)
     implementation("org.postgresql:postgresql") // area 적재기가 COPY(CopyManager)를 직접 써요
     implementation("com.github.ben-manes.caffeine:caffeine") // 무거운 관리자 조회를 잠깐 다시 쓰는 캐시 (common/cache/RecentCache)
-    implementation("com.networknt:json-schema-validator:3.0.8") // notice가 받은 이벤트를 계약 스키마로 검사해요
+    implementation("com.networknt:json-schema-validator:3.0.9") // notice가 받은 이벤트를 계약 스키마로 검사해요
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-starter-security-test")
@@ -49,8 +49,8 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-rabbitmq") // 아웃박스 발송 테스트
-    testImplementation("org.springframework.modulith:spring-modulith-starter-test:2.0.0")
-    testImplementation("org.springframework.modulith:spring-modulith-docs:2.0.0")
+    testImplementation("org.springframework.modulith:spring-modulith-starter-test:2.1.2")
+    testImplementation("org.springframework.modulith:spring-modulith-docs:2.1.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
