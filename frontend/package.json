@@ -22,7 +22,7 @@
     "test:service-quality": "node scripts/test-service-quality.cjs"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.104.4",
+    "@tanstack/react-query": "^5.107.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.59.0",
     "next": "16.4.6",
