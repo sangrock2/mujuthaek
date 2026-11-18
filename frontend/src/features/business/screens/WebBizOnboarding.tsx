@@ -260,7 +260,7 @@ export function WebBizOnboarding() {
               <Info size={16} aria-hidden />
               {pre
                 ? "예비 창업이면 업력 · 직원 수 · 매출은 입력하지 않아요"
-                : "업력은 사업자등록일부터 세요 · 매출은 이번 탭에서만 쓰고 저장하지 않아요 · 직원 수는 지금 공고 조건에 없어 참고용이에요"}
+                : "업력은 사업자등록일부터 세요 · 매출은 이 탭의 저장소에 임시 보관해요 · 직원 수는 지금 공고 조건에 없어 참고용이에요"}
             </span>
 
             <div className="flex flex-col gap-[8px]">

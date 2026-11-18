@@ -263,16 +263,20 @@ export function MProfile() {
             <span
               className={cn("text-[15px] font-extrabold", form.preview.updating && "opacity-50")}
             >
-              {form.preview.error
-                ? "지금은 셀 수 없어요"
-                : `공고 ${count(form.preview.homes)}곳 · 혜택 ${count(form.preview.benefits)}개`}
+              {!form.preview.hasInput
+                ? "조건 입력 후 확인할 수 있어요"
+                : form.preview.error
+                  ? "지금은 셀 수 없어요"
+                  : `공고 ${count(form.preview.homes)}곳 · 혜택 ${count(form.preview.benefits)}개`}
             </span>
             <span className="text-text-sub text-[12px]">
-              {form.preview.error
-                ? "확인하기를 누르면 홈에서 볼 수 있어요"
-                : form.preview.updating
-                  ? "바뀐 조건으로 세는 중이에요"
-                  : `확인이 필요한 공고 ${count(form.preview.needCheck)}곳`}
+              {!form.preview.hasInput
+                ? "모르는 칸은 비워도 돼요"
+                : form.preview.error
+                  ? "확인하기를 누르면 홈에서 볼 수 있어요"
+                  : form.preview.updating
+                    ? "바뀐 조건으로 세는 중이에요"
+                    : `확인이 필요한 공고 ${count(form.preview.needCheck)}곳`}
             </span>
           </span>
         </div>

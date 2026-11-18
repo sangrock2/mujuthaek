@@ -40,20 +40,29 @@ const fieldLabel: Record<string, string> = {
 };
 
 /**
- * 사용자에게 의미 있는 줄만: 첫 공고, 정정 공고, 목록 값이 바뀐 버전. 같은 글을 다시 읽기만 한 버전은 빼요.
- * 정정이나 바뀐 버전이 하나도 없으면 빈 목록이에요 (카드를 숨겨요)
+ * 첫 반영·정정·목록 값 변경과 가장 최근 반영을 보여줘요.
+ * 한 버전뿐이어도 원문 발표일과 서비스 반영일을 구분해 확인할 수 있어요.
  */
 export function toVersions(list: ApiVersion[]): NoticeVersion[] {
   const rows = list
-    .filter((v, i) => i === 0 || v.kind === "CORRECTION" || v.changedFields.length > 0)
+    .filter(
+      (v, i) =>
+        i === 0 || i === list.length - 1 || v.kind === "CORRECTION" || v.changedFields.length > 0,
+    )
     .map((v, i) => ({
       version: v.version,
       label:
-        i === 0 ? "처음 올라온 공고" : v.kind === "CORRECTION" ? "정정 공고" : "공고 내용 바뀜",
-      day: formatDay(v.receivedAt.slice(0, 10)),
+        i === 0
+          ? "서비스 첫 반영"
+          : v.kind === "CORRECTION"
+            ? "정정 공고 반영"
+            : v.changedFields.length
+              ? "공고 내용 변경 반영"
+              : "정보 다시 반영",
+      day: `${v.receivedAt.slice(0, 4)}년 ${formatDay(v.receivedAt.slice(0, 10))}`,
       changed: v.changedFields.map((f) => fieldLabel[f]).filter(Boolean),
     }));
-  return rows.length > 1 ? rows : [];
+  return rows;
 }
 
 const versionsKey = (id: string) => ["notice", "versions", id] as const;

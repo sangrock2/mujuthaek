@@ -180,7 +180,7 @@ export function WebMain() {
               )}
               <span className="inline-flex items-center gap-[6px]">
                 <Lock size={18} className="text-brand" aria-hidden />
-                소득·자산은 저장하지 않아요
+                금융 정보는 판정할 때만 사용해요
               </span>
             </div>
           </div>

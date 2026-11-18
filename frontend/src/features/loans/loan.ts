@@ -79,9 +79,9 @@ export const loanTypeLabel: Record<LoanType, string> = {
 };
 
 export const loanStatusLabel: Record<LoanStatus, string> = {
-  ELIGIBLE: "받을 수 있어요",
+  ELIGIBLE: "입력한 조건 충족",
   NEEDS_INPUT: "확인 필요",
-  INELIGIBLE: "받을 수 없어요",
+  INELIGIBLE: "입력한 조건 불충족",
 };
 
 /** 만 원 칸 최대 자릿수 (9,999억 9,999만 원까지, 서버 상한 1,000조 원보다 작아요) */

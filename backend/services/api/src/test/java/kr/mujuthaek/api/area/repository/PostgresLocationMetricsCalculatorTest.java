@@ -5,6 +5,7 @@ import static kr.mujuthaek.api.area.AreaTestDatabase.one;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -207,15 +208,16 @@ class PostgresLocationMetricsCalculatorTest {
             "delete from area.facilities where kind = 'HOSPITAL' and sub_kind = 'SECONDARY'");
         AreaCalcSql.fillTargets(c, List.of(locations.get(1)));
         st.execute(AreaCalcSql.read("metrics.sql"));
-        try (ResultSet rs =
-            st.executeQuery(
+        try (PreparedStatement query =
+            c.prepareStatement(
                 "select string_agg(metric, ',') filter (where metric = 'hospital_nearest_m'),"
-                    + " count(*) from area.location_metrics where location_id = '"
-                    + locations.get(1)
-                    + "'")) {
-          rs.next();
-          assertThat(rs.getString(1)).isNull();
-          assertThat(rs.getInt(2)).isEqualTo(13);
+                    + " count(*) from area.location_metrics where location_id = ?")) {
+          query.setObject(1, locations.get(1));
+          try (ResultSet rs = query.executeQuery()) {
+            rs.next();
+            assertThat(rs.getString(1)).isNull();
+            assertThat(rs.getInt(2)).isEqualTo(13);
+          }
         }
       } finally {
         c.rollback();

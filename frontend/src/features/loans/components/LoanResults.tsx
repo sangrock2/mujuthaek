@@ -157,9 +157,9 @@ export function LoanResults({ calc, variant }: Props) {
       >
         <span className="text-text-sub text-[13px]">{result.asOf} 기준</span>
         <div className="flex flex-wrap gap-[6px]">
-          <Badge tone="ok">받을 수 있어요 {counts.eligible}</Badge>
+          <Badge tone="ok">입력한 조건 충족 {counts.eligible}</Badge>
           <Badge tone="check">확인 필요 {counts.needsInput}</Badge>
-          <Badge tone="neutral">받을 수 없어요 {counts.ineligible}</Badge>
+          <Badge tone="neutral">입력한 조건 불충족 {counts.ineligible}</Badge>
         </div>
         {calc.stale && (
           <p
@@ -198,7 +198,11 @@ export function LoanNote({ className }: { className?: string }) {
       주택도시기금 상품 안내의 사람 조건(나이 · 세대 · 혼인 · 출산 · 소득 · 순자산 · 무주택)만
       봤어요. 보증금 · 면적 · 담보 가치처럼 집이 정해져야 보는 조건과 은행 심사는 포함하지 않아요.
       한도 · 금리는 상품 안내 요약이라 참고만 해 주세요.{" "}
-      <strong className="text-text">넣은 값은 저장하지 않아요</strong> (이 기기 · 서버 모두).
+      <strong className="text-text">
+        정확한 연소득·순자산과 가족 조건을 서버로 보내 판정해요.
+      </strong>{" "}
+      입력값은 화면 메모리에만 두고 브라우저 저장소나 서버 DB에 보관하지 않아요. 「지우기」로 입력과
+      결과를 지울 수 있어요.
     </span>
   );
 }

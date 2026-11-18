@@ -128,13 +128,15 @@ public class NoticeQueries {
       params.addValue("kw" + i, patterns.get(i));
     }
     if ("LATEST".equals(f.sort())) {
-      String key = "coalesce(posted_on, date '" + NO_POSTED + "')";
+      String key = "coalesce(posted_on, cast(:noPosted as date))";
+      params.addValue("noPosted", Date.valueOf(NO_POSTED));
       if (after != null) {
         sql.append(" and (").append(key).append(", id) < (cast(:afterValue as date), :afterId)");
       }
       sql.append(" order by ").append(key).append(" desc, id desc");
     } else {
-      String key = "coalesce(apply_end, date '" + NO_END + "')";
+      String key = "coalesce(apply_end, cast(:noEnd as date))";
+      params.addValue("noEnd", Date.valueOf(NO_END));
       if (after != null) {
         sql.append(" and (").append(key).append(", id) > (cast(:afterValue as date), :afterId)");
       }

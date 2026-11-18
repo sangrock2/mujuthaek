@@ -394,7 +394,8 @@ function noticeItem(d: NoticeReviewDetail): ReviewItem {
       ...[...byPage.entries()].map(([head, parts]) => ({ head, parts })),
     ],
     fields: rows,
-    impact: d.impact ?? "검수한 값이 서비스에 반영돼요",
+    impact:
+      d.impact ?? "승인 결과를 발행해요. 실제 공개 여부와 목록 표시는 공고 상태에 따라 달라요",
     log: d.log.map((l) => ({ at: when(l.at), who: l.who, text: l.text })),
   };
 }

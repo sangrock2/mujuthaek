@@ -22,6 +22,7 @@ type Summary = {
 
 /** 숫자가 없으면(받기 전·실패) null */
 export type LivePreview = {
+  hasInput: boolean;
   homes: number | null;
   benefits: number | null;
   needCheck: number | null;
@@ -59,20 +60,22 @@ export function useConditionsPreview(
       applicant: toApplicant(device, session, criteria.data),
     };
   }, [device, session, criteria.data]);
+  const hasInput = Object.values(body.applicant).some((value) => value !== undefined);
   // 저장해 둔 조건을 읽기 전(기본값)에는 부르지 않아요
   const settled = useDebounced(ready && !criteria.isPending ? body : null, DEBOUNCE_MS);
 
   const q = useQuery({
     queryKey: ["profile", "preview", settled] as const,
     queryFn: () => api.post<Summary>(endpoints.homeSummary, settled),
-    enabled: !USE_MOCKS && settled !== null,
+    enabled: !USE_MOCKS && hasInput && settled !== null,
     placeholderData: keepPreviousData, // 다시 세는 동안 앞의 숫자를 그대로 둬요
     staleTime: 60 * 1000,
     retry: false,
   });
 
-  if (USE_MOCKS) return { ...mock, updating: false, error: false };
+  if (USE_MOCKS) return { ...mock, hasInput: true, updating: false, error: false };
   return {
+    hasInput,
     homes: q.data?.homes.eligible ?? null,
     benefits: q.data?.benefits.eligible ?? null,
     needCheck: q.data?.homes.needsInput ?? null,
