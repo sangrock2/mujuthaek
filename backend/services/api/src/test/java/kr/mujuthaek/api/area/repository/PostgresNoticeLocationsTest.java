@@ -25,6 +25,7 @@ class PostgresNoticeLocationsTest {
   @AfterEach
   void clean() throws Exception {
     exec("delete from area.notice_locations where notice_id = '" + notice + "'");
+    exec("delete from notice.notices where id = '" + notice + "'");
   }
 
   private NoticeLocation location(int version, String address) {
@@ -66,6 +67,68 @@ class PostgresNoticeLocationsTest {
                     + id
                     + "'"))
         .isEqualTo("35.10,129.04|SEARCH_API|2611010100|2611010100|true");
+  }
+
+  @Test
+  void oldFailuresAreClaimedOnceAndCannotOverwriteNewerLocations() throws Exception {
+    publishNotice(1);
+    UUID stale =
+        locations.save(
+            location(1, "초량상로 1-2"), "이전 주소", GeocodeResult.failed(FailReason.NOT_FOUND, null));
+    UUID missing =
+        locations.save(
+            at("missing", "주소 별도 안내"), null, GeocodeResult.failed(FailReason.PARSE_FAILED, null));
+    exec(
+        "update area.notice_locations set calculated_at = now() - interval '8 days'"
+            + " where notice_id = '"
+            + notice
+            + "'");
+
+    var claim = locations.claimGeocodeRetry().orElseThrow();
+    assertThat(claim.locationId()).isEqualTo(stale);
+    assertThat(locations.claimGeocodeRetry()).isEmpty();
+    // 공개 버전은 바뀌었지만 새 위치 이벤트가 아직 area에 도착하지 않은 경우도 막아요.
+    exec("update notice.notices set current_version = 2 where id = '" + notice + "'");
+    assertThat(locations.completeGeocodeRetry(claim, "이전 주소", ok(Method.COORD_API))).isFalse();
+    locations.save(location(2, "초량상로 5"), "새 주소", ok(Method.FILE));
+    assertThat(locations.completeGeocodeRetry(claim, "이전 주소", ok(Method.COORD_API))).isFalse();
+    assertThat(locations.byIds(java.util.List.of(stale)).getFirst().addressText())
+        .isEqualTo("초량상로 5");
+    assertThat(locations.byIds(java.util.List.of(missing)).getFirst().coordinate()).isNull();
+  }
+
+  @Test
+  void successfulRetryStoresCoordinateWithoutRepublishingTheNotice() throws Exception {
+    publishNotice(3);
+    UUID id =
+        locations.save(
+            location(3, "초량상로 1-2"), "주소", GeocodeResult.failed(FailReason.API_ERROR, null));
+    assertThat(locations.claimGeocodeRetry()).isEmpty();
+    exec(
+        "update area.notice_locations set calculated_at = now() - interval '2 hours'"
+            + " where location_id = '"
+            + id
+            + "'");
+
+    var claim = locations.claimGeocodeRetry().orElseThrow();
+    assertThat(locations.completeGeocodeRetry(claim, "주소", ok(Method.COORD_API))).isTrue();
+    var stored = locations.byIds(java.util.List.of(id)).getFirst();
+    assertThat(stored.noticeVersion()).isEqualTo(3);
+    assertThat(stored.status()).isEqualTo(Status.OK);
+    assertThat(stored.failReason()).isNull();
+    assertThat(stored.coordinate()).isEqualTo(new Coordinate(35.1, 129.04));
+  }
+
+  private void publishNotice(int version) throws Exception {
+    exec(
+        "insert into notice.notices (id, raw_post_id, field, title, current_version, status)"
+            + " values ('"
+            + notice
+            + "', '"
+            + notice
+            + "', 'HOUSING', '위치 검증용 공고', "
+            + version
+            + ", 'APPLYING')");
   }
 
   @Test

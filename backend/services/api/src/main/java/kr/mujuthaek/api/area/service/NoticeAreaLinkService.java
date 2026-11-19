@@ -9,6 +9,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import kr.mujuthaek.api.area.domain.AreaSource;
+import kr.mujuthaek.api.area.domain.GeocodeResult;
 import kr.mujuthaek.api.area.domain.GeocodeResult.FailReason;
 import kr.mujuthaek.api.area.domain.GeocodeResult.Status;
 import kr.mujuthaek.api.area.domain.NoticeLocation;
@@ -16,6 +17,7 @@ import kr.mujuthaek.api.area.domain.StoredLocation;
 import kr.mujuthaek.api.area.domain.TotalScore;
 import kr.mujuthaek.api.area.repository.PostgresLocationScores;
 import kr.mujuthaek.api.area.repository.PostgresNoticeLocations;
+import kr.mujuthaek.api.area.repository.PostgresNoticeLocations.RetryLocation;
 import kr.mujuthaek.api.common.event.AreaScoresCalculated;
 import kr.mujuthaek.api.common.event.NoticeLocationsChanged;
 import org.slf4j.Logger;
@@ -144,6 +146,30 @@ public class NoticeAreaLinkService {
   /** 좌표를 못 찾은 위치 (관리자 화면 데이터, 최근 순). */
   public List<StoredLocation> failedLocations(int limit) {
     return locations.failed(limit);
+  }
+
+  void completeGeocodeRetry(RetryLocation retry, GeocodeResult result) {
+    // 자동 복구는 동 중심점이나 도로명 오타 추정으로 새 핀을 만들지 않아요.
+    if (result.status() == Status.APPROX
+        || result.method() == GeocodeResult.Method.FUZZY
+        || result.regionMismatch()) {
+      return;
+    }
+    NoticeLocation source = retry.location();
+    if (!locations.completeGeocodeRetry(
+            retry, NoticeLocationService.addressKey(source.address()), result)
+        || result.coordinate() == null) {
+      return;
+    }
+    var ids = List.of(retry.locationId());
+    metrics.recalculate(ids);
+    lifeScores.recalculate(ids);
+    publishScores(
+        source.noticeId(),
+        source.noticeVersion(),
+        locations.ofNotice(source.noticeId()).stream()
+            .filter(location -> location.noticeVersion() == source.noticeVersion())
+            .toList());
   }
 
   /** 주소·법정동코드가 같고, 지난번이 나중에 다시 하면 될 실패(API_ERROR)가 아니면 그대로예요. */

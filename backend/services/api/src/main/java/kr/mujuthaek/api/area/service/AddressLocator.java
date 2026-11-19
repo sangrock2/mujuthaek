@@ -2,6 +2,8 @@ package kr.mujuthaek.api.area.service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import kr.mujuthaek.api.area.domain.AddressMatch;
 import kr.mujuthaek.api.area.domain.BoundaryCheck;
 import kr.mujuthaek.api.area.domain.Coordinate;
@@ -12,7 +14,6 @@ import kr.mujuthaek.api.area.geocode.AddressParser;
 import kr.mujuthaek.api.area.geocode.AddressSearch;
 import kr.mujuthaek.api.area.geocode.CoordOutcome;
 import kr.mujuthaek.api.area.geocode.JusoCandidates;
-import kr.mujuthaek.api.area.geocode.JusoCandidates.Hint;
 import kr.mujuthaek.api.area.geocode.JusoResult;
 import kr.mujuthaek.api.area.geocode.ParsedAddress;
 import kr.mujuthaek.api.area.geocode.ParsedAddress.Kind;
@@ -30,7 +31,7 @@ import org.springframework.stereotype.Service;
  * <ol>
  *   <li>주소 정리 ({@link AddressParser})
  *   <li>시군구: 받은 법정동코드(2026 개편 전 코드는 지금 코드로) 앞 5자리, 없으면 주소의 시도·시군구 이름
- *   <li>도로명 주소면 도로명주소 사전 (FILE·FUZZY)
+ *   <li>도로명 주소면 도로명주소 사전에서 정확히 일치하는 주소 (FILE)
  *   <li>못 찾았거나 지번이면 도로명주소 검색 API → 결과 하나를 고르고 그 도로명·번호로 사전을 다시 (SEARCH_API). 지하 여부 0·1로 없으면 지하 여부를
  *       빼고 한 번 더 (사전의 섬 주소 코드 3). 사전에 아직 없는 새 건물이면 좌표제공 API (COORD_API)
  *   <li>그래도 없으면 법정동 대표점 (APPROX, CENTROID): 받은 법정동코드, 없으면 검색 API가 고른 결과의 법정동, 그것도 없으면 주소의 법정동 이름
@@ -102,12 +103,14 @@ public class AddressLocator {
 
     if (parsed.kind() == Kind.ROAD && sigungu != null) {
       Optional<AddressMatch> found =
-          dictionary.find(
-              sigungu,
-              parsed.roadName(),
-              parsed.underground() ? 1 : 0,
-              parsed.buildingMain(),
-              parsed.buildingSub());
+          dictionary
+              .find(
+                  sigungu,
+                  parsed.roadName(),
+                  parsed.underground() ? 1 : 0,
+                  parsed.buildingMain(),
+                  parsed.buildingSub())
+              .filter(m -> m.method() == AddressMatch.Method.FILE);
       if (found.isPresent()) {
         return GeocodeResult.ok(found.get(), sigungu);
       }
@@ -116,11 +119,10 @@ public class AddressLocator {
     boolean apiError = false;
     String searchedBjd = null;
     if (parsed.kind() == Kind.ROAD || parsed.kind() == Kind.JIBUN) {
-      SearchOutcome outcome = search.search(parsed.normalized());
+      SearchOutcome outcome = search.search(searchKeyword(parsed));
       switch (outcome) {
         case SearchOutcome.Found found -> {
-          Optional<JusoResult> picked =
-              JusoCandidates.pick(found.results(), hint(parsed, bjd, sigungu));
+          Optional<JusoResult> picked = JusoCandidates.pick(found, parsed, bjd, sigungu);
           if (picked.isPresent()) {
             JusoResult r = picked.get();
             Optional<AddressMatch> again = fromDictionary(r);
@@ -164,6 +166,18 @@ public class AddressLocator {
     return GeocodeResult.failed(apiError ? FailReason.API_ERROR : FailReason.NOT_FOUND, sigungu);
   }
 
+  private static String searchKeyword(ParsedAddress address) {
+    boolean road = address.kind() == Kind.ROAD;
+    int main = road ? address.buildingMain() : address.jibunMain();
+    int sub = road ? address.buildingSub() : address.jibunSub();
+    String prefix = road && address.underground() ? "지하 " : address.mountain() ? "산 " : "";
+    String number = prefix + main + (sub > 0 ? "-" + sub : "");
+    return Stream.of(
+            address.sido(), address.sigungu(), road ? address.roadName() : address.dong(), number)
+        .filter(part -> part != null && !part.isBlank())
+        .collect(Collectors.joining(" "));
+  }
+
   /** 검색 API가 준 도로명·번호로 사전에서 정확히 (API 도로명은 정식 이름이라 오타 고치기는 안 받아요). */
   private Optional<AddressMatch> fromDictionary(JusoResult r) {
     if (r.sigunguCode() == null || r.rn() == null) {
@@ -176,17 +190,9 @@ public class AddressLocator {
             .filter(m -> m.method() == AddressMatch.Method.FILE);
     return exact.isPresent()
         ? exact
-        : dictionary.findAnyLevel(r.sigunguCode(), r.rn(), r.buildingMain(), r.buildingSub());
-  }
-
-  private static Hint hint(ParsedAddress parsed, String bjd, String sigungu) {
-    boolean road = parsed.kind() == Kind.ROAD;
-    return new Hint(
-        bjd,
-        sigungu,
-        road ? parsed.roadName() : null,
-        road ? parsed.buildingMain() : null,
-        road ? parsed.buildingSub() : null);
+        : dictionary
+            .findAnyLevel(r.sigunguCode(), r.rn(), r.buildingMain(), r.buildingSub())
+            .filter(m -> m.underground() > 1);
   }
 
   /** 받은 법정동코드를 지금 코드로. 개편으로 여러 곳으로 갈라졌으면(어느 것인지 모름) null. */

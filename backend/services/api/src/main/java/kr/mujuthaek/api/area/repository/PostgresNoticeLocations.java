@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -57,6 +58,8 @@ public final class PostgresNoticeLocations {
 
   private final DataSource dataSource;
   private final JdbcTemplate jdbc;
+
+  public record RetryLocation(NoticeLocation location, UUID locationId, OffsetDateTime claimedAt) {}
 
   public PostgresNoticeLocations(DataSource dataSource) {
     this.dataSource = dataSource;
@@ -192,6 +195,77 @@ public final class PostgresNoticeLocations {
             + " from area.notice_locations where status = 'FAILED' order by calculated_at desc limit ?",
         STORED,
         limit);
+  }
+
+  /** 한 위치만 예약하고 즉시 커밋해 외부 주소 조회 중에는 DB 잠금을 잡지 않아요. */
+  public Optional<RetryLocation> claimGeocodeRetry() {
+    return jdbc
+        .query(
+            """
+            with due as (
+              select l.location_id from area.notice_locations l
+              join notice.notices n on n.id = l.notice_id and n.current_version = l.notice_version
+              where not n.hidden and n.merged_into is null
+                and l.status = 'FAILED' and l.geom is null and l.address_text ~ '[0-9]'
+                and (
+                  (fail_reason = 'API_ERROR' and calculated_at < now() - interval '1 hour')
+                  or (fail_reason = 'NOT_FOUND' and calculated_at < now() - interval '1 day')
+                  or (fail_reason = 'PARSE_FAILED' and calculated_at < now() - interval '7 days')
+                )
+              order by case when n.status in ('UPCOMING', 'APPLYING', 'ALWAYS') then 0 else 1 end,
+                       l.calculated_at, l.location_id
+              limit 1 for update of l skip locked
+            )
+            update area.notice_locations l set calculated_at = now()
+            from due where l.location_id = due.location_id
+            returning l.location_id, l.notice_id, l.notice_location_id, l.notice_version,
+                      l.kind, l.address_text, l.bjd_code_given, l.calculated_at
+            """,
+            (rs, n) ->
+                new RetryLocation(
+                    new NoticeLocation(
+                        rs.getObject("notice_id", UUID.class),
+                        rs.getInt("notice_version"),
+                        rs.getString("notice_location_id"),
+                        rs.getString("kind"),
+                        rs.getString("address_text"),
+                        rs.getString("bjd_code_given")),
+                    rs.getObject("location_id", UUID.class),
+                    rs.getObject("calculated_at", OffsetDateTime.class)))
+        .stream()
+        .findFirst();
+  }
+
+  /** 재조회 중 공고 위치가 바뀌었거나 삭제됐으면 이전 결과를 쓰지 않아요. */
+  public boolean completeGeocodeRetry(
+      RetryLocation retry, String addressKey, GeocodeResult result) {
+    var point = result.coordinate();
+    return jdbc.update(
+            """
+            update area.notice_locations l
+            set address_key = ?, bjd_code_found = ?,
+                geom = case when ?::float8 is null then null
+                            else st_setsrid(st_makepoint(?, ?), 4326)::geography end,
+                status = ?, method = ?, fail_reason = ?, region_mismatch = ?, calculated_at = now()
+            where location_id = ? and notice_version = ? and calculated_at = ?
+              and status = 'FAILED' and geom is null
+              and exists (select from notice.notices n where n.id = l.notice_id
+                          and n.current_version = l.notice_version
+                          and not n.hidden and n.merged_into is null)
+            """,
+            addressKey,
+            result.bjdCodeFound(),
+            point == null ? null : point.lng(),
+            point == null ? null : point.lng(),
+            point == null ? null : point.lat(),
+            result.status().name(),
+            result.method() == null ? null : result.method().name(),
+            result.failReason() == null ? null : result.failReason().name(),
+            result.regionMismatch(),
+            retry.locationId(),
+            retry.location().noticeVersion(),
+            retry.claimedAt())
+        == 1;
   }
 
   /** 위치 ID로 위치들 (없는 ID는 빠져요). */

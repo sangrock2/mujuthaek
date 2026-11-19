@@ -81,7 +81,7 @@ public class JusoCoordClient implements AddressCoordinates {
         }
         String code = common.errorCode();
         if ("0".equals(code)) {
-          return first(body.results().juso());
+          return exactEntrance(body.results().juso(), building);
         }
         if (KEY_ERRORS.contains(code)) {
           log.warn("도로명주소 좌표제공 API 승인키 오류: {}", code);
@@ -106,15 +106,27 @@ public class JusoCoordClient implements AddressCoordinates {
     return new Failed(Reason.UNAVAILABLE, last);
   }
 
-  /** 첫 줄의 좌표. 칸이 비었거나 숫자가 아니면 없음으로 봐요. */
-  private static CoordOutcome first(List<Response.Coord> juso) {
-    if (juso == null || juso.isEmpty()) {
+  /** 요청한 건물의 출입구 하나와 유효한 좌표가 확인될 때만 사용해요. */
+  private static CoordOutcome exactEntrance(List<Response.Coord> juso, JusoResult building) {
+    if (juso == null || juso.size() != 1) {
+      return new NotFound();
+    }
+    Response.Coord c = juso.getFirst();
+    if (c == null
+        || !building.admCd().equals(c.admCd())
+        || !building.rnMgtSn().equals(c.rnMgtSn())
+        || !(building.underground() ? "1" : "0").equals(c.udrtYn())
+        || !String.valueOf(building.buildingMain()).equals(c.buldMnnm())
+        || !String.valueOf(building.buildingSub()).equals(c.buldSlno())
+        || c.entX() == null
+        || c.entY() == null) {
       return new NotFound();
     }
     try {
-      Response.Coord c = juso.getFirst();
-      return new Found(Double.parseDouble(c.entX().trim()), Double.parseDouble(c.entY().trim()));
-    } catch (NullPointerException | NumberFormatException e) {
+      double x = Double.parseDouble(c.entX().trim());
+      double y = Double.parseDouble(c.entY().trim());
+      return Double.isFinite(x) && Double.isFinite(y) ? new Found(x, y) : new NotFound();
+    } catch (NumberFormatException e) {
       return new NotFound();
     }
   }
@@ -154,6 +166,13 @@ public class JusoCoordClient implements AddressCoordinates {
 
     /** 좌표 한 줄. entX·entY는 UTM-K(미터)로 문자열이에요. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Coord(String entX, String entY, String bdNm) {}
+    record Coord(
+        String admCd,
+        String rnMgtSn,
+        String udrtYn,
+        String buldMnnm,
+        String buldSlno,
+        String entX,
+        String entY) {}
   }
 }

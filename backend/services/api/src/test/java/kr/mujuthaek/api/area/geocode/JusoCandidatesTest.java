@@ -3,85 +3,108 @@ package kr.mujuthaek.api.area.geocode;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
-import kr.mujuthaek.api.area.geocode.JusoCandidates.Hint;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 class JusoCandidatesTest {
 
-  // 초량상로 1-2는 부산 중구 영주동 (검색 API·주소 사전·경계 모두 26110)
-  private static final JusoResult BUSAN = result("2611010100", "초량상로", "1", "2");
-  private static final JusoResult BUSAN_OTHER_DONG = result("2611010300", "초량상로", "5", "0");
-  // 실제 검색 API가 구를 잘못 쓴 "부산광역시 동구 초량상로 1-2"에 준 결과 2개: 동구의 비슷한 도로명뿐, 진짜 주소는 없음
-  private static final JusoResult DONGGU_LOOKALIKE_35 = result("2617010100", "초량상로35번길", "1", "2");
-  private static final JusoResult DONGGU_LOOKALIKE_105 =
-      result("2617010100", "초량상로105번길", "1", "2");
-  private static final JusoResult SEOUL = result("1168010100", "테헤란로", "152", "0");
+  private static final JusoResult EXACT = result("1111010100", "평창문화로", "45", "0", "0");
+  private static final JusoResult NEIGHBOR = result("1111010100", "평창문화로", "45", "1", "0");
+  private static final ParsedAddress ADDRESS = AddressParser.parse("서울특별시종로구평창문화로45");
 
   @Test
-  void singleResultIsPicked() {
-    assertThat(JusoCandidates.pick(List.of(SEOUL), Hint.none())).contains(SEOUL);
+  void compactAddressMatchesOnlyTheExactBuilding() {
+    assertThat(ADDRESS.sigungu()).isEqualTo("종로구");
+    assertThat(ADDRESS.roadName()).isEqualTo("평창문화로");
+    assertThat(
+            JusoCandidates.pick(
+                new SearchOutcome.Found(List.of(NEIGHBOR, EXACT), 2), ADDRESS, null, "11110"))
+        .contains(EXACT);
   }
 
   @Test
   void sameEntranceListedTwiceIsPicked() {
-    JusoResult sameBuilding = result("2611010100", "초량상로", "1", "2");
-    assertThat(JusoCandidates.pick(List.of(BUSAN, sameBuilding), Hint.none())).contains(BUSAN);
+    assertThat(
+            JusoCandidates.pick(
+                new SearchOutcome.Found(List.of(EXACT, EXACT), 2), ADDRESS, "1111010100", "11110"))
+        .contains(EXACT);
   }
 
   @Test
-  void onlyLookalikeRoadsAreNotPicked() {
-    // 실제 응답 그대로: 도로명이 똑같은 결과가 없고 번호·시군구도 둘이 같아서 고르지 않음
+  void singleLookalikeIsNeverAccepted() {
+    var wrong =
+        List.of(
+            NEIGHBOR,
+            result("1111010100", "평창문화로1길", "45", "0", "0"),
+            result("1111010100", "평창문화로", "45", "0", "1"),
+            result("1168010100", "평창문화로", "45", "0", "0"));
+    for (var candidate : wrong) {
+      assertThat(
+              JusoCandidates.pick(
+                  new SearchOutcome.Found(List.of(candidate), 1), ADDRESS, null, "11110"))
+          .isEmpty();
+    }
+  }
+
+  @Test
+  void incompleteResponseCannotEstablishUniqueness() {
     assertThat(
             JusoCandidates.pick(
-                List.of(DONGGU_LOOKALIKE_35, DONGGU_LOOKALIKE_105),
-                new Hint(null, "26170", "초량상로", 1, 2)))
+                new SearchOutcome.Found(List.of(EXACT), 11), ADDRESS, null, "11110"))
         .isEmpty();
   }
 
   @Test
-  void exactRoadNameWinsOverLookalikesEvenWithWrongDistrict() {
-    // 공고가 구를 잘못 적어도 도로명·번호가 똑같은 결과를 고름. 시군구가 맞는지는 경계 검사가 봐요
-    assertThat(
-            JusoCandidates.pick(
-                List.of(DONGGU_LOOKALIKE_35, BUSAN), new Hint(null, "26170", "초량 상로", 1, 2)))
-        .contains(BUSAN);
-  }
-
-  @Test
-  void buildingNumberNarrowsSameRoad() {
-    assertThat(
-            JusoCandidates.pick(
-                List.of(BUSAN, BUSAN_OTHER_DONG), new Hint(null, null, "초량상로", 5, null)))
-        .contains(BUSAN_OTHER_DONG);
-  }
-
-  @Test
-  void legalDongCodePicksOne() {
-    assertThat(
-            JusoCandidates.pick(
-                List.of(BUSAN, BUSAN_OTHER_DONG, SEOUL),
-                new Hint("2611010300", null, null, null, null)))
-        .contains(BUSAN_OTHER_DONG);
-  }
-
-  @Test
-  void sigunguPicksOneWhenDongDoesNotMatch() {
-    assertThat(
-            JusoCandidates.pick(
-                List.of(BUSAN, SEOUL), new Hint("2611099999", "11680", null, null, null)))
-        .contains(SEOUL);
-  }
-
-  @Test
-  void ambiguousIsNotPicked() {
-    assertThat(
-            JusoCandidates.pick(
-                List.of(BUSAN, BUSAN_OTHER_DONG), new Hint(null, "26110", null, null, null)))
+  void parcelMustMatchLotNumberAndMountainMarker() {
+    var actual =
+        new JusoResult(
+            "1111010100",
+            "평창문화로",
+            "0",
+            "45",
+            "0",
+            null,
+            null,
+            "서울특별시",
+            "종로구",
+            "평창동",
+            "서울특별시 종로구 평창동 산 3-2",
+            null);
+    var found = new SearchOutcome.Found(List.of(actual), 1);
+    assertThat(JusoCandidates.pick(found, AddressParser.parse("서울시 종로구 평창동 산 3-2"), null, "11110"))
+        .contains(actual);
+    assertThat(JusoCandidates.pick(found, AddressParser.parse("서울시 종로구 평창동 3-2"), null, "11110"))
         .isEmpty();
-    assertThat(JusoCandidates.pick(List.of(BUSAN, SEOUL), Hint.none())).isEmpty();
-    assertThat(JusoCandidates.pick(List.of(), new Hint("2611010100", "26110", null, null, null)))
+    assertThat(JusoCandidates.pick(found, AddressParser.parse("서울시 종로구 평창동 산 3"), null, "11110"))
+        .isEmpty();
+  }
+
+  @Test
+  void rejectsConflictingLegalDongAndMissingAddressParts() {
+    var found = new SearchOutcome.Found(List.of(EXACT), 1);
+    assertThat(JusoCandidates.pick(found, ADDRESS, "1111010200", "11110")).isEmpty();
+    assertThat(JusoCandidates.pick(found, AddressParser.parse("서울 종로구 평창문화로"), null, null))
+        .isEmpty();
+  }
+
+  @Test
+  void comparesExplicitRegionNamesWhenNoRegionCodeWasResolved() {
+    var found = new SearchOutcome.Found(List.of(EXACT), 1);
+    assertThat(JusoCandidates.pick(found, ADDRESS, null, null)).contains(EXACT);
+    assertThat(JusoCandidates.pick(found, AddressParser.parse("서울 강남구 평창문화로 45"), null, null))
+        .isEmpty();
+  }
+
+  @Test
+  void addressesWithoutADistrictCannotPickBetweenTwoExactEntrances() {
+    var second = result("1168010100", "평창문화로", "45", "0", "0");
+    assertThat(
+            JusoCandidates.pick(
+                new SearchOutcome.Found(List.of(EXACT, second), 2),
+                AddressParser.parse("평창문화로 45"),
+                null,
+                null))
         .isEmpty();
   }
 
@@ -101,7 +124,9 @@ class JusoCandidatesTest {
     assertThat(JusoKeyword.clean(raw)).isEqualTo(cleaned);
   }
 
-  private static JusoResult result(String admCd, String rn, String main, String sub) {
-    return new JusoResult(admCd, rn, "0", main, sub, null, null, null, null, null, null, null);
+  private static JusoResult result(
+      String admCd, String rn, String main, String sub, String underground) {
+    return new JusoResult(
+        admCd, rn, underground, main, sub, null, null, "서울특별시", "종로구", null, null, null);
   }
 }
