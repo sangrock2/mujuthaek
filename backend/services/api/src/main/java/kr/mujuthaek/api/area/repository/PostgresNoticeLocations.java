@@ -212,7 +212,8 @@ public final class PostgresNoticeLocations {
                   or (fail_reason = 'NOT_FOUND' and calculated_at < now() - interval '1 day')
                   or (fail_reason = 'PARSE_FAILED' and calculated_at < now() - interval '7 days')
                 )
-              order by case when n.status in ('UPCOMING', 'APPLYING', 'ALWAYS') then 0 else 1 end,
+              order by case when n.status in ('UPCOMING', 'APPLYING', 'ALWAYS') then 0
+                            when n.status = 'UNKNOWN' then 1 else 2 end,
                        l.calculated_at, l.location_id
               limit 1 for update of l skip locked
             )
