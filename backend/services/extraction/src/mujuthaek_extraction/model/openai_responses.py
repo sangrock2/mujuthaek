@@ -29,6 +29,11 @@ from mujuthaek_extraction.model.strict_schema import keep_own as _keep_own
 
 ENDPOINT = "https://api.openai.com/v1/responses"
 TRANSIENT_STATUS = {408, 409, 429, 500, 502, 503, 504}
+# 계정·결제 한도는 대기 후 같은 요청을 다시 보내도 해결되지 않아요. 일반 429 속도 제한과 구분합니다.
+BILLING_LIMIT_CODES = frozenset({
+    "credit_balance_exhausted", "insufficient_quota", "billing_not_active", "api_key_spend_limit_exceeded",
+    "project_spend_limit_exceeded", "organization_spend_limit_exceeded", "organization_usage_limit_exceeded",
+})
 
 # 호출별 응답 대기 한도 (2026-10-20). 응답을 한 번에 받는 방식이라 답을 다 만들 때까지 연결이 조용하고,
 # 요청이 중간에 사라져도 한도까지 기다립니다(실측 live-perf GH 808: 선정·재확인 호출이 900초 무응답, 다시 보내니 96초·82초).
@@ -221,7 +226,11 @@ class OpenAIResponsesModel:
             safe_message = ""
             if error.code == 400 and isinstance(message, str):
                 safe_message = ": " + re.sub(r"sk-[A-Za-z0-9_\-]+", "<숨김>", message.replace(self._api_key, "<숨김>"))[:500]
-            raise ModelError(f"HTTP {error.code} ({safe_code}){safe_message}", transient=error.code in TRANSIENT_STATUS, code=f"HTTP_{error.code}") from None
+            raise ModelError(
+                f"HTTP {error.code} ({safe_code}){safe_message}",
+                transient=error.code in TRANSIENT_STATUS and safe_code not in BILLING_LIMIT_CODES,
+                code=f"HTTP_{error.code}",
+            ) from None
         except TimeoutError:  # 응답을 기다리다 시간 초과: 제공자는 이미 일을 했을 수 있습니다
             raise ModelError("연결 실패: TimeoutError", transient=True, maybe_billed=True, code="TIMEOUT") from None
         except urllib.error.URLError as error:
@@ -266,7 +275,11 @@ class OpenAIResponsesModel:
                 failure = (event.get("response") or {}).get("error") or event.get("error") or event
                 code = failure.get("code") if isinstance(failure, dict) else None
                 safe_code = code if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_\-]{1,80}", code) else None
-                raise ModelError(f"응답 생성 실패 ({safe_code})", transient=True, maybe_billed=True, code="STREAM_FAILED")
+                billing_limit = safe_code in BILLING_LIMIT_CODES
+                raise ModelError(
+                    f"응답 생성 실패 ({safe_code})", transient=not billing_limit, maybe_billed=True,
+                    code="BILLING_LIMIT" if billing_limit else "STREAM_FAILED",
+                )
         raise http.client.IncompleteRead(b"")  # 마지막 이벤트 없이 끝남: 응답이 중간에 끊김
 
     def _aborted(self, request: ModelRequest, body: dict[str, Any], raw: str, reason: str) -> ModelResponse:
