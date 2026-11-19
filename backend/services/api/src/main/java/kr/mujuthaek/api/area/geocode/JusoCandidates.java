@@ -17,7 +17,7 @@ public final class JusoCandidates {
         found.results().stream()
             .filter(r -> r.admCd() != null && r.admCd().matches("[0-9]{10}"))
             .filter(r -> sigungu == null || sigungu.equals(r.sigunguCode()))
-            .filter(r -> bjd == null || bjd.equals(r.admCd()))
+            .filter(r -> matchesRegionCode(bjd, r))
             .filter(r -> sigungu != null || matchesRegionName(address, r))
             .filter(r -> matchesAddress(address, r))
             .toList();
@@ -28,6 +28,17 @@ public final class JusoCandidates {
     return matches.stream().allMatch(r -> r.roadKey().equals(first.roadKey()))
         ? Optional.of(first)
         : Optional.empty();
+  }
+
+  private static boolean matchesRegionCode(String code, JusoResult result) {
+    if (code == null) {
+      return true;
+    }
+    // 행정구역 코드가 구 단위이면 뒤 다섯 자리의 0은 동을 지정하는 값이 아니에요.
+    if (code.length() == 10 && code.endsWith("00000")) {
+      return code.substring(0, 5).equals(result.sigunguCode());
+    }
+    return code.equals(result.admCd());
   }
 
   private static boolean matchesRegionName(ParsedAddress address, JusoResult result) {
