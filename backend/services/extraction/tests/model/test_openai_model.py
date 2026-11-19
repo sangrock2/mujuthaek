@@ -366,3 +366,22 @@ def test_stream_whole_call_wait_limit():
     with pytest.raises(ModelError) as error:
         model.complete(request_for(0))
     assert error.value.code == "TIMEOUT"
+
+
+@pytest.mark.parametrize("code", ["credit_balance_exhausted", "project_spend_limit_exceeded", "insufficient_quota"])
+def test_stream_billing_limit_does_not_request_immediate_retry(code):
+    http = FakeStream([{"type": "response.failed", "response": {"error": {"code": code}}}])
+    with pytest.raises(ModelError) as error:
+        OpenAIResponsesModel(FAKE_KEY, opener=http, stream=True).complete(request_for(0))
+    assert not error.value.transient and error.value.code == "BILLING_LIMIT"
+    # 사용량이 없는 스트림 실패의 보수적인 비용 처리는 줄이지 않아요.
+    assert error.value.maybe_billed
+
+
+@pytest.mark.parametrize("code", ["credit_balance_exhausted", "project_spend_limit_exceeded", "insufficient_quota"])
+def test_http_429_billing_limit_is_not_a_rate_limit_retry(code):
+    response = io.BytesIO(json.dumps({"error": {"code": code}}).encode())
+    http = FakeHTTP(error=urllib.error.HTTPError("https://api.openai.com/v1/responses", 429, "quota", {}, response))
+    with pytest.raises(ModelError) as error:
+        OpenAIResponsesModel(FAKE_KEY, opener=http).complete(request_for(0))
+    assert not error.value.transient and error.value.code == "HTTP_429"
