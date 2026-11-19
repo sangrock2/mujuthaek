@@ -75,3 +75,22 @@ def test_reserve_tenant_notice_is_not_a_name_list():
     files = refs("행복주택 예비자 모집공고문.pdf", "영구임대 예비자입주자모집공고문.pdf", "예비자 명단.xlsx", "예비자 발표.pdf")
     assert [f.personal for f in files] == [False, False, True, True]
     assert [f.name for f in pick_notice_files(files)] == ["행복주택 예비자 모집공고문.pdf", "영구임대 예비자입주자모집공고문.pdf"]
+
+
+def test_reviewed_supplementary_attachments_are_not_notice_fallbacks():
+    """운영 검수에서 본문으로 잘못 읽은 서식·이용안내·기준 자료는 단독이어도 고르지 않아요."""
+    names = (
+        "(별첨)예비신혼부부 세대구성확인서.pdf",
+        "2_ [전자계약] 부동산거래 전자계약시스템 이용안내.pdf",
+        "[별지1호] 성북구 연극인주택 입주지원서.pdf",
+        "7_청년 매입임대주택 부모 범위 기준(2순위 전체 및 부모무주택 가점 선택자 필독).pdf",
+    )
+    for name in names:
+        assert pick_notice_files(refs(name)) == [], name
+
+
+def test_translation_with_notice_title_never_replaces_primary_notice():
+    primary = "(수정)2026년 1-2인가구 도시형생활주택 잔여세대 입주자 모집공고.pdf"
+    translation = "(수정)생활언어 번역본 (2026년 도시형생활주택 입주자 모집공고).pdf"
+    assert pick_notice_files(refs(translation)) == []
+    assert [f.name for f in pick_notice_files(refs(translation, primary))] == [primary]
