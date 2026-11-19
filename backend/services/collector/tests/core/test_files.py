@@ -94,3 +94,10 @@ def test_translation_with_notice_title_never_replaces_primary_notice():
     translation = "(수정)생활언어 번역본 (2026년 도시형생활주택 입주자 모집공고).pdf"
     assert pick_notice_files(refs(translation)) == []
     assert [f.name for f in pick_notice_files(refs(translation, primary))] == [primary]
+
+
+def test_document_screening_lists_are_personal_even_without_the_word_name_list():
+    files = refs("서류심사대상자_신혼2(게시용).pdf", "서류 심사 대상자_신혼1.pdf", "서류제출대상자.xlsx", "신혼주택 입주자모집공고문.pdf")
+    assert [f.personal for f in files] == [True, True, True, False]
+    assert [f.name for f in pick_notice_files(files)] == ["신혼주택 입주자모집공고문.pdf"]
+    assert pick_unit_lists(files) == []
