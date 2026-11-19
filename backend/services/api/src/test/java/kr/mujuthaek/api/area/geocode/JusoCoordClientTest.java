@@ -80,7 +80,8 @@ class JusoCoordClientTest {
             withSuccess(
                 """
                 {"results":{"common":{"errorCode":"0","errorMessage":"정상","totalCount":"1"},
-                 "juso":[{"admCd":"1154510200","entX":"948120.123","entY":"1941235.456","bdNm":"새건물"}]}}""",
+                 "juso":[{"admCd":"1154510200","rnMgtSn":"115453116001","udrtYn":"0","buldMnnm":"377",
+                 "buldSlno":"0","entX":"948120.123","entY":"1941235.456","bdNm":"새건물"}]}}""",
                 MediaType.APPLICATION_JSON));
 
     assertThat(client.coordinates(BUILDING)).isEqualTo(new Found(948120.123, 1941235.456));
@@ -93,6 +94,24 @@ class JusoCoordClientTest {
     server.expect(never(), requestTo(URL));
 
     assertThat(client.coordinates(BUILDING)).isEqualTo(new Failed(Reason.NO_KEY, null));
+    server.verify();
+  }
+
+  @Test
+  void plausibleCoordinatesForAnotherBuildingAreNotAccepted() {
+    var client = client(KEY);
+    server
+        .expect(once(), requestTo(URL))
+        .andRespond(
+            withSuccess(
+                """
+                {"results":{"common":{"errorCode":"0","totalCount":"1"},
+                 "juso":[{"admCd":"1154510200","rnMgtSn":"115453116001","udrtYn":"0","buldMnnm":"377",
+                 "buldSlno":"1","entX":"948120.123","entY":"1941235.456"}]}}
+                """,
+                MediaType.APPLICATION_JSON));
+
+    assertThat(client.coordinates(BUILDING)).isInstanceOf(NotFound.class);
     server.verify();
   }
 

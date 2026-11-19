@@ -119,12 +119,12 @@ class AddressLocatorTest {
   }
 
   @Test
-  void typoIsFixedInTheDictionary() {
+  void anUnconfirmedSimilarRoadDoesNotBecomeABuildingPin() {
     GeocodeResult r = locator.locate("부산광역시 시험구 초량중앙삼로 3", BJD);
 
-    assertThat(r.method()).isEqualTo(Method.FUZZY);
-    assertThat(r.addressId()).isEqualTo(id("a3"));
-    assertThat(searched).isEmpty();
+    assertThat(r.status()).isEqualTo(Status.APPROX);
+    assertThat(r.addressId()).isNull();
+    assertThat(searched).hasSize(1);
   }
 
   @Test
@@ -137,20 +137,19 @@ class AddressLocatorTest {
   }
 
   @Test
-  void unknownRoadNameGoesThroughTheSearchApiBackToTheDictionary() {
+  void unknownRoadIsNotReplacedWithAnUnrelatedResult() {
     answer = keyword -> found(juso("초량상로", "0", "1", "2"));
 
     GeocodeResult r = locator.locate("부산광역시 시험구 옛이름대로 1-2", BJD);
 
-    assertThat(r.status()).isEqualTo(Status.OK);
-    assertThat(r.method()).isEqualTo(Method.SEARCH_API);
-    assertThat(r.addressId()).isEqualTo(id("a1"));
+    assertThat(r.status()).isEqualTo(Status.APPROX);
+    assertThat(r.addressId()).isNull();
     assertThat(searched).hasSize(1);
   }
 
   @Test
   void jibunAddressGoesThroughTheSearchApi() {
-    answer = keyword -> found(juso("초량상로", "0", "1", "2"));
+    answer = keyword -> found(juso("초량상로", "0", "1", "2", "시험동 100-1"));
 
     GeocodeResult r = locator.locate("부산광역시 시험구 시험동 100-1", BJD);
 
@@ -161,7 +160,7 @@ class AddressLocatorTest {
   @Test
   void islandAddressIsFoundWithoutTheUndergroundCode() {
     // 검색 API는 지하 여부를 0으로 주지만 사전에는 3
-    answer = keyword -> found(juso("산양일주로", "0", "700", "0"));
+    answer = keyword -> found(juso("산양일주로", "0", "700", "0", "시험동 산 5"));
 
     GeocodeResult r = locator.locate("부산광역시 시험구 시험동 산 5", BJD);
 
@@ -170,8 +169,21 @@ class AddressLocatorTest {
   }
 
   @Test
+  void oppositeEntranceLevelInTheDictionaryIsNotUsed() {
+    answer = keyword -> found(juso("초량상로", "1", "1", "2"));
+
+    GeocodeResult r = locator.locate("부산광역시 시험구 초량상로 지하 1-2", BJD);
+    assertThat(r.status()).isEqualTo(Status.APPROX);
+    assertThat(r.addressId()).isNull();
+  }
+
+  @Test
   void manySearchResultsMeanTheRepresentativePointOfTheLegalDong() {
-    answer = keyword -> found(juso("초량상로", "0", "1", "2"), juso("산양일주로", "0", "700", "0"));
+    answer =
+        keyword ->
+            found(
+                juso("초량상로", "0", "1", "2", "시험동 100-1"),
+                juso("산양일주로", "0", "700", "0", "시험동 100-1"));
 
     GeocodeResult r = locator.locate("부산광역시 시험구 시험동 100-1", BJD);
 
@@ -284,8 +296,13 @@ class AddressLocatorTest {
   }
 
   private static JusoResult juso(String road, String underground, String main, String sub) {
+    return juso(road, underground, main, sub, null);
+  }
+
+  private static JusoResult juso(
+      String road, String underground, String main, String sub, String parcel) {
     return new JusoResult(
-        BJD, road, underground, main, sub, null, null, "부산광역시", "시험구", "시험동", null, null);
+        BJD, road, underground, main, sub, null, null, "부산광역시", "시험구", "시험동", parcel, null);
   }
 
   private static String id(String tag) {

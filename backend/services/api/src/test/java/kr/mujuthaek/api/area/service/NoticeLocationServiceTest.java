@@ -123,7 +123,8 @@ class NoticeLocationServiceTest {
   @Test
   void theSameAddressTwiceIsLookedUpOnce() throws Exception {
     dictionary("26530", "모라시험로", 7, "26530101");
-    answer = keyword -> new Found(List.of(juso("2653010100", "모라시험로", "7")), 1);
+    answer =
+        keyword -> new Found(List.of(juso("2653010100", "모라시험로", "7", "부산광역시 사상구 모라동 656-6")), 1);
 
     var first = service.locate(location("case-a", "부산광역시 사상구 모라동 656-6", null));
     var second = service.locate(location("case-b", "부산광역시  사상구 모라동 656-6", null));
@@ -157,8 +158,8 @@ class NoticeLocationServiceTest {
     return new NoticeLocation(UUID.randomUUID(), 1, id, "COMPLEX", address, bjd);
   }
 
-  private static JusoResult juso(String admCd, String road, String main) {
-    return new JusoResult(admCd, road, "0", main, "0", null, null, null, null, null, null, null);
+  private static JusoResult juso(String admCd, String road, String main, String parcel) {
+    return new JusoResult(admCd, road, "0", main, "0", null, null, null, null, null, parcel, null);
   }
 
   private static void dictionary(String sigungu, String road, int main, String emd8)
