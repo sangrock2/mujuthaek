@@ -203,15 +203,18 @@ public final class PostgresNoticeLocations {
         .query(
             """
             with due as (
-              select location_id from area.notice_locations
-              where status = 'FAILED' and geom is null and address_text ~ '[0-9]'
+              select l.location_id from area.notice_locations l
+              join notice.notices n on n.id = l.notice_id and n.current_version = l.notice_version
+              where not n.hidden and n.merged_into is null
+                and l.status = 'FAILED' and l.geom is null and l.address_text ~ '[0-9]'
                 and (
                   (fail_reason = 'API_ERROR' and calculated_at < now() - interval '1 hour')
                   or (fail_reason = 'NOT_FOUND' and calculated_at < now() - interval '1 day')
                   or (fail_reason = 'PARSE_FAILED' and calculated_at < now() - interval '7 days')
                 )
-              order by calculated_at, location_id
-              limit 1 for update skip locked
+              order by case when n.status in ('UPCOMING', 'APPLYING', 'ALWAYS') then 0 else 1 end,
+                       l.calculated_at, l.location_id
+              limit 1 for update of l skip locked
             )
             update area.notice_locations l set calculated_at = now()
             from due where l.location_id = due.location_id
@@ -239,13 +242,16 @@ public final class PostgresNoticeLocations {
     var point = result.coordinate();
     return jdbc.update(
             """
-            update area.notice_locations
+            update area.notice_locations l
             set address_key = ?, bjd_code_found = ?,
                 geom = case when ?::float8 is null then null
                             else st_setsrid(st_makepoint(?, ?), 4326)::geography end,
                 status = ?, method = ?, fail_reason = ?, region_mismatch = ?, calculated_at = now()
             where location_id = ? and notice_version = ? and calculated_at = ?
               and status = 'FAILED' and geom is null
+              and exists (select from notice.notices n where n.id = l.notice_id
+                          and n.current_version = l.notice_version
+                          and not n.hidden and n.merged_into is null)
             """,
             addressKey,
             result.bjdCodeFound(),
