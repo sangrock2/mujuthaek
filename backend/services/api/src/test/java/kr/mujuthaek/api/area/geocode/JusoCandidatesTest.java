@@ -89,6 +89,13 @@ class JusoCandidatesTest {
   }
 
   @Test
+  void aDistrictCodePaddedWithZeroesDoesNotClaimALegalDong() {
+    var found = new SearchOutcome.Found(List.of(EXACT), 1);
+    assertThat(JusoCandidates.pick(found, ADDRESS, "1111000000", null)).contains(EXACT);
+    assertThat(JusoCandidates.pick(found, ADDRESS, "1156000000", null)).isEmpty();
+  }
+
+  @Test
   void comparesExplicitRegionNamesWhenNoRegionCodeWasResolved() {
     var found = new SearchOutcome.Found(List.of(EXACT), 1);
     assertThat(JusoCandidates.pick(found, ADDRESS, null, null)).contains(EXACT);
