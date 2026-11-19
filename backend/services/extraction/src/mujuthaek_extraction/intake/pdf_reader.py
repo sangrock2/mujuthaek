@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
+from mujuthaek_extraction.intake.pdf_process import run_pdf
 from mujuthaek_extraction.intake.xlsx_reader import is_secret_header, redact_secret_values
 
 MIN_CHARS = 200  # collector와 같은 기준: 이보다 적으면 읽기 실패(스캔본 가능성)
@@ -498,6 +499,17 @@ def _read_page(page: Any) -> list[PdfPage]:
 
 
 def read_pdf(data: bytes) -> PdfDocument | None:
+    """PDF 바이트 → 쪽·표 구조. 파서는 자원 한도가 있는 별도 프로세스에서 실행합니다."""
+    result = run_pdf(data, "document", MAX_PAGES)
+    if result is None:
+        return None
+    try:
+        return PdfDocument(result["page_count"], [PdfPage(**page) for page in result["pages"]])
+    except (KeyError, TypeError):
+        return None
+
+
+def _read_pdf_inline(data: bytes) -> PdfDocument | None:
     """PDF 바이트 → 쪽·표 구조. 읽을 수 없거나 글자가 거의 없으면 None."""
     import pdfplumber
 
@@ -546,6 +558,11 @@ def image_pages(data: bytes) -> tuple[tuple[int, float], ...]:
 
 
 def _find_image_pages(data: bytes) -> tuple[tuple[int, float], ...]:
+    result = run_pdf(data, "images", MAX_PAGES)
+    return tuple((int(number), float(share)) for number, share in result) if result is not None else ()
+
+
+def _find_image_pages_inline(data: bytes) -> tuple[tuple[int, float], ...]:
     import pdfplumber
 
     found: list[tuple[int, float]] = []
