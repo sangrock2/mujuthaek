@@ -61,6 +61,9 @@ public final class AddressNormalizer {
   private static final Pattern ROAD_SPACE =
       Pattern.compile("([가-힣0-9]+(?:로|길)?)\\s+(\\d+(?:번?[가-힣]?)(?:로|길))(?=\\s*(?:지하\\s*)?\\d)");
 
+  private static final Pattern SEOUL_DISTRICT =
+      Pattern.compile("^서울(?:특별시|시)?\\s*([가-힣]{1,10}?구)(?=\\s|[가-힣]|$)\\s*");
+
   private AddressNormalizer() {}
 
   public static Normalized normalize(String raw) {
@@ -84,6 +87,7 @@ public final class AddressNormalizer {
     text = fromSido(text);
     text = TAIL.matcher(text).replaceAll(" ");
     text = text.replaceAll("\\s+", " ").strip();
+    text = SEOUL_DISTRICT.matcher(text).replaceFirst("서울특별시 $1 ").strip();
     text = ROAD_SPACE.matcher(text).replaceAll("$1$2");
     text = unifySido(text);
     return new Normalized(text, dongHint);

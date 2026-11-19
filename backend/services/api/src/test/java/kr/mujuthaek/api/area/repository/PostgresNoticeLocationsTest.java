@@ -69,6 +69,52 @@ class PostgresNoticeLocationsTest {
   }
 
   @Test
+  void oldFailuresAreClaimedOnceAndCannotOverwriteNewerLocations() throws Exception {
+    UUID stale =
+        locations.save(
+            location(1, "초량상로 1-2"), "이전 주소", GeocodeResult.failed(FailReason.NOT_FOUND, null));
+    UUID missing =
+        locations.save(
+            at("missing", "주소 별도 안내"), null, GeocodeResult.failed(FailReason.PARSE_FAILED, null));
+    exec(
+        "update area.notice_locations set calculated_at = now() - interval '8 days'"
+            + " where notice_id = '"
+            + notice
+            + "'");
+
+    var claim = locations.claimGeocodeRetry().orElseThrow();
+    assertThat(claim.locationId()).isEqualTo(stale);
+    assertThat(locations.claimGeocodeRetry()).isEmpty();
+    locations.save(location(2, "초량상로 5"), "새 주소", ok(Method.FILE));
+
+    assertThat(locations.completeGeocodeRetry(claim, "이전 주소", ok(Method.COORD_API))).isFalse();
+    assertThat(locations.byIds(java.util.List.of(stale)).getFirst().addressText())
+        .isEqualTo("초량상로 5");
+    assertThat(locations.byIds(java.util.List.of(missing)).getFirst().coordinate()).isNull();
+  }
+
+  @Test
+  void successfulRetryStoresCoordinateWithoutRepublishingTheNotice() throws Exception {
+    UUID id =
+        locations.save(
+            location(3, "초량상로 1-2"), "주소", GeocodeResult.failed(FailReason.API_ERROR, null));
+    assertThat(locations.claimGeocodeRetry()).isEmpty();
+    exec(
+        "update area.notice_locations set calculated_at = now() - interval '2 hours'"
+            + " where location_id = '"
+            + id
+            + "'");
+
+    var claim = locations.claimGeocodeRetry().orElseThrow();
+    assertThat(locations.completeGeocodeRetry(claim, "주소", ok(Method.COORD_API))).isTrue();
+    var stored = locations.byIds(java.util.List.of(id)).getFirst();
+    assertThat(stored.noticeVersion()).isEqualTo(3);
+    assertThat(stored.status()).isEqualTo(Status.OK);
+    assertThat(stored.failReason()).isNull();
+    assertThat(stored.coordinate()).isEqualTo(new Coordinate(35.1, 129.04));
+  }
+
+  @Test
   void onlyAnExactCoordinateIsReused() {
     String key = "재사용 " + notice;
     String bjd = "2611010100"; // location()이 주는 법정동코드

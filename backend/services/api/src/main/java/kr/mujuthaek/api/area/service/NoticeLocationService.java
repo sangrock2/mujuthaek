@@ -42,6 +42,7 @@ public class NoticeLocationService {
       return null;
     }
     String normalized = AddressParser.parse(address).normalized();
-    return normalized == null || normalized.isBlank() ? null : normalized;
+    // 기존의 느슨한 검색 매칭으로 저장된 좌표를 새 공고에서 다시 쓰지 않아요.
+    return normalized == null || normalized.isBlank() ? null : "verified-v2:" + normalized;
   }
 }
