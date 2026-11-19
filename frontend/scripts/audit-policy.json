@@ -1,10 +1,10 @@
 {
-  "enabled": true,
+  "enabled": false,
   "advisory": "GHSA-fc5q-39xc-vjpf",
   "package": "picomatch",
   "versions": ["2.3.2", "4.0.7"],
   "pathPrefix": ".>eslint-config-next>",
   "issuedAt": "2026-11-18T00:00:00+09:00",
   "expiresAt": "2026-11-25T00:00:00+09:00",
-  "reason": "공식 수정 버전이 아직 배포되지 않은 개발용 ESLint 하위 의존성 한 건에 대해 소유자가 한시 허용을 명시 승인했다. 운영 의존성·새 경보·경로/버전 변경·만료는 차단한다."
+  "reason": "2026-11-19 재검증: 해당 GitHub 경보가 11월 18일 철회됐고 운영·전체 의존성 감사가 모두 0건이므로 기존 한시 예외를 비활성화한다. 수정 버전 적용을 의미하지 않으며, 경보가 다시 보고되면 예외 없이 차단한다."
 }
