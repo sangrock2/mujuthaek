@@ -7,8 +7,12 @@ from dataclasses import dataclass
 PERSONAL_FILE = re.compile(r"명부|명단|당첨자|예비자(?!\s*(?:입주자\s*)?모집)|계약\s*대상자|합격자|추첨\s*결과")
 NOTICE_FILE_NAME = re.compile(r"공고문|모집\s*공고|입주자\s*모집|모집\s*안내|공급\s*공고")
 STRONG_NOTICE_NAME = re.compile(r"공고문|모집\s*공고")  # '입주자모집 관련'처럼 약하게 맞는 이름보다 먼저 골라요
-NOT_NOTICE_FILE = re.compile(r"안내문|커트라인|결과|위치도|평면도|배치도|도면|세대\s*내\s*구조|구조도|요약|FAQ|질의\s*응답|Q\s*&\s*A|자주\s*묻는", re.I)
-FORM_FILE = re.compile(r"양식|서약서|위임장|동의서|신청서")  # 서식 파일. 단 '모집 공고문 및 신청서류'처럼 공고문이 같이 든 파일은 공고문
+NOT_NOTICE_FILE = re.compile(
+    r"안내문|커트라인|결과|위치도|평면도|배치도|도면|세대\s*내\s*구조|구조도|요약|FAQ|질의\s*응답|Q\s*&\s*A|자주\s*묻는"
+    r"|전자\s*계약.*이용\s*안내|생활\s*언어\s*번역본|부모\s*범위\s*기준",
+    re.I,
+)
+FORM_FILE = re.compile(r"양식|서약서|위임장|동의서|신청서|입주\s*지원서|세대\s*구성\s*확인서")  # 공고문과 합쳐진 신청서류는 유지
 UNIT_LIST_FILE = re.compile(
     r"주택\s*목록|공급\s*(?:주택\s*)?목록|임대\s*조건|호별|대상\s*주택|주택\s*현황|단지\s*목록|모집\s*호수|공급\s*현황|주택\s*리스트"
     r"|공급\s*가능\s*주택|건물\s*목록"
