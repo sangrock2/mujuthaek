@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from uuid import UUID
 
-from mujuthaek_collector.core.storage import MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, BoardState, Intake, NewVersion, PostRow
+from mujuthaek_collector.core.storage import MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, SCOPE_UNVERIFIED, BoardState, Intake, NewVersion, PostRow
 from mujuthaek_collector.errors import FileRejected
 from mujuthaek_platform.ids import uuid7
 
@@ -49,6 +49,9 @@ class MemoryStore:
 
     def find_post(self, source_code, post_key):
         return next((p for p in self.posts.values() if p.source_code == source_code and p.post_key == post_key), None)
+
+    def post_by_id(self, post_id):
+        return self.posts.get(post_id)
 
     def insert_post(self, post):
         if self.find_post(post.source_code, post.post_key) is None:
@@ -124,6 +127,15 @@ class MemoryStore:
     def mark_failed(self, post_id, error):
         post = self.posts[post_id]
         post.status, post.attempts, post.last_error = "FAILED", post.attempts + 1, error
+
+    def mark_scope_skipped(self, post_id):
+        post = self.posts[post_id]
+        post.status, post.attempts, post.last_error = "SKIPPED", 0, SCOPE_UNVERIFIED
+
+    def reopen_scope(self, post_id, status, reason):
+        post = self.posts[post_id]
+        if post.status == "SKIPPED" and post.last_error == SCOPE_UNVERIFIED:
+            post.status, post.last_error = status, reason
 
     def save_version(self, new):
         self.versions.append(new)
