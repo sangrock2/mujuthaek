@@ -88,6 +88,31 @@ def test_failed_job_is_not_marked_processed_and_can_be_retried(store):
     assert count(store, "select count(*) from outbox") == 0
 
 
+def test_retry_holds_billing_and_unknown_failures_and_applies_reason_specific_delays(store):
+    errors = {
+        "source": ("WAITING_SOURCE", "PDF 아직 없음"),
+        "timeout": ("FAILED", "upstream timed out"),
+        "rate": ("FAILED", "HTTP 429 rate_limit_exceeded"),
+        "credit": ("FAILED", "HTTP 429 credit_balance_exhausted"),
+        "budget": ("FAILED", "전체 비용 상한: monthly"),
+        "other": ("FAILED", "응답 형식 불일치"),
+    }
+    events = {}
+    for name, (status, error) in errors.items():
+        event = raw_event() | {"eventId": str(uuid.uuid4())}
+        events[name] = event["eventId"]
+        store.save(event, Outcome(status, error=error))
+
+    store.conn.execute("update extraction_jobs set created_at=now()-interval '3 hours'")
+    assert {e["eventId"] for e in store.retryable_events(base_delay_seconds=3600)} == {
+        events["source"],
+        events["timeout"],
+    }
+    assert {e["eventId"] for e in store.retryable_events()} == {events["source"], events["timeout"], events["rate"]}
+    for reason, name in (("provider_credit", "credit"), ("app_budget", "budget"), ("other", "other")):
+        assert [e["eventId"] for e in store.retryable_events(reason=reason)] == [events[name]]
+
+
 def test_review_flow_approve_publishes_again(store):
     item = pending_item()
     outcome = Outcome("IN_REVIEW", event=None, candidate=item["candidate"], review_reasons=["EXCEPTION_SUSPECTED /eligibility/2"])
