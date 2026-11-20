@@ -3,17 +3,25 @@ package kr.mujuthaek.api.notice.service.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.queryParam;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.UUID;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.notice.client.ExtractionReviewClient;
 import kr.mujuthaek.api.notice.client.ExtractionReviewProperties;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewQueueResponse.Item;
+import kr.mujuthaek.api.notice.repository.NoticeQueries;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
@@ -35,9 +43,12 @@ class AdminReviewQueueTest {
     var client =
         new ExtractionReviewClient(
             new ExtractionReviewProperties(BASE, null, Duration.ofSeconds(1)), builder);
+    var notices = mock(NoticeQueries.class);
+    when(notices.publishedHousingReviewStates()).thenReturn(Map.of(UUID.fromString(N1), true));
     return new AdminReviewService(
         client,
-        java.time.Clock.fixed(Instant.parse("2026-10-29T03:00:00Z"), java.time.ZoneOffset.UTC));
+        java.time.Clock.fixed(Instant.parse("2026-10-29T03:00:00Z"), java.time.ZoneOffset.UTC),
+        notices);
   }
 
   private static String notices(int total, boolean more, String... rows) {
@@ -146,7 +157,9 @@ class AdminReviewQueueTest {
   void kindsAndFormatReasonSkipBenefits() {
     var service = service();
     server
-        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=2&reason=FORMAT"))
+        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=2&groupBy=notice&reason=FORMAT"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(content().json("{\"" + N1 + "\":true}"))
         .andRespond(withSuccess(notices(0, false), MediaType.APPLICATION_JSON));
     assertThat(service.queue(null, "FORMAT", null, 2).items()).isEmpty();
     server.verify();
@@ -181,7 +194,7 @@ class AdminReviewQueueTest {
         .expect(requestTo(BASE + "/reviews/" + N1 + "/reject"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
     server
-        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1"))
+        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1&groupBy=notice"))
         .andRespond(withSuccess(notices(0, false), MediaType.APPLICATION_JSON));
     respond("/reviews", notices(0, false));
 
@@ -202,5 +215,28 @@ class AdminReviewQueueTest {
             ReviewQueueCursor.Side.DONE);
     assertThat(ReviewQueueCursor.decode(cursor.encode())).isEqualTo(cursor);
     assertThat(ReviewQueueCursor.decode(null)).isEqualTo(ReviewQueueCursor.START);
+  }
+
+  @Test
+  void includesSelectableSourceDocumentsInOneQueueItem() {
+    var service = service();
+    var group =
+        """
+        {"jobId":"%s","noticeGroupId":"source-1","jobStatus":"COMPLETED","title":"원공고",
+         "queuedAt":"2026-10-29T01:00:00Z","members":[
+           {"jobId":"%s","sourceKind":"NOTICE","jobStatus":"COMPLETED","title":"원공고","rawVersion":1},
+           {"jobId":"%s","sourceKind":"CORRECTION","jobStatus":"IN_REVIEW","title":"접수일 정정","rawVersion":2}
+         ]}
+        """
+            .formatted(N1, N1, N2);
+    respond("/reviews", notices(1, false, group));
+    var queue = service.queue("NOTICE", null, null, 2);
+    server.verify();
+    assertThat(queue.total()).isEqualTo(1);
+    var item = queue.items().getFirst();
+    assertThat(item.noticeGroupId()).isEqualTo("source-1");
+    assertThat(item.reason()).isEqualTo("MUST");
+    assertThat(item.members()).extracting(member -> member.id()).containsExactly(N1, N2);
+    assertThat(item.members().getLast().sourceKind()).isEqualTo("CORRECTION");
   }
 }

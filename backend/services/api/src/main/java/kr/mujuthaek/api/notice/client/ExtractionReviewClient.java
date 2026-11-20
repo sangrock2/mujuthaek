@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Supplier;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
@@ -62,8 +63,12 @@ public class ExtractionReviewClient {
    * 대기 중인 공고 검수의 건수와 가장 오래된 한 건만 {items(0~1건), total}. 숫자·남은 건수만 필요할 때 목록 전체(최대 1000건)를 받지 않게
    * 해요(2026-10-29 부하 시험: 전체 목록 조회가 DB를 가장 많이 썼어요). total은 추출 서비스가 따로 세요.
    */
-  public JsonNode pendingHead() {
-    return head("/reviews");
+  public JsonNode pendingHead(Map<UUID, Boolean> publishedClosed) {
+    return pendingPage("/reviews", Map.of("groupBy", "notice"), null, 1, publishedClosed);
+  }
+
+  public JsonNode activePendingDocuments(Map<UUID, Boolean> publishedClosed) {
+    return pendingPage("/reviews", Map.of(), null, LIST_LIMIT, publishedClosed);
   }
 
   /** 대기 중인 혜택 검수의 건수와 가장 오래된 한 건만 {items(0~1건), total}. */
@@ -84,23 +89,30 @@ public class ExtractionReviewClient {
    * 대기 중인 공고 검수 한 페이지 {items, total, hasMore} (관리자 검수 무한 스크롤). reason(MUST·CHECK·FORMAT)이 null이면
    * 전부, after가 null이면 처음부터예요.
    */
-  public JsonNode reviewPage(String reason, After after, int limit) {
+  public JsonNode reviewPage(
+      String reason, After after, int limit, Map<UUID, Boolean> publishedClosed) {
     Map<String, Object> query = new LinkedHashMap<>();
+    query.put("groupBy", "notice");
     query.put("reason", reason);
-    return pendingPage("/reviews", query, after, limit);
+    return pendingPage("/reviews", query, after, limit, publishedClosed);
   }
 
   /** 대기 중인 혜택 검수 한 페이지 {items, total, hasMore}. reported가 null이면 전부(true면 정책 제보로 다시 연 건만). */
   public JsonNode benefitReviewPage(Boolean reported, After after, int limit) {
     Map<String, Object> query = new LinkedHashMap<>();
     query.put("reported", reported);
-    return pendingPage("/benefit-reviews", query, after, limit);
+    return pendingPage("/benefit-reviews", query, after, limit, null);
   }
 
   /** 이어 받을 위치: 앞 페이지 마지막 건의 들어온 시각과 ID. 시각은 UTC(Z)로 보내요(+09:00의 「+」가 주소에서 띄어쓰기로 읽히지 않게). */
   public record After(Instant at, String id) {}
 
-  private JsonNode pendingPage(String path, Map<String, Object> filters, After after, int limit) {
+  private JsonNode pendingPage(
+      String path,
+      Map<String, Object> filters,
+      After after,
+      int limit,
+      Map<UUID, Boolean> publishedClosed) {
     Map<String, Object> vars = new LinkedHashMap<>();
     StringBuilder uri = new StringBuilder(path).append("?status=PENDING&limit={limit}");
     vars.put("limit", limit);
@@ -115,6 +127,16 @@ public class ExtractionReviewClient {
       uri.append("&afterAt={afterAt}&afterId={afterId}");
       vars.put("afterAt", after.at().toString());
       vars.put("afterId", after.id());
+    }
+    if (publishedClosed != null) {
+      return call(
+          () ->
+              http.post()
+                  .uri(uri.toString(), vars)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .body(publishedClosed)
+                  .retrieve()
+                  .body(JsonNode.class));
     }
     return call(() -> http.get().uri(uri.toString(), vars).retrieve().body(JsonNode.class));
   }

@@ -153,13 +153,15 @@ type QueuePage = Awaited<ReturnType<typeof liveReviewQueuePage>>;
  * 화면을 떠나면 받아 둔 페이지를 버려요(돌아왔을 때 수천 건을 페이지마다 다시 받지 않게 첫 페이지부터).
  */
 export function useReviewQueue(reason: ReviewReason | null) {
+  const queryClient = useQueryClient();
   const permissions = useAdminMe().data?.permissions;
   const kinds = [
     ...(permissions?.includes("NOTICE_REVIEW") ? ["NOTICE"] : []),
     ...(permissions?.includes("BENEFIT_REVIEW") ? ["BENEFIT"] : []),
   ];
+  const queryKey = [...live(adminKeys.review), kinds.join(","), reason ?? "all"];
   const q = useInfiniteQuery({
-    queryKey: [...live(adminKeys.review), kinds.join(","), reason ?? "all"],
+    queryKey,
     queryFn: ({ pageParam }) => liveReviewQueuePage(kinds, reason, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (last: QueuePage) => last.nextCursor,
@@ -182,6 +184,7 @@ export function useReviewQueue(reason: ReviewReason | null) {
       fetching: false,
       reload: () => {},
       loadMore: () => {},
+      refreshTotal: async () => {},
     };
   }
   const items = q.data?.pages.flatMap((p) => p.items) ?? [];
@@ -213,6 +216,17 @@ export function useReviewQueue(reason: ReviewReason | null) {
     loadMore: () => {
       if (q.hasNextPage && !q.isFetchingNextPage && !q.isFetchNextPageError) void q.fetchNextPage();
     },
+    refreshTotal: async () => {
+      const { total } = await liveReviewQueuePage(kinds, reason, null);
+      queryClient.setQueryData<InfiniteData<QueuePage>>(
+        queryKey,
+        (data) =>
+          data && {
+            ...data,
+            pages: data.pages.map((page, i) => (i === 0 ? { ...page, total } : page)),
+          },
+      );
+    },
   };
 }
 
@@ -228,7 +242,7 @@ export function useReviewDetail(id: string) {
 }
 
 /**
- * 승인·반려 뒤: 대기열은 다시 받지 않고(받아 둔 페이지가 많으면 페이지마다 다시 불러요) 건수만 하나 줄이고, 사이드바 숫자만 다시 받아요.
+ * 승인·반려 뒤에 사이드바 건수를 다시 받아요. 대기열 건수는 현재 필터의 첫 페이지로 확인합니다.
  * 처리한 건은 「승인함·반려함」으로 남았다가 화면을 다시 열면 빠져요. 관리자 화면 전체({@link useSetAdminCounts})는 다시 받지 않아요
  */
 export function useReviewDecided() {
@@ -240,16 +254,6 @@ export function useReviewDecided() {
         setCounts({ reviewPending: pending });
         return;
       }
-      queryClient.setQueriesData<InfiniteData<QueuePage>>(
-        { queryKey: live(adminKeys.review) },
-        (data) =>
-          data && {
-            ...data,
-            pages: data.pages.map((p, i) =>
-              i === 0 ? { ...p, total: Math.max(0, p.total - 1) } : p,
-            ),
-          },
-      );
       void queryClient.invalidateQueries({ queryKey: live(adminKeys.counts), exact: true });
     },
     [queryClient, setCounts],

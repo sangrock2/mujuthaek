@@ -513,6 +513,13 @@ type ReviewQueuePage = {
     sourceCode: string | null;
     rawVersion: number | null;
     queuedAt: string | null;
+    noticeGroupId?: string | null;
+    members?: {
+      id: string;
+      title: string | null;
+      rawVersion: number | null;
+      sourceKind: string | null;
+    }[];
   }[];
   nextCursor: string | null;
 };
@@ -548,6 +555,13 @@ export async function liveReviewQueuePage(
     return {
       ...ROW,
       id,
+      noticeGroupId: i.noticeGroupId ?? undefined,
+      reviewMembers: i.members?.map((member) => ({
+        id: `n:${member.id}`,
+        title: member.title ?? "(제목 없음)",
+        sourceKind: member.sourceKind,
+        version: member.rawVersion != null ? `v${member.rawVersion}` : "-",
+      })),
       reason: REASON[i.reason] ?? "low",
       kind: benefit ? `혜택 정책 · ${source}` : "공고",
       title: i.title ?? "(제목 없음)",

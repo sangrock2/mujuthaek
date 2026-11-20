@@ -354,7 +354,7 @@ class _Assembler:
                     item["id"] = new_id
         for item in part.get("schedules") or []:
             if isinstance(item, dict) and item.get("endStatus") == "FIXED" and item.get("endsAt") is None and isinstance(item.get("startsAt"), dict):
-                if item["startsAt"].get("precision") == "DAY":
+                if item["startsAt"].get("precision") == "DAY" and "APPLICATION" not in (item.get("kinds") or []):
                     item["endsAt"] = copy.deepcopy(item["startsAt"])
                 elif item.get("endCondition") is None:  # 시각(MINUTE)·월(MONTH)
                     item["endStatus"] = "NOT_IN_SOURCE"

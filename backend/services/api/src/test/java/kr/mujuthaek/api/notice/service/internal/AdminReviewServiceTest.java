@@ -2,6 +2,7 @@ package kr.mujuthaek.api.notice.service.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -14,6 +15,7 @@ import kr.mujuthaek.api.notice.client.ExtractionReviewProperties;
 import kr.mujuthaek.api.notice.dto.request.AdminReviewDecisionRequest;
 import kr.mujuthaek.api.notice.dto.request.AdminReviewDecisionRequest.RejectReason;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDetailResponse.Issue;
+import kr.mujuthaek.api.notice.repository.NoticeQueries;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.ExpectedCount;
@@ -55,7 +57,8 @@ class AdminReviewServiceTest {
     return new AdminReviewService(
         client,
         java.time.Clock.fixed(
-            java.time.Instant.parse("2026-10-25T03:00:00Z"), java.time.ZoneOffset.UTC));
+            java.time.Instant.parse("2026-10-25T03:00:00Z"), java.time.ZoneOffset.UTC),
+        mock(NoticeQueries.class));
   }
 
   private void expectList(int times) {
@@ -67,7 +70,7 @@ class AdminReviewServiceTest {
   /** 건수·남은 건수: 가장 오래된 한 건과 전체 건수만 받아요. */
   private void expectHead() {
     server
-        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1"))
+        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1&groupBy=notice"))
         .andRespond(
             withSuccess(
                 """
@@ -82,7 +85,7 @@ class AdminReviewServiceTest {
   void countsUseTheTotalNotTheTruncatedListLength() {
     var service = service();
     server
-        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1"))
+        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1&groupBy=notice"))
         .andRespond(
             withSuccess(
                 """

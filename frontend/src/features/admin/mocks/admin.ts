@@ -99,6 +99,8 @@ export type SourcePartKind = "ok" | "low" | "plain";
 
 export type ReviewItem = {
   id: string;
+  noticeGroupId?: string;
+  reviewMembers?: { id: string; title: string; sourceKind: string | null; version: string }[];
   reason: ReviewReason;
   kind: string;
   title: string;

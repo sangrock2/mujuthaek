@@ -10,7 +10,7 @@ import { useReviewDecided, useReviewDetail, useReviewQueue } from "@/features/ad
 import { MOCK_TRACE_REVIEW_ID, traceJobOf } from "@/features/admin/trace";
 import { cn } from "@/shared/lib/cn";
 import { safeExternalUrl } from "@/shared/lib/safeUrl";
-import type { ReviewReason, SourcePartKind } from "@/features/admin/mocks/admin";
+import type { ReviewItem, ReviewReason, SourcePartKind } from "@/features/admin/mocks/admin";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 
 const REASON: Record<ReviewReason, { label: string; tone: "ok" | "check" | "danger" }> = {
@@ -36,6 +36,16 @@ const REJECT_REASONS = ["중복 공고", "원문과 다름", "서비스 대상 �
 
 type Done = "ok" | "no";
 
+function groupKey(item: ReviewItem) {
+  return item.noticeGroupId ?? item.id;
+}
+
+const SOURCE_KIND: Record<string, string> = {
+  NOTICE: "원공고",
+  CORRECTION: "정정공고",
+  FOLLOW_UP: "후속 안내",
+};
+
 export function AdminWebReview() {
   const [filter, setFilter] = useState<"all" | ReviewReason>("all");
   // 사유로 거르기는 서버가 해요(대기열을 20건씩 이어 받아서, 받은 것만 거르면 뒤 페이지의 건이 빠져요)
@@ -43,7 +53,7 @@ export function AdminWebReview() {
   const decided = useReviewDecided();
   const items = queue.items;
 
-  const [sel, setSel] = useState(items[0].id);
+  const [selection, setSelection] = useState<{ group: string; member: string } | null>(null);
   const [done, setDone] = useState<Record<string, Done>>({});
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   const [rejectReason, setRejectReason] = useState<string | null>(null);
@@ -51,8 +61,13 @@ export function AdminWebReview() {
   const [error, setError] = useState<string | null>(null);
 
   const shown = items;
-  const selId = shown.some((i) => i.id === sel) ? sel : items[0].id;
-  const row = items.find((i) => i.id === selId) ?? items[0];
+  const row = items.find((i) => groupKey(i) === selection?.group) ?? items[0];
+  const members = row.reviewMembers ?? [];
+  const member =
+    members.find((i) => i.id === selection?.member) ??
+    members.find((i) => !done[i.id]) ??
+    members[0];
+  const memberId = member?.id ?? row.id;
   // 대기열 아래 끝이 보이면 다음 20건을 받아요
   const listRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -68,19 +83,24 @@ export function AdminWebReview() {
     return () => seen.disconnect();
   }, [more, loadMore, items.length]);
   // 대기열 줄에는 원문·추출 결과가 없어요. 고른 건만 상세를 받아 채워요(목업은 줄에 다 있어요)
-  const detail = useReviewDetail(row.id);
-  const cur = detail.data ?? row;
+  const detail = useReviewDetail(memberId);
+  const cur =
+    detail.data ??
+    (member ? { ...row, id: member.id, title: member.title, version: member.version } : row);
   /** 상세(승인·반려에 쓰는 칸 정보)를 받기 전에는 처리하지 않아요 */
   const ready = USE_MOCKS || !!detail.data;
   const curEdits = edits[cur.id] ?? {};
   const edited = Object.keys(curEdits).length > 0;
   const curDone = done[cur.id];
-  // 실제 연결은 처리할 때마다 받아 둔 건수를 하나씩 줄여요(useReviewDecided). 처리한 수를 또 빼지 않아요
+  // 운영에서는 그룹의 마지막 작업까지 처리됐는지 서버가 다시 집계해요.
   const pending = !USE_MOCKS ? queue.total : queue.total - Object.keys(done).length;
   const meta = reviewMeta.get(cur.id);
   /** 건을 바꾸면 반려 사유·오류도 그 건 것이 아니므로 비워요 */
-  const select = (id: string) => {
-    setSel(id);
+  const select = (group: ReviewItem, id?: string) => {
+    setSelection({
+      group: groupKey(group),
+      member: id ?? group.reviewMembers?.find((i) => !done[i.id])?.id ?? group.id,
+    });
     setRejectReason(null);
     setError(null);
   };
@@ -114,16 +134,19 @@ export function AdminWebReview() {
     const next = { ...done, [cur.id]: kind };
     setDone(next);
     decided(queue.total - Object.keys(next).length);
+    void queue.refreshTotal().catch(() => {
+      // 검수 처리는 이미 끝났어요. 숫자는 목록을 다시 열 때 갱신돼요.
+    });
   };
 
   /** 다음 건. 받은 마지막 건이면 다음 20건을 받고(받으면 그때 다시 눌러요), 다 받았으면 처음으로 */
   const goNext = () => {
-    const idx = items.findIndex((i) => i.id === cur.id);
+    const idx = items.findIndex((i) => groupKey(i) === groupKey(row));
     if (idx === items.length - 1 && more) {
       loadMore();
       return;
     }
-    select(items[(idx + 1) % items.length].id);
+    select(items[(idx + 1) % items.length]);
   };
 
   const reason = REASON[cur.reason];
@@ -156,7 +179,7 @@ export function AdminWebReview() {
                     ? "대기열 불러오는 중"
                     : "대기열 확인 필요"}
               </span>
-              <span className="text-text-sub text-[13px]">오래된 순</span>
+              <span className="text-text-sub text-[13px]">공고·정책별 · 오래된 순</span>
             </div>
             <div role="group" aria-label="검수 사유" className="flex flex-wrap gap-[6px]">
               {FILTERS.map((f) => {
@@ -196,14 +219,15 @@ export function AdminWebReview() {
             className="flex min-h-0 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-wrap:anywhere]"
           >
             {shown.map((q) => {
-              const on = q.id === selId;
+              const on = groupKey(q) === groupKey(row);
               const r = REASON[q.reason];
+              const groupMembers = q.reviewMembers ?? [];
               return (
                 <button
-                  key={q.id}
+                  key={groupKey(q)}
                   type="button"
                   aria-pressed={on}
-                  onClick={() => select(q.id)}
+                  onClick={() => select(q)}
                   className={cn(
                     "border-t-line-soft text-text flex cursor-pointer flex-col gap-[6px] border-0 border-t border-l-4 border-solid py-[14px] pr-[18px] pl-[14px] text-left",
                     on ? "bg-row-selected border-l-brand" : "bg-surface border-l-transparent",
@@ -217,7 +241,10 @@ export function AdminWebReview() {
                   </span>
                   <span className="text-[15px] font-bold">{q.title}</span>
                   <span className="text-text-sub text-[13px]">
-                    {q.source} · {statusText(q.id)}
+                    {q.source} ·{" "}
+                    {groupMembers.length > 1
+                      ? `검수 문서 ${groupMembers.filter((item) => !done[item.id]).length}건 남음`
+                      : statusText(q.id)}
                   </span>
                 </button>
               );
@@ -282,6 +309,23 @@ export function AdminWebReview() {
                   </a>
                 )}
               </div>
+              {members.length > 1 && (
+                <label className="flex w-full flex-col gap-[6px] text-[14px] font-semibold">
+                  이 공고의 검수 문서
+                  <select
+                    className="border-line-soft bg-surface text-text min-h-[44px] w-full rounded-sm border px-[12px]"
+                    value={memberId}
+                    onChange={(event) => select(row, event.target.value)}
+                  >
+                    {members.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {SOURCE_KIND[item.sourceKind ?? ""] ?? "검수 문서"} · {item.title} ·{" "}
+                        {item.version} · {statusText(item.id)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </section>
 
             <div className="grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-[16px]">
