@@ -16,6 +16,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import kr.mujuthaek.api.area.geocode.SearchOutcome.Failed;
 import kr.mujuthaek.api.area.geocode.SearchOutcome.Found;
 import kr.mujuthaek.api.area.geocode.SearchOutcome.NotFound;
@@ -72,7 +74,7 @@ class JusoSearchClientTest {
     form.add("confmKey", KEY);
     form.add("keyword", "부산광역시 중구 초량상로 1-2");
     form.add("currentPage", "1");
-    form.add("countPerPage", "10");
+    form.add("countPerPage", "100");
     form.add("resultType", "json");
     server
         .expect(once(), requestTo(URL))
@@ -116,6 +118,34 @@ class JusoSearchClientTest {
     assertThat(((Found) outcome).results()).hasSize(2);
     assertThat(((Found) outcome).totalCount()).isEqualTo(2);
     assertThat(((Found) outcome).results().get(1).underground()).isTrue();
+  }
+
+  @Test
+  void looksAtLaterPagesBeforeSelectingAnExactAddress() {
+    var client = client(KEY);
+    String firstPage =
+        IntStream.rangeClosed(1, 100)
+            .mapToObj(n -> juso("1168010100", "테헤란로", "0", String.valueOf(n), "0"))
+            .collect(Collectors.joining(","));
+    server
+        .expect(once(), requestTo(URL))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("currentPage=1&")))
+        .andRespond(withSuccess(body("0", "101", firstPage), MediaType.APPLICATION_JSON));
+    server
+        .expect(once(), requestTo(URL))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("currentPage=2&")))
+        .andRespond(
+            withSuccess(
+                body("0", "101", juso("1168010100", "테헤란로", "0", "152", "0")),
+                MediaType.APPLICATION_JSON));
+
+    var found = (Found) client.search("서울특별시 강남구 테헤란로 152");
+    assertThat(found.results()).hasSize(101);
+    assertThat(
+            JusoCandidates.pick(
+                found, AddressParser.parse("서울특별시 강남구 테헤란로 152"), "1168000000", "11680"))
+        .hasValueSatisfying(candidate -> assertThat(candidate.buildingMain()).isEqualTo(152));
+    server.verify();
   }
 
   @Test
