@@ -28,7 +28,10 @@ PUBLISH = {
     'collector': ('raw.notice.collected', 'raw.policy.collected', 'area.source.ready'),
     'extraction': ('extraction.completed', 'policy.extracted'),
 }
-RETRIES = ('mujuthaek.raw.collected', 'mujuthaek.raw.policy', 'mujuthaek.raw.policy.dlq')
+RETRIES = ('mujuthaek.raw.collected', 'mujuthaek.raw.collected.dlq',
+           'mujuthaek.raw.policy', 'mujuthaek.raw.policy.dlq')
+RECOVERY_USER = 'mujuthaek-api-recovery'
+RECOVERY_QUEUES = ('mujuthaek.extraction.completed', 'mujuthaek.extraction.completed.dlq')
 # name -> (runtime consumer, event bindings, dead-letter routing key; None means no DLX argument)
 QUEUES = {
     'mujuthaek.area.source-ready': ('api', ('area.source.ready',), 'area.source.ready'),
@@ -108,9 +111,33 @@ def topology(passwords):
             bind(name, EVENTS, key)
         if dead_key:
             bind(name + '.dlq', DLX, dead_key)
-    for queue in RETRIES:
+    for queue in RETRIES + RECOVERY_QUEUES:
         bind(queue, RETRY, queue)
     return result
+
+
+def recovery_routes():
+    """Additive fragment for already provisioned brokers."""
+    return {
+        'bindings': [
+            {'source': RETRY, 'vhost': VHOST, 'destination': name, 'destination_type': 'queue',
+             'routing_key': name, 'arguments': {}}
+            for name in ('mujuthaek.raw.collected.dlq', *RECOVERY_QUEUES)
+        ],
+        'topic_permissions': [entry for entry in topic_permissions('extraction') if entry['exchange'] == RETRY],
+    }
+
+
+def recovery_definitions(password):
+    """Temporary operator identity, absent from regular application definitions."""
+    return {
+        'users': [{'name': RECOVERY_USER, 'password_hash': password_hash(password),
+                   'hashing_algorithm': 'rabbit_password_hashing_sha256', 'tags': []}],
+        'permissions': [{'user': RECOVERY_USER, 'vhost': VHOST, 'configure': '^$',
+                         'write': exact((RETRY,)), 'read': exact((RECOVERY_QUEUES[1],))}],
+        'topic_permissions': [{'user': RECOVERY_USER, 'vhost': VHOST, 'exchange': RETRY,
+                               'write': exact(RECOVERY_QUEUES), 'read': '^$'}],
+    }
 
 
 def storage_policy(service, bucket):
@@ -279,12 +306,23 @@ def main():
     create = sub.add_parser('prepare', help='Create local unprovisioned MQ credentials and IAM policy artifacts')
     for name in ('account', 'bucket', 'collector-user', 'out'):
         create.add_argument('--' + name, required=True)
+    recovery = sub.add_parser('prepare-recovery', help='Create private files for a temporary API DLQ recovery account')
+    recovery.add_argument('--out', type=Path, required=True)
     check = sub.add_parser('readiness', help='Check exported snapshots and write an explicit activation environment')
     for name in ('bundle', 'environment', 'broker-export', 'iam-evidence', 'compose-config', 'activation-file'):
         check.add_argument('--' + name, required=True)
     args = parser.parse_args()
     if args.command == 'prepare':
         result = prepare(args.account, args.bucket, args.collector_user, args.out)
+    elif args.command == 'prepare-recovery':
+        password = secrets.token_hex(32)
+        args.out.mkdir(mode=0o700, parents=False, exist_ok=False)
+        write_private_file(args.out / 'broker-recovery-routes.json', json.dumps(recovery_routes()) + '\n')
+        write_private_file(args.out / 'broker-recovery.json', json.dumps(recovery_definitions(password)) + '\n')
+        url = f'amqp://{RECOVERY_USER}:{password}@rabbitmq:5672/%2F'
+        write_private_file(args.out / 'recovery.env', f'BROKER_RECOVERY_URL={url}\n')
+        result = {'ok': True, 'created': ['broker-recovery-routes.json', 'broker-recovery.json', 'recovery.env'],
+                  'network_calls': 0}
     else:
         env_path = Path(args.environment)
         if env_path.is_symlink() or not env_path.is_file() or env_path.stat().st_size > 64 * 1024:

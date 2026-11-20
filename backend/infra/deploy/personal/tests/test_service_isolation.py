@@ -38,6 +38,20 @@ class ServiceIsolation(unittest.TestCase):
         wrong = dict(self.passwords, api='f' * 64)
         self.assertFalse(isolation.check_broker(self.definitions, wrong)['mq.api.credentials'])
 
+    def test_recovery_account_only_reads_result_dlq_and_cannot_use_other_routes(self):
+        recovery = isolation.recovery_definitions('local-test-password')
+        permissions, = recovery['permissions']
+        topic, = recovery['topic_permissions']
+        queue, dead = isolation.RECOVERY_QUEUES
+        self.assertIsNotNone(re.fullmatch(permissions['read'], dead))
+        self.assertIsNone(re.fullmatch(permissions['read'], queue))
+        self.assertIsNone(re.fullmatch(permissions['write'], 'amq.default'))
+        self.assertIsNotNone(re.fullmatch(topic['write'], queue))
+        self.assertIsNone(re.fullmatch(topic['write'], 'mujuthaek.raw.policy'))
+        self.assertNotIn(isolation.RECOVERY_USER, [u['name'] for u in self.definitions['users']])
+        for binding in isolation.recovery_routes()['bindings']:
+            self.assertIn(binding, self.definitions['bindings'])
+
     def test_readers_cannot_write_or_read_backups(self):
         for service in ('api', 'extraction'):
             policy = isolation.storage_policy(service, 'synthetic-bucket')

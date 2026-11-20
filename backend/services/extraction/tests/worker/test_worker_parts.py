@@ -650,6 +650,7 @@ def test_failed_policy_message_is_moved_to_dlq_then_acked():
     }
     # 실패 이유를 헤더로 남깁니다(원래 헤더·속성은 그대로)
     props = published["properties"]
+    assert published["mandatory"] and props.delivery_mode == 2
     assert props.content_type == "application/json"
     assert props.headers["trace"] == "t1"
     assert props.headers["x-error-reason"] == "AI_FAILED:INVALID_JSON"
@@ -695,11 +696,18 @@ def test_replay_dlq_moves_messages_back_until_limit_or_empty():
         def __init__(self, bodies):
             self.bodies, self.calls = list(bodies), []
 
+        def confirm_delivery(self):
+            self.calls.append(("confirm",))
+
+        def queue_declare(self, queue, passive):
+            assert passive
+            return SimpleNamespace(method=SimpleNamespace(message_count=len(self.bodies)))
+
         def basic_get(self, queue, auto_ack):
             self.calls.append(("get", queue))
             if not self.bodies:
                 return None, None, None
-            return SimpleNamespace(delivery_tag=len(self.calls)), "props", self.bodies.pop(0)
+            return SimpleNamespace(delivery_tag=len(self.calls)), None, self.bodies.pop(0)
 
         def basic_publish(self, **kwargs):
             self.calls.append(("publish", kwargs["routing_key"], kwargs["body"]))
@@ -710,9 +718,9 @@ def test_replay_dlq_moves_messages_back_until_limit_or_empty():
     dlq, queue = worker.DLQ_TARGETS["policy"]
     assert (dlq, queue) == ("mujuthaek.raw.policy.dlq", "mujuthaek.raw.policy")
     channel = Channel([b"a", b"b", b"c"])
-    assert worker.replay_dlq(channel, dlq, queue, limit=2) == 2  # 한도까지만
+    assert worker.replay_dlq(channel, dlq, queue, limit=2).replayed == 2  # 한도까지만
     assert [c for c in channel.calls if c[0] == "publish"] == [("publish", queue, b"a"), ("publish", queue, b"b")]
-    assert worker.replay_dlq(channel, dlq, queue, limit=10) == 1  # 남은 것만, 비면 멈춤
+    assert worker.replay_dlq(channel, dlq, queue, limit=10).replayed == 1  # 남은 것만, 비면 멈춤
     assert worker.DLQ_TARGETS["notice"] == ("mujuthaek.raw.collected.dlq", "mujuthaek.raw.collected")
 
 
