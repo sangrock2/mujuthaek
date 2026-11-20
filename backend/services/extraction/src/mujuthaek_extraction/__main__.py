@@ -7,7 +7,7 @@
   review-api             검수 API만 실행
   declare                큐·교환기만 선언
   replay-dlq [--queue notice|policy] [--limit N]
-                         .dlq 메시지를 원래 큐로 되돌림 (원인을 고친 뒤 실행, 기본 policy·100건)
+                         .dlq 메시지를 원래 큐로 되돌림 (원인을 고친 뒤 실행, 기본 policy·10건)
 
 모델: 기본은 로컬 AI → (연결 안 됨·결과 부족) → 유료 API. 녹화 응답 재생은 EXTRACTION_MODEL_MODE=recorded (config.py 참고)
 """
@@ -39,7 +39,7 @@ def main() -> None:
     release_command.add_argument("--limit", type=int, default=100)
     replay_command = commands.add_parser("replay-dlq")
     replay_command.add_argument("--queue", choices=["notice", "policy"], default="policy")
-    replay_command.add_argument("--limit", type=int, default=100)
+    replay_command.add_argument("--limit", type=int, choices=range(1, 101), default=10, metavar="1-100")
     args = parser.parse_args()
 
     platform_logging.setup("extraction")
@@ -96,11 +96,11 @@ def main() -> None:
         connection.close()
     elif args.command == "replay-dlq":
         dlq, queue = worker.DLQ_TARGETS[args.queue]
-        connection = broker.connect(settings.rabbitmq_url)
-        channel = connection.channel()
-        worker.declare(channel)
-        print(f"{dlq} → {queue} 되돌림 {worker.replay_dlq(channel, dlq, queue, args.limit)}건")
-        connection.close()
+        with broker.connect(settings.rabbitmq_url, blocked_timeout=30) as connection:
+            channel = connection.channel()
+            worker.declare(channel)
+            result = worker.replay_dlq(channel, dlq, queue, args.limit)
+        print(f"{dlq} → {queue} 되돌림 {result.replayed}건, 재처리 한도 도달 {result.parked}건")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,11 @@ def test_managed_retry_cannot_bypass_topic_permissions_using_default_exchange(mo
     monkeypatch.setenv("MUJUTHAEK_MANAGED_TOPOLOGY", "true")
     channel = Mock()
     worker.publish_to_owned_queue(channel, worker.POLICY_DLQ, b"payload", None)
-    channel.basic_publish.assert_called_once_with(exchange=worker.RETRY_EXCHANGE, routing_key=worker.POLICY_DLQ, body=b"payload", properties=None)
+    published = channel.basic_publish.call_args.kwargs
+    assert published["exchange"] == worker.RETRY_EXCHANGE
+    assert published["routing_key"] == worker.POLICY_DLQ
+    assert published["body"] == b"payload"
+    assert published["mandatory"] and published["properties"].delivery_mode == 2
     with pytest.raises(ValueError):
         worker.publish_to_owned_queue(channel, "mujuthaek.notification", b"payload", None)
     assert channel.basic_publish.call_count == 1

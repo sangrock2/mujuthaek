@@ -13,9 +13,11 @@ def managed_topology() -> bool:
     return value in {"1", "true"}
 
 
-def connect(url: str, *, heartbeat: int = 60) -> pika.BlockingConnection:
+def connect(url: str, *, heartbeat: int = 60, blocked_timeout: int | None = None) -> pika.BlockingConnection:
     params = pika.URLParameters(url)
     params.heartbeat = heartbeat
     params.connection_attempts = 3
     params.retry_delay = 2
+    if blocked_timeout is not None:
+        params.blocked_connection_timeout = blocked_timeout
     return pika.BlockingConnection(params)
