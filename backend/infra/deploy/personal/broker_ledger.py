@@ -4,9 +4,11 @@ import argparse
 import json
 import subprocess
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid5
 
 POSTGRES = 'mujuthaek-personal-postgres-1'
+# Persisted namespace used by extraction.store._judgment_keys.
+JUDGMENT_NAMESPACE = UUID('5b0c8f9e-2f0a-4f41-9d7e-3f1c2a6b9d10')
 
 
 def read(database, sql):
@@ -25,6 +27,18 @@ def ids(values):
 
 def aggregate(select):
     return f"select coalesce(json_agg(x order by x.at, x.stage, to_jsonb(x)::text),'[]'::json) from ({select}) x;"
+
+
+def policy_receipt_keys(row):
+    keys = [str(uuid5(JUDGMENT_NAMESPACE, str(UUID(row['event_id']))))]
+    if row.get('reprocess') or type(row.get('raw_version')) is not int:
+        return keys
+    try:
+        policy = UUID(row.get('raw_policy_id') or '')
+    except ValueError:
+        return keys
+    keys.append(str(uuid5(JUDGMENT_NAMESPACE, f"{policy}/v{row['raw_version']}")))
+    return keys
 
 
 def trace(fetch, lookup_id, kind):
@@ -95,15 +109,24 @@ def plan(fetch, hours, limit, end=None):
     )
     results = {}
     for lane, producer, consumer, event_type, receipt_table in lanes:
+        fields = 'event_id, published_at'
+        if lane == 'policy_input':
+            fields += """,
+                payload->'payload'->>'rawPolicyId' raw_policy_id,
+                payload->'payload'->'version' raw_version,
+                payload->'payload'->'reprocess' reprocess"""
         rows = fetch(producer, f"""
             select coalesce(json_agg(x order by x.published_at, x.event_id),'[]'::json) from (
-                select event_id, published_at from outbox
+                select {fields} from outbox
                 where event_type='{event_type}' and published_at >= '{start.isoformat()}'::timestamptz
                   and published_at < '{end.isoformat()}'::timestamptz
                 order by published_at, event_id limit {int(limit) + 1}
             ) x;
         """)
-        selected = ids([row['event_id'] for row in rows[:limit]])
+        batch = rows[:limit]
+        policy_mapping = {row['event_id']: policy_receipt_keys(row) for row in batch} if lane == 'policy_input' else {}
+        selected = ids(dict.fromkeys(key for keys in policy_mapping.values() for key in keys) if policy_mapping
+                       else (row['event_id'] for row in batch))
         acked = set(fetch(consumer, f"select coalesce(json_agg(event_id),'[]'::json) from "
                                     f"{receipt_table} where event_id in ({selected});"))
         attempts = set()
@@ -113,7 +136,9 @@ def plan(fetch, hours, limit, end=None):
         elif lane == 'notice_result':
             acked.update(fetch(consumer, f"select coalesce(json_agg(event_id),'[]'::json) from "
                                         f"notice.extraction_results where event_id in ({selected});"))
-        missing = [row['event_id'] for row in rows[:limit] if row['event_id'] not in acked | attempts]
+        elif policy_mapping:
+            acked = {event for event, keys in policy_mapping.items() if acked.intersection(keys)}
+        missing = [row['event_id'] for row in batch if row['event_id'] not in acked | attempts]
         evidence_key = 'needs_manual_policy_review' if lane == 'policy_input' else 'without_consumer_evidence'
         results[lane] = {'scanned': min(len(rows), limit), 'truncated': len(rows) > limit,
                          'consumer_record': len(acked), 'attempt_without_receipt': len(attempts - acked),
