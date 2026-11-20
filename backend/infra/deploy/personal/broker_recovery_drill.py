@@ -97,9 +97,8 @@ def measure(docker, image, count):
                 publish(channel, isolation.EVENTS, 'extraction.completed', event)
             for _ in range(count // 2):
                 record(channel, receipts)
-            pending = [event for event in events if not receipts.execute(
-                'select 1 from receipts where id=?', (event,)).fetchone()]
-            assert channel.queue_declare(QUEUE, passive=True).method.message_count == len(pending)
+            already_processed = count // 2
+            assert channel.queue_declare(QUEUE, passive=True).method.message_count == count - already_processed
             admin.close()
             since = time.monotonic()
             command('kill', original)
@@ -112,6 +111,10 @@ def measure(docker, image, count):
                 channel = new.channel()
                 channel.confirm_delivery()
                 assert channel.queue_declare(QUEUE, passive=True).method.message_count == 0
+                pending = [event for event in events if not receipts.execute(
+                    'select 1 from receipts where id=?', (event,)).fetchone()]
+                assert len(pending) == count - already_processed
+                result['reconciliation_ready_s'] = seconds(since)
                 for event in pending:
                     publish(channel, isolation.EVENTS, 'extraction.completed', event)
                 record(channel, receipts)
@@ -132,7 +135,7 @@ def measure(docker, image, count):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--docker-host')
-    parser.add_argument('--events', type=int, choices=range(2, 101), default=30, metavar='2-100')
+    parser.add_argument('--events', type=int, choices=range(2, 10001), default=30, metavar='2-10000')
     args = parser.parse_args()
     docker = ['docker'] + (['--host', args.docker_host] if args.docker_host else [])
     print(json.dumps(measure(docker, 'rabbitmq:4.1-management', args.events)))
