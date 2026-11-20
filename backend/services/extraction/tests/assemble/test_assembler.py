@@ -379,7 +379,7 @@ def test_missing_field_records_follow_items_after_bad_ones_are_dropped():
     assert [m["target"] for m in part["missingFields"]] == ["/eligibility/1/referenceTime", "/eligibility/11", "/schedules/0/endsAt"]
 
 
-def test_duplicate_ids_are_renamed_and_one_day_fixed_schedule_gets_its_end():
+def test_duplicate_ids_are_renamed_and_application_end_is_read_from_source():
     # 실측(OpenAI dcco-24788): 가점표 행마다 같은 id → DUPLICATE_ID로 7행이 빠짐, 공고일을 FIXED + endsAt 없음으로 적어 형식 오류로 빠짐
     data = example("housing")
     part = copy.deepcopy(ai_part(data))
@@ -392,11 +392,11 @@ def test_duplicate_ids_are_renamed_and_one_day_fixed_schedule_gets_its_end():
     assert first["startsAt"]["precision"] == "MINUTE"
     assert (schedules[1]["endsAt"], schedules[1]["endStatus"]) == (None, "NOT_IN_SOURCE")
     assert ("AI_OUTPUT_ID_RENAMED", "/schedules") in {(i["code"], i["target"]) for i in result.issues}
-    # 날짜(DAY)만 있는 하루짜리 일정은 시작값을 끝으로 씁니다
+    # 접수 시작이 날짜만 있어도 같은 날 끝난다고 가정하지 않고 원문 마감을 복원합니다.
     day = {"precision": "DAY", "value": first["startsAt"]["value"][:10]}
-    part["schedules"][-1] = {**copy.deepcopy(first), "id": "one-day", "startsAt": day, "endStatus": "FIXED", "endsAt": None}
-    one_day = assemble([part], source_for("housing", data)).candidate["schedules"][-1]
-    assert (one_day["endsAt"], one_day["endStatus"]) == (day, "FIXED")
+    part["schedules"][-1] = {**copy.deepcopy(first), "id": "missing-end", "startsAt": day, "endStatus": "FIXED", "endsAt": None}
+    recovered = assemble([part], source_for("housing", data)).candidate["schedules"][-1]
+    assert (recovered["endsAt"], recovered["endStatus"]) == (first["endsAt"], "FIXED")
 
 
 def test_code_part_review_issue_points_to_its_supply_group():

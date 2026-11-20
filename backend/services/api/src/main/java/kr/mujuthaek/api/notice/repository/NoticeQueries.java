@@ -3,7 +3,9 @@ package kr.mujuthaek.api.notice.repository;
 import java.sql.Date;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import kr.mujuthaek.api.common.pagination.CursorKey;
@@ -30,6 +32,34 @@ public class NoticeQueries {
 
   public NoticeQueries(JdbcTemplate jdbc) {
     this.jdbc = new NamedParameterJdbcTemplate(jdbc);
+  }
+
+  /** 공개된 주거공고의 원본별 마감 여부. 합쳐진 출처와 정정문도 대표 공고의 상태를 따릅니다. */
+  public Map<UUID, Boolean> publishedHousingReviewStates() {
+    return jdbc.getJdbcOperations()
+        .query(
+            """
+            with roots as (
+              select raw_post_id, id notice_id from notice.notices
+              union
+              select root_post_id, notice_id from notice.notice_source_heads
+              union
+              select raw_post_id, notice_id from notice.notice_posts
+            )
+            select r.raw_post_id, bool_and(p.status = 'CLOSED') closed
+            from roots r
+            join notice.notices n on n.id = r.notice_id
+            join notice.notices p on p.id = coalesce(n.merged_into, n.id)
+            where p.current_version > 0 and not p.hidden and p.field = 'HOUSING'
+            group by r.raw_post_id
+            """,
+            rs -> {
+              Map<UUID, Boolean> closed = new HashMap<>();
+              while (rs.next()) {
+                closed.put(rs.getObject("raw_post_id", UUID.class), rs.getBoolean("closed"));
+              }
+              return closed;
+            });
   }
 
   public record ListRow(

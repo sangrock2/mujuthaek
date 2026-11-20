@@ -19,6 +19,7 @@ from mujuthaek_platform.ids import uuid7
 
 MAX_ATTEMPTS = 3  # FAILED 글은 3번까지 다시 시도
 ORPHAN_FOLLOW_UP = "원래 모집공고를 찾지 못한 후속 안내"  # 등록할 때 원공고가 아직 없던 후속 안내(목록 읽기 뒤 다시 찾음)
+SCOPE_UNVERIFIED = "현재 또는 예정된 모집 일정을 확인하지 못함"
 
 SKIPPED, PENDING, DONE, FAILED = "SKIPPED", "PENDING", "DONE", "FAILED"
 # 처음 수집 개수 제한 (core/intake.py): 고르기 전까지 기다리는 글, 고를 때 빠져 쓰지 않는 글 (다시 큐에 넣지 않아요)
@@ -104,6 +105,7 @@ class Store(Protocol):
     def save_board_state(self, source_code: str, board_key: str, state: BoardState) -> None: ...
     # 글
     def find_post(self, source_code: str, post_key: str) -> PostRow | None: ...
+    def post_by_id(self, post_id: UUID) -> PostRow | None: ...
     def insert_post(self, post: PostRow) -> None: ...
     def update_list_fields(self, post_id: UUID, list_status: str | None, deadline_on: date | None, list_item: dict[str, Any] | None = None) -> None: ...
     def set_parent(self, post_id: UUID, parent_post_id: UUID) -> None: ...
@@ -116,6 +118,8 @@ class Store(Protocol):
     def latest_hash(self, post_id: UUID) -> tuple[int, str] | None: ...
     def latest_files(self, post_id: UUID) -> list[SavedFile]: ...
     def mark_done(self, post_id: UUID) -> None: ...
+    def mark_scope_skipped(self, post_id: UUID) -> None: ...
+    def reopen_scope(self, post_id: UUID, status: str, reason: str | None) -> None: ...
     def mark_failed(self, post_id: UUID, error: str) -> None: ...
     def save_version(self, new: NewVersion) -> None: ...
     # 처음 수집 개수 제한: 고르기 전이면 None
@@ -187,6 +191,10 @@ class PostgresStore:
     # ── 글 ─────────────────────────────────────────────────────
     def find_post(self, source_code: str, post_key: str) -> PostRow | None:
         row = self.conn.execute(f"select {POST_COLUMNS} from raw_posts where source_code = %s and post_key = %s", (source_code, post_key)).fetchone()
+        return _row_to_post(row) if row else None
+
+    def post_by_id(self, post_id: UUID) -> PostRow | None:
+        row = self.conn.execute(f"select {POST_COLUMNS} from raw_posts where id = %s", (post_id,)).fetchone()
         return _row_to_post(row) if row else None
 
     def insert_post(self, post: PostRow) -> None:
@@ -303,6 +311,18 @@ class PostgresStore:
         self.conn.execute(
             "update raw_posts set status = 'FAILED', attempts = attempts + 1, last_error = %s, updated_at = now() where id = %s",
             (error[:2000], post_id),
+        )
+
+    def mark_scope_skipped(self, post_id: UUID) -> None:
+        self.conn.execute(
+            "update raw_posts set status = 'SKIPPED', attempts = 0, last_error = %s, updated_at = now() where id = %s and status in ('PENDING', 'FAILED')",
+            (SCOPE_UNVERIFIED, post_id),
+        )
+
+    def reopen_scope(self, post_id: UUID, status: str, reason: str | None) -> None:
+        self.conn.execute(
+            "update raw_posts set status = %s, last_error = %s, updated_at = now() where id = %s and status = 'SKIPPED' and last_error = %s",
+            (status, reason, post_id, SCOPE_UNVERIFIED),
         )
 
     def save_version(self, new: NewVersion) -> None:

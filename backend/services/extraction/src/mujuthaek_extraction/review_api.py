@@ -268,11 +268,15 @@ class ReviewService:
         reason: str | None = None,
         after_at: str | None = None,
         after_id: str | None = None,
+        group_by: str | None = None,
+        published_closed: dict[str, bool] | None = None,
     ) -> tuple[int, Any]:
         """검수 목록(오래된 것부터 limit건, 기본·최대 1000)과 그 조건의 전체 건수 total. 건수는 목록 길이가 아니라 total을 쓰세요(2026-10-25 검토).
         reason(MUST·CHECK·FORMAT)으로 거르고, afterAt·afterId(앞 페이지 마지막 건)부터 이어 받아요. hasMore면 다음 페이지가 있어요."""
         if status not in REVIEW_LIST_STATUSES:
             return 400, {"error": "status는 " + "·".join(REVIEW_LIST_STATUSES) + " 중 하나입니다."}
+        if group_by is not None and (group_by != "notice" or status != "PENDING"):
+            return 400, {"error": "공고 단위 그룹은 대기 중인 검수에만 적용합니다."}
         size = _list_limit(limit)
         if size is None:
             return 400, {"error": f"limit은 1~{MAX_LIST_LIMIT} 사이 정수입니다."}
@@ -282,8 +286,12 @@ class ReviewService:
         if isinstance(after, str):
             return 400, {"error": after}
         with self.store_session() as store:
-            items, more = _page(store.reviews(status, size + 1, reason, after), size)
-            return 200, {"items": items, "total": store.review_count(status, reason), "hasMore": more}
+            if group_by == "notice":
+                items, more = _page(store.notice_review_groups(size + 1, reason, after, published_closed), size)
+                return 200, {"items": items, "total": store.notice_review_group_count(reason, published_closed), "hasMore": more}
+            scope = {} if published_closed is None else {"published_closed": published_closed}
+            items, more = _page(store.reviews(status, size + 1, reason, after, **scope), size)
+            return 200, {"items": items, "total": store.review_count(status, reason, **scope), "hasMore": more}
 
     def detail(self, job_id: str) -> tuple[int, Any]:
         with self.store_session() as store:
@@ -578,7 +586,14 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
             if url.path == "/reviews":
                 query = {k: v[0] for k, v in parse_qs(url.query).items()}
                 return self._send(
-                    *service.list(query.get("status", "PENDING"), query.get("limit"), query.get("reason"), query.get("afterAt"), query.get("afterId"))
+                    *service.list(
+                        query.get("status", "PENDING"),
+                        query.get("limit"),
+                        query.get("reason"),
+                        query.get("afterAt"),
+                        query.get("afterId"),
+                        query.get("groupBy"),
+                    )
                 )
             if url.path == "/reviews/activity":
                 query = parse_qs(url.query)
@@ -619,6 +634,23 @@ def handler_for(service: ReviewService, token: str | None = None, health: Any = 
         def do_POST(self) -> None:  # noqa: N802
             if not self._allowed():
                 return self._send(401, {"error": "인증이 필요합니다."})
+            url = urlparse(self.path)
+            if url.path == "/reviews":
+                published_closed = self._body()
+                if published_closed is None or not all(isinstance(value, bool) for value in published_closed.values()):
+                    return self._send(400, {"error": BAD_BODY})
+                query = {k: v[0] for k, v in parse_qs(url.query).items()}
+                return self._send(
+                    *service.list(
+                        "PENDING",
+                        query.get("limit"),
+                        query.get("reason"),
+                        query.get("afterAt"),
+                        query.get("afterId"),
+                        query.get("groupBy"),
+                        published_closed,
+                    )
+                )
             if urlparse(self.path).path in ("/reviews/reopen", "/benefit-reviews/reopen"):
                 body = self._body()
                 if body is None:
