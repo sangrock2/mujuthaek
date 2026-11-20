@@ -102,6 +102,40 @@ test("정상 조회된 빈 검수 목록은 0건으로 표시한다", async ({ p
   await expect(queue.getByRole("alert")).toHaveCount(0);
 });
 
+test("원공고와 정정공고를 대기 한 건으로 표시하고 각 검수 문서를 열 수 있다", async ({ page }) => {
+  await mockAdmin(page, (route) =>
+    route.fulfill({
+      json: {
+        total: 1,
+        items: [
+          {
+            ...item(firstId, "가상 임대주택 모집"),
+            noticeGroupId: "source-1",
+            members: [
+              { id: firstId, title: "가상 임대주택 모집", rawVersion: 1, sourceKind: "NOTICE" },
+              { id: secondId, title: "접수일 정정", rawVersion: 1, sourceKind: "CORRECTION" },
+            ],
+          },
+        ],
+        nextCursor: null,
+      },
+    }),
+  );
+  await page.goto("/admin/review");
+  const queue = page.getByRole("region", { name: "검수 대기열", exact: true });
+  await expect(queue).toContainText("대기열 1건");
+  await expect(queue).toContainText("검수 문서 2건 남음");
+  await expect(queue.getByRole("button", { name: /접수일 정정/ })).toHaveCount(0);
+  const choice = page.getByLabel("이 공고의 검수 문서");
+  await expect(choice).toHaveValue(`n:${firstId}`);
+  const requested = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith(`/admin/reviews/${secondId}`),
+  );
+  await choice.selectOption(`n:${secondId}`);
+  expect((await requested).status()).toBe(200);
+  await expect(queue).toContainText("대기열 1건");
+});
+
 test("다음 페이지 실패 시 기존 건수를 유지하고 실패한 페이지만 재시도한다", async ({ page }) => {
   let nextAvailable = false;
   let firstPageRequests = 0;

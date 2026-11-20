@@ -30,5 +30,11 @@ public record AdminReviewQueueResponse(int total, List<Item> items, String nextC
       String title,
       String sourceCode,
       Integer rawVersion,
-      OffsetDateTime queuedAt) {}
+      OffsetDateTime queuedAt,
+      String noticeGroupId,
+      List<Member> members) {}
+
+  /** 같은 원공고에 속한 개별 검수 작업. */
+  public record Member(
+      String id, String reason, String title, Integer rawVersion, String sourceKind) {}
 }

@@ -232,6 +232,61 @@ REVIEW_REASON_SQL = {
     "CHECK": "j.status not in ('IN_REVIEW', 'INTAKE_REVIEW')",
 }
 
+# 정정·후속 게시물은 수집기가 원공고를 가리킵니다. 연결이 없는 작업은 원본 ID로, 원본도 없으면 작업 ID로 구분합니다.
+_REVIEW_GROUP_ID = """
+    coalesce(case when j.raw_event->'payload'->>'kind' in ('CORRECTION', 'FOLLOW_UP')
+        and j.raw_event->'payload'->>'supersedesPostId' ~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+        then (j.raw_event->'payload'->>'supersedesPostId')::uuid end, j.raw_post_id, j.id)
+"""
+
+# 다른 문서의 제출·발표일과 조건부 종료일을 주거공고 마감으로 쓰지 않습니다.
+# 같은 그룹의 원공고/정정공고에 미확인 일정이 있으면 미공개 그룹은 계속 검수합니다.
+_ACTIVE_REVIEW_GROUPS = f"""
+    with published_states as (select %s::jsonb states),
+    pending_windows as (
+        select {_REVIEW_GROUP_ID} group_id, j.field,
+               (p.states->>({_REVIEW_GROUP_ID})::text)::boolean root_closed,
+               (p.states->>j.raw_post_id::text)::boolean member_closed,
+               j.raw_event->'payload'->>'kind' kind,
+               case when j.candidate is null then null else (
+                   select case when count(*) = 0 then null else bool_and(coalesce(
+                       s->>'endStatus' = 'FIXED'
+                       and left(s->'endsAt'->>'value', 10) ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$'
+                       and left(s->'endsAt'->>'value', 10) < ((now() at time zone 'Asia/Seoul')::date)::text
+                       and not exists (
+                           select 1 from jsonb_array_elements(
+                               coalesce(j.candidate->'quality'->'heldItems', '[]')
+                               || coalesce(j.candidate->'quality'->'reviewIssues', '[]')
+                           ) h
+                           where h->>'target' in ('/schedules', '/schedules/' || (i - 1))
+                              or starts_with(h->>'target', '/schedules/' || (i - 1) || '/')
+                       ), false)) end
+                   from jsonb_array_elements(coalesce(j.candidate->'schedules', '[]')) with ordinality as entry(s, i)
+                   where jsonb_exists(s->'kinds', 'APPLICATION')
+               ) end ended
+        from review_queue r join extraction_jobs j on j.id = r.job_id cross join published_states p
+        where r.status = 'PENDING'
+    ), review_window_state as (
+        select group_id, bool_and(field is not distinct from 'HOUSING') housing,
+               coalesce(bool_and(root_closed), bool_and(member_closed)) published_closed,
+               bool_and(coalesce(ended, false)) filter (where kind in ('NOTICE', 'CORRECTION')) all_ended,
+               bool_or(not ended) filter (where kind in ('NOTICE', 'CORRECTION')) possible_new_window
+        from pending_windows group by group_id
+    ), archived_groups as (
+        select group_id from review_window_state
+        where housing and case published_closed
+            when true then not coalesce(possible_new_window, false)
+            when false then false
+            else coalesce(all_ended, false)
+        end
+    )
+"""
+
+
+def _active_review_filter(reason: str | None, after: tuple[str, str] | None, published_closed: dict[str, bool]) -> tuple[str, tuple[Any, ...]]:
+    where, params = _review_filter("PENDING", reason, after)
+    return f"{where} and {_REVIEW_GROUP_ID} not in (select group_id from archived_groups)", (Jsonb(published_closed), *params)
+
 
 def _review_filter(status: str, reason: str | None, after: tuple[str, str] | None) -> tuple[str, tuple[Any, ...]]:
     """공고 검수 목록·건수의 조건(review_queue r, extraction_jobs j)."""
@@ -529,19 +584,83 @@ class JobStore:
         self.conn.execute("delete from extraction_claims where raw_post_id = %s and raw_version = %s and owner = %s", (raw_post_id, raw_version, owner))
 
     # ---- 검수 ----
-    def review_count(self, status: str = "PENDING", reason: str | None = None) -> int:
+    def review_count(self, status: str = "PENDING", reason: str | None = None, published_closed: dict[str, bool] | None = None) -> int:
         """그 상태의 공고 검수 전체 건수(목록은 limit에서 잘리므로 따로 셉니다, 2026-10-25 검토). reason은 MUST·CHECK·FORMAT(REVIEW_REASON_SQL)."""
-        where, params = _review_filter(status, reason, None)
-        return int(self.conn.execute(f"select count(*) from review_queue r join extraction_jobs j on j.id = r.job_id where {where}", params).fetchone()[0])
+        if status == "PENDING" and published_closed is not None:
+            where, params = _active_review_filter(reason, None, published_closed)
+            cte = _ACTIVE_REVIEW_GROUPS
+        else:
+            where, params = _review_filter(status, reason, None)
+            cte = ""
+        return int(
+            self.conn.execute(f"{cte} select count(*) from review_queue r join extraction_jobs j on j.id = r.job_id where {where}", params).fetchone()[0]
+        )
 
-    def reviews(self, status: str = "PENDING", limit: int = 50, reason: str | None = None, after: tuple[str, str] | None = None) -> list[dict[str, Any]]:
+    def notice_review_group_count(self, reason: str | None, published_closed: dict[str, bool] | None = None) -> int:
+        where, params = _active_review_filter(reason, None, published_closed or {})
+        return int(
+            self.conn.execute(
+                f"{_ACTIVE_REVIEW_GROUPS} select count(distinct {_REVIEW_GROUP_ID}) from review_queue r"
+                f" join extraction_jobs j on j.id = r.job_id where {where}",
+                params,
+            ).fetchone()[0]
+        )
+
+    def notice_review_groups(
+        self, limit: int, reason: str | None, after: tuple[str, str] | None, published_closed: dict[str, bool] | None = None
+    ) -> list[dict[str, Any]]:
+        """사유 조건을 만족하는 미결 작업을 원공고 단위로 묶은 뒤 페이지를 나눕니다."""
+        where, params = _active_review_filter(reason, None, published_closed or {})
+        cursor = "where (first_at, first_id) > (%s::timestamptz, %s::uuid)" if after else ""
+        rows = self.conn.execute(
+            f"""
+            {_ACTIVE_REVIEW_GROUPS}, eligible as (
+                select {_REVIEW_GROUP_ID} group_id, j.id, r.created_at, j.status, j.source_code,
+                       j.raw_version, coalesce(j.list_title,j.list_source_title) title,
+                       j.raw_event->'payload'->>'kind' source_kind
+                from review_queue r join extraction_jobs j on j.id = r.job_id
+                where {where}
+            ), grouped as (
+                select group_id, min(created_at) first_at,
+                       (array_agg(id order by created_at,id))[1] first_id,
+                       (array_agg(title order by (source_kind='NOTICE') desc nulls last,created_at,id)
+                           filter (where title is not null))[1] group_title,
+                       jsonb_agg(jsonb_build_object(
+                           'jobId',id,'jobStatus',status,'title',title,'sourceCode',source_code,
+                           'rawVersion',raw_version,'sourceKind',source_kind,'queuedAt',created_at)
+                           order by (source_kind='NOTICE') desc nulls last,created_at,id) members
+                from eligible group by group_id
+            )
+            select group_id,first_at,first_id,group_title,members from grouped
+            {cursor} order by first_at,first_id limit %s
+            """,
+            (*params, *(after or ()), limit),
+        ).fetchall()
+        return [
+            members[0] | {"noticeGroupId": str(group_id), "queuedAt": first_at, "jobId": str(first_id), "title": title, "members": members}
+            for group_id, first_at, first_id, title, members in rows
+        ]
+
+    def reviews(
+        self,
+        status: str = "PENDING",
+        limit: int = 50,
+        reason: str | None = None,
+        after: tuple[str, str] | None = None,
+        published_closed: dict[str, bool] | None = None,
+    ) -> list[dict[str, Any]]:
         """그 상태의 검수 목록(오래된 것부터, 같은 시각이면 작업 ID 순). 기본 PENDING에는 대체된(SUPERSEDED) 건이 없습니다.
         applyEndsOn은 후보의 신청(APPLICATION) 일정 중 가장 이른 끝 날짜예요(관리자 개요의 「마감이 가까운 검수 대기」, 2026-10-25).
         reason은 관리자 사유(MUST·CHECK·FORMAT), after는 (queuedAt, jobId) — 이 건 다음부터 이어 받아요(관리자 검수 무한 스크롤, 2026-10-29)."""
-        where, params = _review_filter(status, reason, after)
+        if status == "PENDING" and published_closed is not None:
+            where, params = _active_review_filter(reason, after, published_closed)
+            cte = _ACTIVE_REVIEW_GROUPS
+        else:
+            where, params = _review_filter(status, reason, after)
+            cte = ""
         rows = self.conn.execute(
             # 제목·원문 제목·신청 마감일은 저장할 때 채워 둔 칸에서 읽어요(건마다 큰 JSON을 풀지 않게, V202610301300)
-            "select j.id, j.raw_post_id, j.raw_version, j.source_code, j.status, r.status, r.reasons, r.created_at, j.list_title,"
+            f"{cte} select j.id, j.raw_post_id, j.raw_version, j.source_code, j.status, r.status, r.reasons, r.created_at, j.list_title,"
             " j.list_source_title, r.decided_at, j.list_apply_ends_on,"
             " r.superseded_by_job_id, r.superseded_by_raw_post_id, r.superseded_by_version"
             f" from review_queue r join extraction_jobs j on j.id = r.job_id where {where} order by r.created_at, r.job_id limit %s",

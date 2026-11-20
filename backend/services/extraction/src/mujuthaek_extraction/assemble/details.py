@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -463,6 +463,82 @@ def _evidence_texts(candidate: dict[str, Any]) -> dict[str, str]:
 
 ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
+# 인용문·원문 표 행에 적힌 날짜 범위. 연도나 월을 생략한 마감일은 범위의 시작일을 기준으로 읽어요.
+_MONTH_DAY = r"\d{1,2}[ \t]*(?:[./-]|월)[ \t]*\d{1,2}(?:[ \t]*[.일])?"
+_DATE = rf"(?:(?:\d{{4}}|\d{{2}})[ \t]*(?:[./-]|년)[ \t]*)?{_MONTH_DAY}"
+_WEEKDAY = r"(?:[ \t]*\([월화수목금토일](?:요일)?\))?"
+_CLOCK = r"(?:(?:오전|오후)[ \t]*)?\d{1,2}(?::[ \t]*\d{2}|[ \t]*시(?:[ \t]*(?:\d{1,2}[ \t]*분|반))?)"
+_APPLICATION_RANGE = re.compile(
+    rf"(?<![\d./-])(?P<first>{_DATE})(?!\d){_WEEKDAY}(?:[ \t]*(?P<opening>{_CLOCK}))?"
+    rf"[ \t]*(?:[~∼～〜–]|부터|[ \t]-)[ \t]*(?:(?P<last>{_DATE}|\d{{1,2}}(?=[ \t]*(?:일|\.?[ \t]*\([월화수목금토일])))"
+    rf"(?!\d)(?:[ \t]*[.일])?{_WEEKDAY})?(?:[ \t]*(?P<closing>{_CLOCK}))?(?![\d:])"
+)
+_VARIABLE_CLOSE = re.compile(
+    r"(?:소진|충원|모집\s*완료|계약\s*완료|별도\s*공고)\s*(?:시|때)?\s*까지"
+    r"|(?:마감|접수|모집|기간)[^\n|.!?]{0,24}연장|연장[^\n|.!?]{0,16}(?:접수|모집|가능|예정)"
+)
+_CONDITIONAL_OPEN = re.compile(
+    r"접수\s*(?:여부|진행|실시|가능)|(?:순위|선순위)[^\n|.!?]{0,48}(?:미달|초과|미충족|결과|경쟁률|신청자\s*수|접수\s*인원)"
+    r"|미달[^\n|.!?]{0,24}(?:순위|접수)"
+)
+
+
+def _range_date(value: str, base: date) -> date:
+    numbers = [int(n) for n in re.findall(r"\d+", value)]
+    if len(numbers) == 3:
+        year, month, day = numbers
+        return date(year + (base.year // 100) * 100 if year < 100 else year, month, day)
+    if len(numbers) == 2:
+        return date(base.year, *numbers)
+    return date(base.year, base.month, numbers[0])
+
+
+def _range_minutes(clock: str) -> int | None:
+    # 콜론으로 쓴 시각은 24시간제 표기이고, 「6시」처럼 오전·오후가 모호한 값은 고르지 않아요.
+    if re.fullmatch(r"\d{1,2}:[ \t]*\d{2}", clock):
+        hour, minute = (int(n) for n in clock.split(":"))
+        if (hour < 24 and minute < 60) or (hour, minute) == (24, 0):
+            return hour * 60 + minute
+        return None
+    readings = times_in(clock)
+    return next(iter(readings)) if len(readings) == 1 else None
+
+
+def _application_deadlines(start: dict[str, str], text: str) -> set[tuple[str, str]]:
+    precision = start["precision"]
+    if precision not in ("DAY", "MINUTE"):
+        return set()
+    begins = datetime.fromisoformat(start["value"])
+    begins = begins.astimezone(KST) if precision == "MINUTE" else begins.replace(tzinfo=KST)
+    deadlines: set[tuple[str, str]] = set()
+    for match in _APPLICATION_RANGE.finditer(text):
+        opening, closing = match["opening"], match["closing"]
+        if not (match["last"] or (opening and closing)):
+            continue
+        try:
+            first = _range_date(match["first"], begins.date())
+            last = _range_date(match["last"], first) if match["last"] else first
+        except ValueError:
+            continue
+        if first != begins.date() or last < first:
+            continue
+        if precision == "MINUTE" and (not opening or _range_minutes(opening) != begins.hour * 60 + begins.minute):
+            continue
+        if closing is None:
+            deadlines.add(("DAY", last.isoformat()))
+            continue
+        minutes = _range_minutes(closing)
+        if minutes is None:
+            continue
+        if minutes == 24 * 60:
+            # 공개 접수 일정은 날짜로 전송하므로 24:00은 다음 날이 아닌 원문에 적힌 날의 종료로 둡니다.
+            deadlines.add(("DAY", last.isoformat()))
+            continue
+        end = datetime.combine(last, datetime.min.time(), tzinfo=KST) + timedelta(minutes=minutes)
+        if end > begins:
+            deadlines.add(("MINUTE", end.isoformat()))
+    return deadlines
+
 
 # 서류 칸의 단서가 다른 서류를 이름으로 가리킴(2026-10-24 네 번째 채점: 개인정보 동의서 칸에 적힌 「주거급여수급자로 신청하는 경우에는
 # ‘금융정보 등 제공 동의서’ 작성 제외」를 개인정보 동의서의 적용 대상에 붙여, 접수가 거부되는 서류를 수급자는 안 내도 되는 것처럼 보임).
@@ -638,17 +714,41 @@ class _Checker:
         schedules = self.candidate.get("schedules") or []
         for s, schedule in enumerate(schedules):
             text = self.cited(schedule)
+            rows = self.cited(schedule, rows=True)
             label = f"{schedule.get('rawLabel') or schedule.get('id')}({schedule.get('id')})"
+            pointer = f"/schedules/{s}"
             others = [str(s.get("rawLabel") or "") for s in schedules if s is not schedule]
-            near = self.nearby(schedule, str(schedule.get("rawLabel") or ""), others, f"/schedules/{s}")
-            self.places(schedule, self.cited(schedule, rows=True), label, near)
-            self.place_pairs(schedule, f"{self.cited(schedule, rows=True)}\n{near}", label)
+            near = self.nearby(schedule, str(schedule.get("rawLabel") or ""), others, pointer)
+            self.places(schedule, rows, label, near)
+            self.place_pairs(schedule, f"{rows}\n{near}", label)
             self.channels(schedule, text, label)
             self.email(schedule, text, label)
-            self.application_url(schedule, self.lines(schedule, f"/schedules/{s}"), label)
+            self.application_url(schedule, self.lines(schedule, pointer), label)
             self.hours(schedule, text, label, near)
             self.days(schedule, text, label)
-            self.minute_bounds(schedule, text, label, near)
+            recovered = self.application_deadline(schedule, rows, pointer, label)
+            self.minute_bounds(schedule, rows if recovered else text, label, near)
+
+    def application_deadline(self, schedule: dict[str, Any], rows: str, pointer: str, label: str) -> bool:
+        """일정과 시작일이 일치하는 근거 범위에서만 누락된 접수 마감일을 채워요."""
+        if "APPLICATION" not in schedule["kinds"] or not schedule.get("startsAt") or schedule.get("endsAt"):
+            return False
+        condition = schedule.get("endCondition") or ""
+        if _VARIABLE_CLOSE.search(f"{condition}\n{rows}"):
+            return False
+        if schedule.get("endStatus") == "CONDITIONAL" and not _CONDITIONAL_OPEN.search(condition):
+            return False
+        deadlines = _application_deadlines(schedule["startsAt"], rows)
+        if len(deadlines) != 1:
+            return False
+        precision, value = deadlines.pop()
+        schedule.update(endsAt={"precision": precision, "value": value}, endStatus="FIXED", endCondition=None)
+        if condition:
+            schedule["timeNote"] = " / ".join(dict.fromkeys(filter(None, [schedule.get("timeNote"), condition])))
+        missing = self.candidate["quality"]["missingFields"]
+        missing[:] = [item for item in missing if item["target"] != f"{pointer}/endsAt"]
+        self.notes.append(f"/schedules {label}: 시작일과 일치하는 원문 접수 범위에서 마감({value})을 채웠어요")
+        return True
 
     def application_url(self, schedule: dict[str, Any], text: str, label: str) -> None:
         """일정 신청 주소: 근거 인용 줄에 있거나, 근거로 확인한 안내 주소와 같아야 해요(2026-11-16 보안 감사 L-5).

@@ -33,6 +33,7 @@ import kr.mujuthaek.api.notice.dto.response.AdminReviewListResponse.Item;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewQueueResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewStatsResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewStatsResponse.Window;
+import kr.mujuthaek.api.notice.repository.NoticeQueries;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 
@@ -85,6 +86,7 @@ public class AdminReviewService {
   static final Duration COUNTS_TTL = Duration.ofSeconds(5);
 
   private final ExtractionReviewClient client;
+  private final NoticeQueries noticeQueries;
   private final Clock clock;
 
   /** 마감 기준일(오늘+days)별 결과. 날짜가 키라 자정이 지나면 새로 계산해요. */
@@ -98,9 +100,11 @@ public class AdminReviewService {
   /** 키가 하나뿐인 캐시라 키는 늘 true예요. */
   private final RecentCache<Boolean, AdminReviewCountsResponse> countsCache;
 
-  public AdminReviewService(ExtractionReviewClient client, Clock clock) {
+  public AdminReviewService(
+      ExtractionReviewClient client, Clock clock, NoticeQueries noticeQueries) {
     this.client = client;
     this.clock = clock;
+    this.noticeQueries = noticeQueries;
     this.urgentCache = new RecentCache<>(URGENT_TTL, clock, this::urgentNow);
     this.countsCache = new RecentCache<>(COUNTS_TTL, clock, k -> countsNow());
     this.queueFirstPageCache =
@@ -122,7 +126,8 @@ public class AdminReviewService {
   }
 
   private List<Item> urgentNow(LocalDate limit) {
-    return items(client.list(PENDING)).stream()
+    JsonNode page = client.activePendingDocuments(noticeQueries.publishedHousingReviewStates());
+    return items(page == null ? null : page.get("items")).stream()
         .filter(i -> i.applyEndsOn() != null && !i.applyEndsOn().isAfter(limit))
         .sorted(Comparator.comparing(Item::applyEndsOn))
         .toList();
@@ -173,7 +178,8 @@ public class AdminReviewService {
     JsonNode notices =
         !withNotices || at.notice().done()
             ? null
-            : client.reviewPage(reason, at.notice().after(), size);
+            : client.reviewPage(
+                reason, at.notice().after(), size, noticeQueries.publishedHousingReviewStates());
     JsonNode benefits =
         !withBenefits || at.benefit().done()
             ? null
@@ -225,18 +231,42 @@ public class AdminReviewService {
   }
 
   private static List<AdminReviewQueueResponse.Item> noticeQueueItems(JsonNode page) {
-    return items(page == null ? null : page.get("items")).stream()
-        .map(
-            i ->
-                new AdminReviewQueueResponse.Item(
-                    "NOTICE",
-                    i.id(),
-                    i.reason(),
-                    i.title(),
-                    i.sourceCode(),
-                    i.rawVersion(),
-                    i.receivedAt()))
-        .toList();
+    JsonNode rows = page == null ? null : page.get("items");
+    if (rows == null || !rows.isArray()) {
+      return List.of();
+    }
+    List<AdminReviewQueueResponse.Item> out = new ArrayList<>();
+    for (JsonNode row : rows) {
+      List<AdminReviewQueueResponse.Member> members = new ArrayList<>();
+      for (JsonNode member : row.path("members")) {
+        members.add(
+            new AdminReviewQueueResponse.Member(
+                text(member.path("jobId")),
+                reason(text(member.path("jobStatus"))),
+                text(member.path("title")),
+                integer(member.path("rawVersion")),
+                text(member.path("sourceKind"))));
+      }
+      String reason = reason(text(row.path("jobStatus")));
+      if (members.stream().anyMatch(member -> "MUST".equals(member.reason()))) {
+        reason = "MUST";
+      } else if (members.stream().anyMatch(member -> "FORMAT".equals(member.reason()))) {
+        reason = "FORMAT";
+      }
+      String title = text(row.path("title"));
+      out.add(
+          new AdminReviewQueueResponse.Item(
+              "NOTICE",
+              text(row.path("jobId")),
+              reason,
+              title != null ? title : text(row.path("sourceTitle")),
+              text(row.path("sourceCode")),
+              integer(row.path("rawVersion")),
+              time(row.path("queuedAt")),
+              text(row.path("noticeGroupId")),
+              members));
+    }
+    return out;
   }
 
   /** 혜택 검수는 정책 제보로 다시 연 건(reported)이 MUST, 그 밖은 CHECK예요(화면의 혜택 사유와 같아요). */
@@ -255,7 +285,9 @@ public class AdminReviewService {
               text(row.path("title")),
               text(row.path("sourceCode")),
               integer(row.path("rawVersion")),
-              time(row.path("queuedAt"))));
+              time(row.path("queuedAt")),
+              null,
+              List.of()));
     }
     return out;
   }
@@ -267,7 +299,7 @@ public class AdminReviewService {
 
   /** 목록은 오래된 것부터라 한 건만 받아요(건수는 total). */
   private AdminReviewCountsResponse countsNow() {
-    JsonNode page = client.pendingHead();
+    JsonNode page = client.pendingHead(noticeQueries.publishedHousingReviewStates());
     List<Item> all = items(page == null ? null : page.get("items"));
     OffsetDateTime oldest =
         all.stream()
@@ -664,7 +696,8 @@ public class AdminReviewService {
   }
 
   private int remaining() {
-    return ExtractionReviewClient.total(client.pendingHead());
+    return ExtractionReviewClient.total(
+        client.pendingHead(noticeQueries.publishedHousingReviewStates()));
   }
 
   private static List<Item> items(JsonNode list) {

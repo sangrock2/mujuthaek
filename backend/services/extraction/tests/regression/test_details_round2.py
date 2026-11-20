@@ -4,8 +4,11 @@
 import copy
 import dataclasses
 
+import pytest
+
 from mujuthaek_extraction.assemble.assembler import assemble
 from mujuthaek_extraction.assemble.details import DAY_PATTERNS, continuous_hours, required_mark_group
+from mujuthaek_extraction.contracts import tools
 from tests.support.helpers import ai_part, example, source_for
 from tests.worker.test_schedule_details import document, visit_schedule
 
@@ -23,6 +26,90 @@ def assembled(lines, quotes, schedules=(), documents=()):
 
 def cleared(result):
     return [i["description"] for i in result.issues if i["code"] == "DETAIL_UNVERIFIED_CLEARED"]
+
+
+@pytest.mark.parametrize(
+    ("source_range", "start", "end", "status", "condition"),
+    [
+        (
+            "2026. 10. 8.(목) 10:00 ~ 17:00",
+            ("MINUTE", "2026-10-08T10:00:00+09:00"),
+            ("MINUTE", "2026-10-08T17:00:00+09:00"),
+            "CONDITIONAL",
+            "선순위 접수 결과에 따라 후순위 접수 여부 결정",
+        ),
+        ("2026년 10월 8일 ~ 2026년 10월 12일", ("DAY", "2026-10-08"), ("DAY", "2026-10-12"), "FIXED", None),
+        ("2026.10.08 10:00 ~ 24:00", ("DAY", "2026-10-08"), ("DAY", "2026-10-08"), "NOT_IN_SOURCE", None),
+        (
+            "2026.10.08.(목) 10:00 ~ 12.(월) 17:00",
+            ("MINUTE", "2026-10-08T10:00:00+09:00"),
+            ("MINUTE", "2026-10-12T17:00:00+09:00"),
+            "NOT_IN_SOURCE",
+            None,
+        ),
+        (
+            "2026. 10. 8.(목) 10:00부터 공가 소진 시까지",
+            ("MINUTE", "2026-10-08T10:00:00+09:00"),
+            None,
+            "CONDITIONAL",
+            "공가 소진 시까지",
+        ),
+        (
+            "2026.10.08 ~ 2026.10.12, 계약자가 없으면 접수 기간 연장 가능",
+            ("DAY", "2026-10-08"),
+            None,
+            "CONDITIONAL",
+            "계약자가 없으면 접수 기간 연장 가능",
+        ),
+        (
+            "2026.10.08 10:00 ~ 17:00 또는 2026.10.08 10:00 ~ 18:00",
+            ("MINUTE", "2026-10-08T10:00:00+09:00"),
+            None,
+            "NOT_IN_SOURCE",
+            None,
+        ),
+        (
+            "2026.10.08 09:00 ~ 17:00",
+            ("MINUTE", "2026-10-08T10:00:00+09:00"),
+            None,
+            "NOT_IN_SOURCE",
+            None,
+        ),
+    ],
+)
+def test_missing_application_deadline_requires_one_matching_range(source_range, start, end, status, condition):
+    label = "2순위 인터넷 접수"
+    lines = [f"| {label} | {source_range} |"]
+    schedule = visit_schedule(
+        id="rank-2",
+        rawLabel=label,
+        priorityRank=2,
+        channels=["ONLINE"],
+        startsAt=dict(zip(("precision", "value"), start, strict=True)),
+        endsAt=None,
+        endStatus=status,
+        endCondition=condition,
+        places=[],
+        dailyHours=[],
+        breaks=[],
+        timeNote=None,
+        excludedDays=[],
+        quoteRefs=["rank"],
+    )
+    result = assembled(lines, {"rank": label}, schedules=[schedule])
+    assert result.contract_errors == []
+    actual = next(s for s in result.candidate["schedules"] if s["id"] == "rank-2")
+    if end:
+        assert actual["endsAt"] == dict(zip(("precision", "value"), end, strict=True))
+        assert actual["endStatus"] == "FIXED"
+        assert actual["endCondition"] is None
+        assert actual["timeNote"] == condition
+        window = next(w for w in tools().application_windows(result.candidate) if w["scheduleId"] == "rank-2")
+        assert window["applyEndOn"] == end[1][:10]
+    else:
+        assert actual["endsAt"] is None
+        assert actual["endStatus"] == status
+        assert actual["endCondition"] == condition
 
 
 def day_schedule(quote_ref, excluded, **changes):

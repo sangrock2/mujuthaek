@@ -6,6 +6,7 @@ EXTRACTION_TEST_DB_URL=postgresql://extraction_app:extraction-pass@127.0.0.1:543
 import json
 import os
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,113 @@ def test_retry_holds_billing_and_unknown_failures_and_applies_reason_specific_de
     assert {e["eventId"] for e in store.retryable_events()} == {events["source"], events["timeout"], events["rate"]}
     for reason, name in (("provider_credit", "credit"), ("app_budget", "budget"), ("other", "other")):
         assert [e["eventId"] for e in store.retryable_events(reason=reason)] == [events[name]]
+
+
+def test_notice_review_groups_keep_all_documents_and_count_before_pagination(store):
+    root_id = str(uuid.uuid4())
+
+    def save(title, status, kind, raw_id=None, parent=None):
+        event = raw_event()
+        event["eventId"] = str(uuid.uuid4())
+        event["payload"].update(rawPostId=raw_id or str(uuid.uuid4()), title=title, kind=kind, supersedesPostId=parent)
+        return store.save(event, Outcome(status, review_reasons=["CHECK"]))
+
+    correction = save("접수일 정정", "IN_REVIEW", "CORRECTION", parent=root_id)
+    other = save("같은 제목의 별도 공고", "IN_REVIEW", "NOTICE")
+    original = save("같은 제목의 별도 공고", "INTAKE_REVIEW", "NOTICE", raw_id=root_id)
+    follow_up = save("후속 안내", "IN_REVIEW", "FOLLOW_UP", parent=root_id)
+
+    service = ReviewService(lambda: nullcontext(store), new_event)
+    status, page = service.list("PENDING", limit="1", group_by="notice")
+    assert status == 200 and page["total"] == 2 and page["hasMore"]
+    (group,) = page["items"]
+    assert group["noticeGroupId"] == root_id
+    assert group["jobId"] == correction
+    assert group["title"] == "같은 제목의 별도 공고"
+    assert [m["jobId"] for m in group["members"]] == [original, correction, follow_up]
+    _, next_page = service.list("PENDING", "1", None, group["queuedAt"].isoformat(), group["jobId"], "notice")
+    assert [g["jobId"] for g in next_page["items"]] == [other]
+    filtered = store.notice_review_groups(10, "FORMAT", None)
+    assert [m["jobId"] for m in filtered[0]["members"]] == [original]
+    assert store.notice_review_group_count("FORMAT") == 1
+    assert store.review_count() == 4
+    store.reject(correction, "원문과 다름")
+    assert store.notice_review_group_count(None) == 2
+    store.reject(original, "원문과 다름")
+    store.reject(follow_up, "원문과 다름")
+    assert store.notice_review_group_count(None) == 1
+
+
+def test_closed_housing_review_groups_are_hidden_without_changing_review_records(store):
+    from threading import Thread
+    from urllib.request import Request, urlopen
+
+    from mujuthaek_extraction.review_api import serve
+
+    def add(deadlines, *, public=None, root=None, kind="NOTICE", field="HOUSING", held=False):
+        event = raw_event()
+        post_id = str(uuid.uuid4())
+        event["eventId"] = str(uuid.uuid4())
+        event["payload"].update(rawPostId=post_id, field=field, kind=kind, supersedesPostId=root)
+        candidate = (
+            {
+                "schedules": [
+                    {"kinds": ["APPLICATION"], "endStatus": "FIXED", "endsAt": {"precision": "DAY", "value": day}}
+                    if day
+                    else {"kinds": ["APPLICATION"], "endStatus": "CONDITIONAL", "endsAt": None}
+                    for day in deadlines
+                ],
+                "quality": {"heldItems": [{"target": "/schedules/0/endsAt"}] if held else []},
+            }
+            if deadlines
+            else None
+        )
+        job = store.save(event, Outcome("IN_REVIEW", candidate=candidate, review_reasons=["CHECK"]))
+        if public is not None:
+            published[post_id] = public
+        return job, post_id
+
+    past, future = "2000-02-01", "2099-04-03"
+    published = {}
+    archived_doc, archived_root = add([], public=True)
+    archived_followup, _ = add([], root=archived_root, kind="FOLLOW_UP")
+    unpublished_closed, _ = add([past])
+    unknown, _ = add([None])
+    mixed, _ = add([past, future])
+    current, _ = add([past], public=False)
+    business, _ = add([past], field="BUSINESS_SPACE")
+    held, _ = add([past], held=True)
+    _, correction_root = add([past], public=True)
+    reopened, _ = add([future], root=correction_root, kind="CORRECTION")
+
+    active = [unknown, mixed, current, business, held, reopened]
+    assert store.notice_review_group_count(None, published) == len(active)
+    first_page = store.notice_review_groups(2, None, None, published)
+    assert [g["jobId"] for g in first_page] == active[:2]
+    cursor = first_page[-1]["queuedAt"].isoformat(), first_page[-1]["jobId"]
+    rest = store.notice_review_groups(10, None, cursor, published)
+    assert [g["jobId"] for g in rest[:-1]] == active[2:-1]
+    assert reopened in [m["jobId"] for m in rest[-1]["members"]]
+    assert store.review_count("PENDING", None, published) == len(active) + 1
+    for archived in (archived_doc, archived_followup, unpublished_closed):
+        assert store.review(archived)["reviewStatus"] == "PENDING"
+
+    service = ReviewService(lambda: nullcontext(store), new_event)
+    with serve(service, "127.0.0.1", 0, "local-review-test") as server:
+        Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{server.server_port}/reviews?limit=2&groupBy=notice",
+                data=json.dumps(published).encode(),
+                headers={"Authorization": "Bearer local-review-test", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                page = json.load(response)
+            assert page["total"] == len(active) and page["hasMore"]
+            assert [g["jobId"] for g in page["items"]] == active[:2]
+        finally:
+            server.shutdown()
 
 
 def test_review_flow_approve_publishes_again(store):
