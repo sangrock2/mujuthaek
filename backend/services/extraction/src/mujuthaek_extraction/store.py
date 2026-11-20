@@ -823,22 +823,43 @@ class JobStore:
     def mark_processed(self, event_id: str, event_type: str) -> None:
         self.conn.execute("insert into processed_events (event_id, event_type) values (%s, %s) on conflict do nothing", (event_id, event_type))
 
-    def retryable_events(self, limit: int = 20, max_attempts: int | None = None, base_delay_seconds: float = 0) -> list[dict[str, Any]]:
-        """마지막 처리가 WAITING_SOURCE·FAILED이고 아직 끝나지 않은(processed_events에 없는) 이벤트. 오래 기다린 것부터.
+    def retryable_events(
+        self, limit: int = 20, max_attempts: int | None = None, base_delay_seconds: float = 0, *, reason: str | None = None
+    ) -> list[dict[str, Any]]:
+        """아직 처리되지 않았고 선택한 실패 사유에 해당하는 이벤트를 오래 기다린 순서대로 고릅니다.
 
         max_attempts: 이만큼 처리한 이벤트는 더 하지 않습니다(계속 실패하는 공고에 비용이 계속 들지 않게).
         base_delay_seconds: 마지막 처리 뒤 base × 2^(처리 횟수-1)초가 지난 것만(5분 → 10분 → 20분 …).
         예전엔 표 전체(raw_event 포함)를 읽고 행마다 조회해 느렸고, 순서도 eventId 순이라 한도 20이 임의였습니다."""
         rows = self.conn.execute(
-            "select raw_event from ("
-            " select distinct on (event_id) event_id, status, raw_event, created_at,"
-            " count(*) over (partition by event_id) as attempts"
-            " from extraction_jobs order by event_id, created_at desc"
-            ") last where status in ('WAITING_SOURCE', 'FAILED')"
-            " and not exists (select 1 from processed_events p where p.event_id = last.event_id)"
-            " and (%s::int is null or attempts < %s::int)"
-            " and created_at <= now() - make_interval(secs => %s * power(2, attempts - 1))"
-            " order by created_at limit %s",
-            (max_attempts, max_attempts, base_delay_seconds, limit),
+            """
+            with latest as (
+                select distinct on (event_id) event_id, status, raw_event, created_at, error,
+                       count(*) over (partition by event_id) as attempts
+                from extraction_jobs order by event_id, created_at desc, id desc
+            ), classified as (
+                select *, case
+                    when status = 'WAITING_SOURCE' then 'source_wait'
+                    when error ~* ('(credit_balance_exhausted|insufficient_quota|billing_not_active|'
+                                   '(api_key|project|organization)_spend_limit_exceeded|organization_usage_limit_exceeded)')
+                        then 'provider_credit'
+                    when error ~* '(비용 상한|budget_exhausted)' then 'app_budget'
+                    when error ~* '(rate_limit|(^|[^0-9])429([^0-9]|$))' then 'rate_limit'
+                    when error ~* '(timeout|timed out|모델 연결 실패|connection reset|connection refused|(^|[^0-9])50[0234]([^0-9]|$))' then 'transient'
+                    else 'other'
+                end as failure_reason
+                from latest where status in ('WAITING_SOURCE', 'FAILED')
+            )
+            select raw_event from classified
+            where not exists (select 1 from processed_events p where p.event_id = classified.event_id)
+              and (%s::int is null or attempts < %s::int)
+              and (case when %s::text is null then failure_reason in ('source_wait', 'transient', 'rate_limit')
+                        else failure_reason = %s end)
+              and created_at <= now() - make_interval(secs => least(86400,
+                  %s * power(2, least(attempts - 1, 12)) *
+                  (case failure_reason when 'rate_limit' then 4 when 'transient' then 2 else 1 end)))
+            order by created_at, event_id limit %s
+            """,
+            (max_attempts, max_attempts, reason, reason, base_delay_seconds, limit),
         ).fetchall()
         return [row[0] for row in rows]
