@@ -50,7 +50,7 @@ from mujuthaek_extraction.rules.policy.reading import read_policy
 from mujuthaek_extraction.s3_reader import S3SourceReader
 from mujuthaek_extraction.store import DuplicateEvent, JobStore
 from mujuthaek_extraction.usage import log_fields
-from mujuthaek_platform import broker, db, outbox
+from mujuthaek_platform import broker, db, outbox, recovery
 from mujuthaek_platform.events import new_event
 from mujuthaek_platform.slack import QuietAlerts, SlackNotifier
 
@@ -59,7 +59,7 @@ EXCHANGE = outbox.EXCHANGE
 DLX = "mujuthaek.dlx"
 QUEUE = "mujuthaek.raw.collected"
 DLQ = QUEUE + ".dlq"
-RETRY_EXCHANGE = "mujuthaek.extraction.retry"
+RETRY_EXCHANGE = recovery.RETRY_EXCHANGE
 ROUTING_KEY = "raw.notice.collected"
 # 정책 원본(raw.policy.collected). 이 큐를 꺼내 판정 틀을 만듭니다(받을 큐가 없으면 collector 발행기(mandatory)가 거절당해 같은 묶음의
 # 공고 이벤트까지 막히므로 선언도 유지). 큐는 dev에서 인자 없이 먼저 만들어져 있어, 인자를 바꾸면 다시 선언할 때 거절당합니다(PRECONDITION_FAILED).
@@ -119,39 +119,34 @@ DLQ_TARGETS = {"notice": (DLQ, QUEUE), "policy": (POLICY_DLQ, POLICY_QUEUE)}
 
 
 def publish_to_owned_queue(channel, queue: str, body: bytes, properties: Any) -> None:
-    """기본 exchange 허용은 모든 큐로 직접 주입할 수 있어 격리 모드에서는 자기 topic 경로만 써요."""
-    if broker.managed_topology():
-        if queue not in {QUEUE, POLICY_QUEUE, POLICY_DLQ}:
-            raise ValueError("Not an extraction retry destination")
-        channel.basic_publish(exchange=RETRY_EXCHANGE, routing_key=queue, body=body, properties=properties)
-    else:
-        channel.basic_publish(exchange="", routing_key=queue, body=body, properties=properties)
+    """발행 확인이 활성화된 채널에서 추출기 소유 큐로만 전송합니다."""
+    if queue not in {QUEUE, DLQ, POLICY_QUEUE, POLICY_DLQ}:
+        raise ValueError("Not an extraction retry destination")
+    exchange = RETRY_EXCHANGE if broker.managed_topology() else ""
+    recovery.publish_persistent(channel, exchange, queue, body, properties)
 
 
-def replay_dlq(channel, dlq: str, queue: str, limit: int) -> int:
-    """.dlq 메시지를 원래 큐로 최대 limit건 되돌립니다(원인을 고친 뒤 운영자가 실행). 옮긴 뒤에만 .dlq에서 지웁니다.
-    같은 정책·공고 버전은 처리 기록으로 걸러지므로, 이미 끝난 것이 섞여 있어도 AI를 다시 부르지 않습니다."""
-    moved = 0
-    while moved < limit:
-        method, properties, body = channel.basic_get(queue=dlq, auto_ack=False)
-        if method is None:
-            break
-        publish_to_owned_queue(channel, queue, body, properties)
-        channel.basic_ack(method.delivery_tag)
-        moved += 1
-    return moved
+def replay_dlq(channel, dlq: str, queue: str, limit: int) -> recovery.ReplayResult:
+    if (dlq, queue) not in DLQ_TARGETS.values():
+        raise ValueError("Not an extraction replay route")
+    exchange = RETRY_EXCHANGE if broker.managed_topology() else ""
+    return recovery.replay(channel, exchange=exchange, queue=queue, dlq=dlq, limit=limit)
 
 
 def finish_policy(channel, delivery_tag: int, decision: str, body: bytes, properties: Any = None, reason: str | None = None) -> None:
     """정책 메시지의 결정을 큐에 알립니다. .dlq면 본문을 POLICY_DLQ로 옮긴 뒤 ack합니다(정책 큐에는 dead-letter 인자가 없어
     reject하면 메시지가 사라짐). 옮기기가 실패하면 예외가 나서 ack하지 않으므로 연결이 끊긴 뒤 메시지가 다시 옵니다.
     .dlq로 옮길 때 실패 이유를 헤더(x-error-reason·x-failed-at)에 남겨, 쌓인 메시지만 봐도 왜 실패했는지 알 수 있게 합니다."""
+    finish_delivery(channel, delivery_tag, decision, POLICY_DLQ, body, properties, reason)
+
+
+def finish_delivery(channel, delivery_tag, decision, dlq, body, properties, reason):
     if decision == "ack":
         channel.basic_ack(delivery_tag)
     elif decision == "requeue":
         channel.basic_nack(delivery_tag, requeue=True)
     else:
-        publish_to_owned_queue(channel, POLICY_DLQ, body, failure_properties(properties, reason))
+        publish_to_owned_queue(channel, dlq, body, failure_properties(properties, reason))
         channel.basic_ack(delivery_tag)
 
 
@@ -632,23 +627,21 @@ def judge_message(settings: Settings, processor: Processor, raw_event: dict[str,
 
 def consume(settings: Settings, processor: Processor, health: Health | None = None) -> None:
     """큐를 선언하고 메시지를 한 번에 하나씩 받아 처리합니다. 처리는 별도 스레드에서 하고 확인 응답은 연결 스레드로 넘깁니다."""
-    connection = broker.connect(settings.rabbitmq_url)
+    with broker.connect(settings.rabbitmq_url, blocked_timeout=30) as connection:
+        consume_connection(connection, settings, processor, health)
+
+
+def consume_connection(connection, settings: Settings, processor: Processor, health: Health | None) -> None:
     channel = connection.channel()
     declare(channel)
+    channel.confirm_delivery()  # 정책 실패 큐 전송은 확인이 온 뒤에만 원본 ACK.
     channel.basic_qos(prefetch_count=1)
     alerts = QuietAlerts(SlackNotifier(settings.slack_webhook_url), "extraction")  # 실패 큐로 보낼 때 운영 알림
 
-    def finish(delivery_tag: int, decision: str) -> None:
-        if decision == "ack":
-            channel.basic_ack(delivery_tag)
-        elif decision == "requeue":
-            channel.basic_nack(delivery_tag, requeue=True)  # DB 장애: 큐로 되돌려 나중에 다시
-        else:
-            channel.basic_nack(delivery_tag, requeue=False)  # 재시도 없이 .dlq로
-
-    def work(delivery_tag: int, body: bytes) -> None:
+    def work(delivery_tag: int, body: bytes, properties: Any) -> None:
         """메시지 하나를 처리하고 결과에 따라 ack, DB 장애면 requeue, JSON이 아니거나 저장 실패면 .dlq로 정합니다."""
         decision = "ack"
+        failure_reason = None
         try:
             raw_event = json.loads(body)
             if not isinstance(raw_event, dict):
@@ -670,15 +663,18 @@ def consume(settings: Settings, processor: Processor, health: Health | None = No
         except ValueError:
             log.warning("JSON 이벤트가 아니어서 .dlq로 보냅니다")
             decision = "dlq"
-            alerts.send("dlq:notice", f"공고 메시지를 실패 큐로 보냈어요 ({DLQ})", "INVALID_EVENT")
+            failure_reason = "INVALID_EVENT"
+            alerts.send("dlq:notice", f"공고 메시지를 처리하지 못했어요 ({DLQ})", failure_reason)
         except Exception as error:
             log.exception("저장 실패. .dlq로 보냅니다")
             decision = "dlq"
-            alerts.send("dlq:notice", f"공고 메시지를 실패 큐로 보냈어요 ({DLQ})", f"ERROR:{type(error).__name__}")
-        connection.add_callback_threadsafe(functools.partial(finish, delivery_tag, decision))
+            failure_reason = f"ERROR:{type(error).__name__}"
+            alerts.send("dlq:notice", f"공고 메시지를 처리하지 못했어요 ({DLQ})", failure_reason)
+        callback = functools.partial(finish_delivery, channel, delivery_tag, decision, DLQ, body, properties, failure_reason)
+        connection.add_callback_threadsafe(callback)
 
-    def on_message(_channel, method, _properties, body: bytes) -> None:
-        threading.Thread(target=work, args=(method.delivery_tag, body), daemon=True).start()
+    def on_message(_channel, method, properties, body: bytes) -> None:
+        threading.Thread(target=work, args=(method.delivery_tag, body, properties), daemon=True).start()
 
     retries = RetryCounter()
 

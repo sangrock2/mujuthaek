@@ -15,10 +15,13 @@
 """
 
 import json
+import logging
+from datetime import datetime
 from typing import Any
 
 EXCHANGE = "mujuthaek.events"
 BATCH_SIZE = 100
+log = logging.getLogger(__name__)
 
 
 def add(cur, event: dict[str, Any]) -> None:
@@ -31,15 +34,24 @@ def add(cur, event: dict[str, Any]) -> None:
     )
 
 
-def _properties(event_id: str, event_type: str):
+def _properties(event_id: str, event_type: str, occurred_at: str | None = None):
     import pika
 
+    timestamp = None
+    if isinstance(occurred_at, str):
+        try:
+            occurred = datetime.fromisoformat(occurred_at)
+            if occurred.tzinfo is not None:
+                timestamp = max(0, int(occurred.timestamp()))
+        except (ValueError, OSError, OverflowError):
+            pass
     return pika.BasicProperties(
         content_type="application/json",
         content_encoding="utf-8",
         delivery_mode=2,  # 브로커가 다시 시작해도 메시지를 잃지 않게 디스크에 저장
         message_id=event_id,
         type=event_type,
+        timestamp=timestamp,
     )
 
 
@@ -66,22 +78,41 @@ def relay_once(conn, channel, limit: int = BATCH_SIZE) -> int:
     여러 발행기가 동시에 돌아도 같은 행을 두 번 잡지 않게 `for update skip locked`로 가져와요.
     conn은 autocommit 연결이어야 해요. 이미 열린 트랜잭션 안이면 transaction()이 세이브포인트가 돼서 커밋되지 않아요.
     """
+    from pika.exceptions import NackError, UnroutableError
+
     sent = 0
     with conn.transaction():
         rows = conn.execute(
             "select event_id, event_type, payload from outbox where published_at is null "
-            "order by created_at limit %s for update skip locked",
+            "order by attempts, created_at limit %s for update skip locked",
             (limit,),
         ).fetchall()
         for event_id, event_type, payload in rows:
             event = json.loads(payload) if isinstance(payload, str) else payload
-            channel.basic_publish(
-                exchange=EXCHANGE,
-                routing_key=event_type,
-                body=json.dumps(event, ensure_ascii=False).encode("utf-8"),
-                properties=_properties(str(event_id), event_type),
-                mandatory=True,  # 받을 큐가 없으면 버리지 말고 UnroutableError로 알려줘요
-            )
+            try:
+                channel.basic_publish(
+                    exchange=EXCHANGE,
+                    routing_key=event_type,
+                    body=json.dumps(event, ensure_ascii=False).encode("utf-8"),
+                    properties=_properties(str(event_id), event_type, event.get("occurredAt")),
+                    mandatory=True,
+                )
+            except (NackError, UnroutableError) as error:
+                # The channel is usable. Keep this row and let other routes make progress.
+                (attempts,) = conn.execute(
+                    "update outbox set attempts = attempts + 1 where event_id = %s returning attempts",
+                    (event_id,),
+                ).fetchone()
+                if attempts == 1 or attempts == 10 or attempts == 100:
+                    log.warning(
+                        "Outbox delivery retained",
+                        extra={
+                            "event_id": str(event_id),
+                            "reason": type(error).__name__,
+                            "attempts": attempts,
+                        },
+                    )
+                continue
             conn.execute(
                 "update outbox set published_at = now(), attempts = attempts + 1 where event_id = %s",
                 (event_id,),
