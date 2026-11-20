@@ -2,6 +2,7 @@ package kr.mujuthaek.api.area.geocode;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import kr.mujuthaek.api.area.geocode.SearchOutcome.Failed;
@@ -54,10 +55,10 @@ public class JusoSearchClient implements AddressSearch {
     this.limiter = new CallLimiter(properties.perSecond(), properties.perDay(), clock, sleeper);
   }
 
-  /**
-   * 검색어로 첫 쪽(최대 10개)을 받아요. 검색어는 주소 정리 결과를 넘기고, 여기서 API가 받지 않는 글자를 걸러요({@link JusoKeyword}). 거르고 나서
-   * 비면 부르지 않고 E0005(검색어 없음)예요.
-   */
+  private static final int PAGE_SIZE = 100;
+  private static final int MAX_PAGES = 3;
+
+  /** 불완전한 응답의 후보를 채택하지 않도록 제한된 범위에서 전체 페이지를 모아요. */
   @Override
   public SearchOutcome search(String keyword) {
     if (!properties.hasKey()) {
@@ -67,6 +68,28 @@ public class JusoSearchClient implements AddressSearch {
     if (cleaned.isEmpty()) {
       return new Rejected("E0005");
     }
+    SearchOutcome first = searchPage(cleaned, 1);
+    if (!(first instanceof Found found)
+        || found.totalCount() <= found.results().size()
+        || found.totalCount() > PAGE_SIZE * MAX_PAGES) {
+      return first;
+    }
+
+    var results = new ArrayList<>(found.results());
+    for (int page = 2; page <= MAX_PAGES && results.size() < found.totalCount(); page++) {
+      SearchOutcome next = searchPage(cleaned, page);
+      if (next instanceof Failed || next instanceof Rejected) {
+        return next;
+      }
+      if (!(next instanceof Found more) || more.totalCount() != found.totalCount()) {
+        return found;
+      }
+      results.addAll(more.results());
+    }
+    return new Found(List.copyOf(results), found.totalCount());
+  }
+
+  private SearchOutcome searchPage(String cleaned, int page) {
     String last = null;
     for (int attempt = 0; attempt <= properties.retries(); attempt++) {
       if (attempt > 0) {
@@ -77,7 +100,7 @@ public class JusoSearchClient implements AddressSearch {
         return new Failed(Reason.RATE_LIMITED, null);
       }
       try {
-        Response body = call(cleaned);
+        Response body = call(cleaned, page);
         Response.Common common =
             body == null || body.results() == null ? null : body.results().common();
         if (common == null) {
@@ -112,12 +135,12 @@ public class JusoSearchClient implements AddressSearch {
     return new Failed(Reason.UNAVAILABLE, last);
   }
 
-  private Response call(String keyword) {
+  private Response call(String keyword, int page) {
     var form = new LinkedMultiValueMap<String, String>();
     form.add("confmKey", properties.apiKey());
     form.add("keyword", keyword);
-    form.add("currentPage", "1");
-    form.add("countPerPage", "10");
+    form.add("currentPage", String.valueOf(page));
+    form.add("countPerPage", String.valueOf(PAGE_SIZE));
     form.add("resultType", "json");
     return http.post()
         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
