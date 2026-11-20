@@ -22,12 +22,24 @@ import httpx
 
 from mujuthaek_collector.config import Settings
 from mujuthaek_collector.core import classify as cls
-from mujuthaek_collector.core import intake
+from mujuthaek_collector.core import intake, recruitment
 from mujuthaek_collector.core.documents.text import extract_text
 from mujuthaek_collector.core.file_store import FileStore, content_type, object_key, stored_until, text_key
 from mujuthaek_collector.core.files import FileRef, pick_notice_files, pick_unit_lists, unclear_notice
 from mujuthaek_collector.core.publisher import MAX_TEXT_CHARS, build_collected_event
-from mujuthaek_collector.core.storage import IGNORED, MAX_ATTEMPTS, ORPHAN_FOLLOW_UP, PENDING, SKIPPED, BoardState, NewVersion, PostRow, SavedFile, Store
+from mujuthaek_collector.core.storage import (
+    IGNORED,
+    MAX_ATTEMPTS,
+    ORPHAN_FOLLOW_UP,
+    PENDING,
+    SCOPE_UNVERIFIED,
+    SKIPPED,
+    BoardState,
+    NewVersion,
+    PostRow,
+    SavedFile,
+    Store,
+)
 from mujuthaek_collector.core.versioning import content_hash, list_hash, sha256_hex
 from mujuthaek_collector.errors import BlockedError, FileNotReady, FileRejected, FileUnavailable, ParseError
 from mujuthaek_collector.sources.base import Board, Detail, Fetcher, ListItem, Source
@@ -110,7 +122,7 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
                 store.save_board_state(source.code, board.key, state)
                 return
             state.empty_runs = 0
-            first_page_hash = list_hash([f"{i.post_key}|{i.title}|{i.posted_on}|{i.list_status or ''}" for i in items])
+            first_page_hash = list_hash([f"{i.post_key}|{i.title}|{i.posted_on}|{i.list_status or ''}|{i.deadline_on or ''}" for i in items])
             if first_page_hash == state.last_list_hash and not queued_before and not recheck:
                 log.info("목록 변화 없음", extra={"source": source.code, "board": board.key})
                 store.save_board_state(source.code, board.key, state)
@@ -124,6 +136,13 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
                 # 상세 처리가 다른 게시판의 주소·값으로 공고를 열었어요(2026-11-10 재검토)
                 same_board = post.board_key == board.key
                 store.update_list_fields(post.id, item.list_status, item.deadline_on, item.to_json() if same_board else None)
+                if settings.active_only and same_board and post.status == SKIPPED and post.last_error == SCOPE_UNVERIFIED:
+                    parent = store.post_by_id(post.parent_post_id) if post.parent_post_id else None
+                    if recruitment.confirmed(item.title, item.list_status, item.deadline_on, ctx.today) or (
+                        parent and recruitment.confirmed(parent.title, parent.list_status, parent.deadline_on, ctx.today)
+                    ):
+                        status, reason = (PENDING, None) if post.latest_version else open_status(ctx, parent, item.posted_on)
+                        store.reopen_scope(post.id, status, reason)
                 continue
             all_known = False
             register(ctx, item, cutoff)
@@ -134,7 +153,10 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
             break
 
     relink_follow_ups(ctx, cutoff)
-    for post in store.queued_posts(source.code, board.key, settings.detail_limit):
+    queued = store.queued_posts(source.code, board.key, settings.detail_limit)
+    if settings.active_only:
+        queued.sort(key=lambda post: post.parent_post_id is not None)
+    for post in queued:
         process_safely(ctx, post)
 
     if not store.queued_posts(source.code, board.key, 1) and first_page_hash:
@@ -143,11 +165,8 @@ def run_board(ctx: Context, board: Board, *, recheck: bool = False) -> None:
 
 
 def active_notice(item: ListItem, today: date) -> bool:
-    """목록에서 종료를 확인한 공고만 제외해요. 날짜 미정·상시모집은 게시일로 버리지 않아요."""
-    status = (item.list_status or "").replace(" ", "")
-    if status in {"마감", "종료", "취소", "철회", "접수마감", "모집마감", "모집종료", "공고종료", "공고취소"}:
-        return False
-    return item.deadline_on is None or item.deadline_on >= today
+    """목록에서 종료를 확인한 공고를 제외해요. 미확인 글은 상세에서 일정을 확인해요."""
+    return not recruitment.is_closed(item.list_status, item.deadline_on, today)
 
 
 def register(ctx: Context, item: ListItem, cutoff: date) -> None:
@@ -291,6 +310,9 @@ def process_post(ctx: Context, post: PostRow) -> bool:
             ctx.store.set_parent(post.id, parent.id)
             post.parent_post_id = parent.id
     item = ListItem.from_json(post.list_item)
+    if ctx.settings.active_only and recruitment.is_closed(post.list_status, post.deadline_on, ctx.today):
+        ctx.store.mark_scope_skipped(post.id)
+        return False
     detail = source.fetch_detail(client, item)
     candidates = detail.files or item.files
     referer = item.detail_url or item.referer
@@ -338,6 +360,26 @@ def process_post(ctx: Context, post: PostRow) -> bool:
             notice_name, notice_text = file.name, text
             break
         ctx.warn(f"[{post.post_key}] 공고문을 읽지 못했어요 ({file.name}): {status}")
+
+    if ctx.settings.active_only:
+        parent = ctx.store.post_by_id(post.parent_post_id) if post.parent_post_id else None
+        parent_open = parent is not None and recruitment.confirmed(parent.title, parent.list_status, parent.deadline_on, ctx.today)
+        deadline = post.deadline_on
+        if post.kind != cls.FOLLOW_UP and deadline is None:
+            periods = "\n".join(f"{key}: {value}" for key, value in detail.meta.items() if isinstance(value, str))
+            deadline = recruitment.application_deadline(periods, detail.body_text, notice_text)
+        status = next(
+            (value for key, value in detail.meta.items() if key in {"공고상태", "모집상태", "접수상태"} and isinstance(value, str) and value.strip()),
+            post.list_status,
+        )
+        own_open = post.kind != cls.FOLLOW_UP and recruitment.confirmed(detail.title or post.title, status, deadline, ctx.today)
+        if not own_open and (not parent_open or recruitment.is_closed(status, deadline, ctx.today)):
+            ctx.store.mark_scope_skipped(post.id)
+            return False
+        if own_open and (deadline != post.deadline_on or status != post.list_status):
+            ctx.store.update_list_fields(post.id, status, deadline)
+            post.list_status = status
+            post.deadline_on = deadline
 
     for file in pick_unit_lists(candidates):  # 주택목록: 엑셀 우선 최대 2개. 원본만 S3에 두고, 표 해석은 extraction이 해요
         data, kept = fetch(file)
