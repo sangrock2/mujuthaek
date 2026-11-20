@@ -2,7 +2,7 @@
 
   run                    큐 소비 + 아웃박스 발행(2초) + 검수 API(:8092). 운영·Docker 기본 명령
   process-file <파일>    raw.notice.collected 이벤트 파일 1건을 큐 없이 처리하고 저장
-  retry                  WAITING_SOURCE·FAILED로 끝난 이벤트를 다시 처리 (보관 기간이 지난 호출 캐시도 지움)
+  retry                  자료 대기·일시 실패를 다시 처리. 보류 사유는 --reason으로 명시
   relay                  아웃박스에 쌓인 이벤트를 한 번 발행
   review-api             검수 API만 실행
   declare                큐·교환기만 선언
@@ -31,7 +31,9 @@ def main() -> None:
     commands.add_parser("run")
     file_command = commands.add_parser("process-file")
     file_command.add_argument("path", type=Path)
-    commands.add_parser("retry")
+    retry_command = commands.add_parser("retry")
+    retry_command.add_argument("--reason", choices=("provider_credit", "app_budget", "other"))
+    retry_command.add_argument("--limit", type=int, choices=range(1, 21), default=10, metavar="1-20")
     commands.add_parser("relay")
     commands.add_parser("review-api")
     commands.add_parser("declare")
@@ -61,7 +63,7 @@ def main() -> None:
         processor = worker.Processor(settings)
         with worker.store_session(settings) as store:
             worker.purge_call_cache(settings, store)
-            events = store.retryable_events(max_attempts=settings.max_attempts)
+            events = store.retryable_events(limit=args.limit, max_attempts=settings.max_attempts, reason=args.reason)
             busy = 0
             for raw_event in events:
                 try:

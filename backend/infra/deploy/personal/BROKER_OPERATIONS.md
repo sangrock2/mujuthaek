@@ -28,4 +28,21 @@ sudo python3 broker_status.py --previous broker-before.json > broker-now.json
 
 추출 입력은 해당 워커의 `python -m mujuthaek_extraction replay-dlq --queue notice --limit 10` 또는 `--queue policy`로 처리합니다. 운영 API 결과 재처리에는 위 임시 계정의 명령을 사용합니다. 제공자 잔액 부족이나 예산 상한으로 멈춘 메시지는 한도가 해소되었는지 먼저 확인합니다.
 
-데이터 볼륨 전체가 손실되면 단일 브로커의 큐 자체는 복구할 별도 복제본이 없습니다. DB 기반 후속 작업 유실과 노드·볼륨 장애 대응은 별도의 검증 범위입니다.
+## 공고 처리 이력
+
+운영 호스트에서 `sudo python3 broker_ledger.py trace --notice <notice-id>`를 실행합니다. 공개 이전 공고와 정정공고는 `--raw-post <raw-post-id>`로 조회할 수 있습니다. 수집 버전, Outbox 발행, 추출 시도, 검수 대기·결정, API 수신과 공개 버전이 시각순으로 표시됩니다. 원문·후보·검수 메모는 반환하지 않습니다. 조회 제한을 넘으면 `truncated`가 표시됩니다.
+
+## 브로커 볼륨 손실
+
+1. 발행기와 소비자를 제어할 수 있는 복구 시점과 손실 시간 범위를 기록합니다. 새 브로커에 기존 정의를 복원하고 대상 큐·바인딩을 먼저 확인합니다.
+2. `sudo python3 broker_ledger.py plan --hours 24 --limit 500`으로 확정 발행과 소비 기록을 공고 수집·추출 결과 경로별로 대조합니다. `truncated`가 참이면 기간을 줄이고, 이전 구간에는 `--end`로 앞선 결과의 `window_start`를 넘겨 이어서 확인합니다.
+3. `without_consumer_evidence`는 DB에 처리 근거가 없는 발행 ID입니다. 브로커가 살아 있다면 현재 큐에 남았거나 처리 중일 수 있습니다. `attempt_without_receipt`는 소비자가 이미 처리 기록을 남긴 건수입니다. 추출 실패나 자료 대기처럼 DB에 후속 처리가 남은 이벤트는 원본 메시지를 별도로 복구할지 결정하기 전에 그 기록을 확인합니다.
+4. 정책 수집 메시지는 의도적으로 건너뛴 경우에도 소비 기록이 없을 수 있으므로 `needs_manual_policy_review`에 별도로 분류합니다. 현재 큐가 빈 상태인지와 소비 기록을 다시 확인한 뒤, 필요한 이벤트만 원래 ID로 발행하는 승인된 복구 작업을 실행합니다. 발행 전 Outbox에 남은 건은 일반 릴레이에 맡깁니다. 계획 명령은 읽기 전용입니다. 알림 경로와 DB 자체 손실은 이 명령의 범위 밖입니다.
+
+## 실패 원인별 공고 추출 재시도
+
+DB에 실패가 기록된 공고는 자료 대기, 일시 오류, 속도 제한 순서로 각각 기본 지연의 1배·2배·4배를 적용합니다. 같은 이벤트의 실패 횟수가 늘면 간격을 늘리며 최대 24시간과 기존 시도 횟수 상한을 적용합니다. 공급자 잔액·앱 예산·미분류 실패는 자동 재시도 대상에서 제외합니다. 원인을 해소한 뒤 `python -m mujuthaek_extraction retry --reason provider_credit --limit 10`처럼 사유와 대상을 제한해 재개합니다. 앱 예산은 `app_budget`, 미분류는 `other`입니다. 이 명령은 실제 추출을 시작하므로 모델 설정에 따라 비용이 발생할 수 있습니다.
+
+## 로컬 장애 복구 계측
+
+워크스페이스의 추출 Python 환경에서 `python backend/infra/deploy/personal/broker_recovery_drill.py --events 30`을 실행합니다. 스크립트가 루프백에만 연결한 임시 RabbitMQ를 만들고, 장애 탐지·설정 복원·첫 이벤트 처리·적체 해소까지 단조 시계로 측정합니다. 합성 이벤트와 지역 PC 측정값으로 운영 복구 시간을 산정하는 경우 부하와 인프라 차이를 고려합니다.
