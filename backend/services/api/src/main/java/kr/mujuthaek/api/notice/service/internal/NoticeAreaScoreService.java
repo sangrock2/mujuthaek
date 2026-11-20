@@ -13,7 +13,6 @@ import kr.mujuthaek.api.notice.repository.NoticeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -38,7 +37,7 @@ public class NoticeAreaScoreService {
   }
 
   /** 저장한 점수 개수를 돌려줘요. 없는 공고면 0. */
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  @Transactional
   public int save(AreaScoresCalculated event) {
     var current = notices.lockCurrent(event.noticeId());
     if (current.isEmpty()

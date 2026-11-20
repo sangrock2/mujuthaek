@@ -1982,7 +1982,9 @@ class NoticeIngestionIntegrationTest {
     ingestion.apply(body(changed));
     assertThat(query.detail(id).areaSummaries()).hasSize(1);
     assertThat(areaScores.save(new AreaScoresCalculated(id, 1, List.of(score)))).isEqualTo(1);
-    assertThat(events.stream(NoticeLocationsChanged.class)).hasSize(1);
+    assertThat(
+            events.stream(NoticeLocationsChanged.class).map(NoticeLocationsChanged::noticeVersion))
+        .containsExactly(1, 2);
   }
 
   @Test

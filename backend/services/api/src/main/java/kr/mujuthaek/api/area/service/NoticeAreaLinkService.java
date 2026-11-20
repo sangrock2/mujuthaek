@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import kr.mujuthaek.api.area.domain.AreaSource;
 import kr.mujuthaek.api.area.domain.GeocodeResult;
@@ -31,7 +30,7 @@ import org.springframework.stereotype.Service;
  *
  * <ul>
  *   <li>주소·법정동코드가 그대로인 위치는 좌표를 다시 찾지 않고 공고 버전만 올려요 (같은 이벤트를 두 번 받아도, 위치 말고 다른 것만 바뀐 새 버전이어도)
- *   <li>좌표가 새로 생기거나 바뀐 위치만 지표·점수를 다시 계산해요
+ *   <li>좌표가 저장된 뒤 중단돼도 지표·점수를 다시 계산해요
  *   <li>이번 목록에 없는 위치(새 버전에서 빠짐)는 지워요. 지표·점수도 같이 지워져요
  *   <li>생활 점수(LIVING) = 생활권 항목 5개의 같은 비중 총점. 상업 점수(COMMERCIAL)는 업종이 있어야 해서 요청 때 계산하고 보내지 않아요
  * </ul>
@@ -66,54 +65,60 @@ public class NoticeAreaLinkService {
     this.events = events;
   }
 
-  /** 받은 공고 위치로 좌표·지표·점수를 맞추고 점수를 보내요. 다시 계산한 위치 수를 돌려줘요. */
-  public int apply(NoticeLocationsChanged event) {
-    Map<String, StoredLocation> before =
-        locations.ofNotice(event.noticeId()).stream()
-            .collect(
-                Collectors.toMap(
-                    StoredLocation::noticeLocationId,
-                    Function.identity(),
-                    (a, b) -> a,
-                    LinkedHashMap::new));
-    List<String> ids =
-        event.locations().stream().map(NoticeLocationsChanged.Location::locationId).toList();
-    int removed = locations.deleteMissing(event.noticeId(), ids);
-
-    List<UUID> recalculate = new ArrayList<>();
+  /** Resolve addresses before taking a database lock. */
+  Map<String, NoticeLocationService.Lookup> resolve(NoticeLocationsChanged event, Runnable renew) {
+    Map<String, StoredLocation> before = currentById(event.noticeId());
+    Map<String, NoticeLocationService.Lookup> resolved = new LinkedHashMap<>();
     for (NoticeLocationsChanged.Location l : event.locations()) {
+      renew.run();
       StoredLocation old = before.get(l.locationId());
-      if (old != null && unchanged(old, l)) {
-        locations.touchVersion(old.locationId(), event.noticeVersion());
-        continue;
-      }
-      var located =
-          locator.locate(
-              new NoticeLocation(
-                  event.noticeId(),
-                  event.noticeVersion(),
-                  l.locationId(),
-                  l.kind(),
-                  l.address(),
-                  l.regionCode()));
-      var point = located.result().coordinate();
-      if (point != null && (old == null || !point.equals(old.coordinate()))) {
-        recalculate.add(located.locationId());
+      if (old == null || !unchanged(old, l)) {
+        resolved.put(
+            l.locationId(),
+            locator.resolve(
+                new NoticeLocation(
+                    event.noticeId(),
+                    event.noticeVersion(),
+                    l.locationId(),
+                    l.kind(),
+                    l.address(),
+                    l.regionCode())));
       }
     }
-    if (!recalculate.isEmpty()) {
-      metrics.recalculate(recalculate);
-      lifeScores.recalculate(recalculate);
+    return resolved;
+  }
+
+  /** The worker fences this write against the publication pointer and claim token. */
+  void store(NoticeLocationsChanged event, Map<String, NoticeLocationService.Lookup> resolved) {
+    Map<String, StoredLocation> current = currentById(event.noticeId());
+    var ids = event.locations().stream().map(NoticeLocationsChanged.Location::locationId).toList();
+    locations.deleteMissing(event.noticeId(), ids);
+    for (NoticeLocationsChanged.Location l : event.locations()) {
+      StoredLocation existing = current.get(l.locationId());
+      if (existing != null && unchanged(existing, l)) {
+        locations.touchVersion(existing.locationId(), event.noticeVersion());
+      } else {
+        var lookup = resolved.get(l.locationId());
+        if (lookup == null) {
+          throw new IllegalStateException("Location changed after resolution");
+        }
+        locator.save(lookup);
+      }
     }
-    publishScores(event.noticeId(), event.noticeVersion(), locations.ofNotice(event.noticeId()));
-    log.info(
-        "공고 위치 반영 noticeId={} version={} 위치 {}곳, 다시 계산 {}곳, 지운 위치 {}곳",
-        event.noticeId(),
-        event.noticeVersion(),
-        ids.size(),
-        recalculate.size(),
-        removed);
-    return recalculate.size();
+  }
+
+  /** Work that stopped after committing coordinates can repeat this calculation. */
+  void refresh(NoticeLocationsChanged event) {
+    List<StoredLocation> stored = locations.ofNotice(event.noticeId());
+    List<UUID> ids = stored.stream().map(StoredLocation::locationId).toList();
+    metrics.recalculate(ids);
+    lifeScores.recalculate(ids);
+    publishScores(event.noticeId(), event.noticeVersion(), stored);
+  }
+
+  private Map<String, StoredLocation> currentById(UUID noticeId) {
+    return locations.ofNotice(noticeId).stream()
+        .collect(Collectors.toMap(StoredLocation::noticeLocationId, location -> location));
   }
 
   /**

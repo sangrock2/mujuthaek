@@ -562,10 +562,10 @@ public class NoticeIngestionService {
     return new NewNotice(noticeId, false);
   }
 
-  /** area가 위치별 지역 점수를 계산하도록 위치를 알려요. 위치가 없으면 보내지 않아요. */
+  /** area가 현재 공개 버전의 위치를 처리하도록 같은 트랜잭션에서 요청해요. */
   private void publishLocations(UUID noticeId, int version, ExtractionEvent event) {
     List<NoticeLocationsChanged.Location> locations = NoticeContent.locations(event);
-    if (!locations.isEmpty()) {
+    if (version > 1 || !locations.isEmpty()) {
       events.publishEvent(new NoticeLocationsChanged(noticeId, version, locations));
     }
   }
@@ -807,9 +807,7 @@ public class NoticeIngestionService {
         current.noticeId(), NoticeContent.regions(event), NoticeContent.nationwide(event));
     events.publishEvent(
         new NoticeUpdated(current.noticeId(), event.field(), changed, event.reprocess()));
-    if (changed.contains("locations")) {
-      publishLocations(current.noticeId(), version, event);
-    }
+    publishLocations(current.noticeId(), version, event);
     if (!event.reprocess()
         && ApplicationStatusCalculator.justClosed(current.status(), listing.status())) {
       // 정정으로 접수 기간이 끝난 경우 (예: 마감일 앞당김). 재처리(reprocess)는 상태·이력만 갱신하고 사용자 알림용 이벤트는 보내지 않아요
