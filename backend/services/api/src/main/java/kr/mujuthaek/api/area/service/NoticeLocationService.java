@@ -28,12 +28,22 @@ public class NoticeLocationService {
   public record Located(UUID locationId, GeocodeResult result, boolean reused) {}
 
   public Located locate(NoticeLocation location) {
+    return save(resolve(location));
+  }
+
+  record Lookup(NoticeLocation location, String key, GeocodeResult result, boolean reused) {}
+
+  Lookup resolve(NoticeLocation location) {
     String key = addressKey(location.address());
     var reused = locations.reusable(key, location.bjdCode()); // 찾기 입력(주소·법정동코드)이 같을 때만
     GeocodeResult result =
         reused.orElseGet(() -> locator.locate(location.address(), location.bjdCode()));
-    UUID id = locations.save(location, key, result);
-    return new Located(id, result, reused.isPresent());
+    return new Lookup(location, key, result, reused.isPresent());
+  }
+
+  Located save(Lookup lookup) {
+    UUID id = locations.save(lookup.location(), lookup.key(), lookup.result());
+    return new Located(id, lookup.result(), lookup.reused());
   }
 
   /** 정리한 주소 글자 (띄어쓰기·괄호 안 안내 등을 정리한 것). 주소가 없으면 null — 다시 찾기 판단에 쓰지 않아요. */

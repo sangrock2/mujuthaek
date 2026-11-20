@@ -2,11 +2,10 @@ package kr.mujuthaek.api.notice.event;
 
 import kr.mujuthaek.api.common.event.AreaScoresCalculated;
 import kr.mujuthaek.api.notice.service.internal.NoticeAreaScoreService;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.event.TransactionalEventListener;
 
-/** area가 보낸 지역 점수를 커밋 뒤에 받아 저장해요. area가 트랜잭션 밖에서 보내도 받아요. */
+/** 위치 작업 완료와 지역 점수 저장을 같은 트랜잭션으로 묶습니다. */
 @Component
 class AreaScoresListener {
 
@@ -16,8 +15,7 @@ class AreaScoresListener {
     this.scores = scores;
   }
 
-  @Async
-  @TransactionalEventListener(fallbackExecution = true)
+  @EventListener
   void on(AreaScoresCalculated event) {
     scores.save(event);
   }

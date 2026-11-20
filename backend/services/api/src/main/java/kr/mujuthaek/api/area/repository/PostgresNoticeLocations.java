@@ -21,6 +21,7 @@ import kr.mujuthaek.api.area.domain.StoredLocation;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.stereotype.Component;
 
 /**
@@ -105,8 +106,8 @@ public final class PostgresNoticeLocations {
   public UUID save(NoticeLocation location, String addressKey, GeocodeResult result) {
     Coordinate c = result.coordinate();
     FailReason reason = result.failReason();
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(SAVE)) {
+    Connection conn = DataSourceUtils.getConnection(dataSource);
+    try (PreparedStatement ps = conn.prepareStatement(SAVE)) {
       ps.setObject(1, location.noticeId());
       ps.setString(2, location.noticeLocationId());
       ps.setInt(3, location.noticeVersion());
@@ -128,6 +129,8 @@ public final class PostgresNoticeLocations {
       }
     } catch (SQLException e) {
       throw new DataAccessResourceFailureException("공고 위치를 저장하지 못했어요: " + e.getMessage(), e);
+    } finally {
+      DataSourceUtils.releaseConnection(conn, dataSource);
     }
   }
 
