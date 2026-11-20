@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 import pytest
 from jsonschema import ValidationError
+from pika.exceptions import UnroutableError
 
 from mujuthaek_platform import outbox
 from mujuthaek_platform.contracts import events_dir, validate_event
@@ -33,25 +34,32 @@ class FakeConn:
     def __init__(self, rows):
         self.rows = rows
         self.updated = []
+        self.retained = []
 
     @contextmanager
     def transaction(self):
         yield
 
     def execute(self, sql, params=None):
-        if sql.startswith("update"):
+        if "returning attempts" in sql:
+            self.retained.append(params[0])
+        elif sql.startswith("update"):
             self.updated.append(params[0])
         return self
+
+    def fetchone(self):
+        return (1,)
 
     def fetchall(self):
         return self.rows
 
 
 class FakeChannel:
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, failure=None):
         self.declared, self.sent = [], []
         self.confirming = False
         self.fail_on = fail_on  # 이 eventId를 보낼 때 브로커가 거부한 것처럼 예외
+        self.failure = failure or RuntimeError("connection closed")
 
     def confirm_delivery(self):
         self.confirming = True
@@ -61,7 +69,7 @@ class FakeChannel:
 
     def basic_publish(self, exchange, routing_key, body, properties, mandatory=False):
         if properties.message_id == self.fail_on:
-            raise RuntimeError("unroutable")
+            raise self.failure
         self.sent.append((exchange, routing_key, json.loads(body), properties.message_id, mandatory))
 
 
@@ -96,6 +104,14 @@ def test_relay_once_stops_without_marking_when_publish_fails():
     with pytest.raises(RuntimeError):
         outbox.relay_once(conn, FakeChannel(fail_on=second["eventId"]))
     assert conn.updated == [first["eventId"]]  # 실패한 이벤트는 표시하지 않아요 (실제 DB에서는 첫 번째도 되돌려져요)
+
+
+def test_missing_binding_does_not_block_later_outbox_rows():
+    first, second = (new_event("raw.notice.collected", "collector", {"n": n}) for n in (1, 2))
+    conn = FakeConn([(e["eventId"], e["eventType"], e) for e in (first, second)])
+    assert outbox.relay_once(conn, FakeChannel(first["eventId"], UnroutableError([]))) == 1
+    assert conn.retained == [first["eventId"]]
+    assert conn.updated == [second["eventId"]]
 
 
 def sample_event(**payload):

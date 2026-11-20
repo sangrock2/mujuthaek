@@ -87,6 +87,11 @@ class NoticeAreaLinkServiceTest {
     return new NoticeLocationsChanged(notice, version, List.of(locations));
   }
 
+  private void apply(NoticeLocationsChanged event) {
+    link.store(event, link.resolve(event, () -> {}));
+    link.refresh(event);
+  }
+
   private static Location found(String id) {
     return new Location(id, "COMPLEX", BJD, "부산광역시 시험구 연결시험로 7", "시험단지");
   }
@@ -104,9 +109,8 @@ class NoticeAreaLinkServiceTest {
 
   @Test
   void locationsGetCoordinatesMetricsScoresAndTheScoresGoBackToNotice() throws Exception {
-    int recalculated = link.apply(event(1, found("building-a"), notFound("building-b")));
+    apply(event(1, found("building-a"), notFound("building-b")));
 
-    assertThat(recalculated).isEqualTo(1); // 좌표를 찾은 위치만
     assertThat(
             one(
                 "select string_agg(notice_location_id||':'||status, ',' order by notice_location_id)"
@@ -140,28 +144,27 @@ class NoticeAreaLinkServiceTest {
   }
 
   @Test
-  void theSameEventTwiceDoesNotLookUpOrRecalculateAgain() throws Exception {
+  void theSameEventTwiceDoesNotLookUpTheAddressAgain() throws Exception {
     answer = keyword -> new SearchOutcome.Failed(Reason.NO_KEY, null);
-    link.apply(event(1, found("building-a"), notFound("building-b")));
+    apply(event(1, found("building-a"), notFound("building-b")));
     int searchesAfterFirst = searched.size();
 
-    int recalculated = link.apply(event(1, found("building-a"), notFound("building-b")));
+    apply(event(1, found("building-a"), notFound("building-b")));
 
-    assertThat(recalculated).isZero();
     assertThat(searched).hasSize(searchesAfterFirst);
     assertThat(scores()).hasSize(2); // 점수는 다시 보내요 (같은 값)
   }
 
   @Test
   void aLocationLeftOutOfANewVersionIsDeletedWithItsScores() throws Exception {
-    link.apply(event(1, found("building-a"), found("building-c")));
+    apply(event(1, found("building-a"), found("building-c")));
     String c =
         one(
             "select location_id from area.notice_locations where notice_id = '"
                 + notice
                 + "' and notice_location_id = 'building-c'");
 
-    link.apply(event(2, found("building-a")));
+    apply(event(2, found("building-a")));
 
     assertThat(
             one(
@@ -182,12 +185,12 @@ class NoticeAreaLinkServiceTest {
   void aLocationThatFailedForASearchApiErrorIsTriedAgain() throws Exception {
     answer = keyword -> new SearchOutcome.Failed(Reason.UNAVAILABLE, "-999");
     Location jibun = new Location("site-1", "SITE", null, "부산광역시 시험구 없는동 1-1", null);
-    link.apply(event(1, jibun));
+    apply(event(1, jibun));
     assertThat(
             one("select fail_reason from area.notice_locations where notice_id = '" + notice + "'"))
         .isEqualTo("API_ERROR");
 
-    link.apply(event(1, jibun));
+    apply(event(1, jibun));
 
     assertThat(searched).hasSize(2); // 다시 찾아요
     assertThat(scores()).isEmpty(); // 좌표가 없으면 보낼 점수도 없어요
@@ -195,7 +198,7 @@ class NoticeAreaLinkServiceTest {
 
   @Test
   void reloadingFacilitiesRecalculatesAndSendsScoresAgain() throws Exception {
-    link.apply(event(3, found("building-a")));
+    apply(event(3, found("building-a")));
     published.clear();
 
     assertThat(link.onBaseDataLoaded(AreaSource.ADDRESS_ENTRANCE)).isFalse();
@@ -210,7 +213,7 @@ class NoticeAreaLinkServiceTest {
 
   @Test
   void failedLocationsAreListedForTheAdminScreen() {
-    link.apply(event(1, notFound("building-b")));
+    apply(event(1, notFound("building-b")));
 
     assertThat(link.failedLocations(1000))
         .anySatisfy(s -> assertThat(s.noticeId()).isEqualTo(notice));

@@ -15,13 +15,14 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
- * 보충 발행 명령. 받는 모듈의 리스너가 같은 프로세스 안에서 처리하므로, 받는 쪽이 비동기(@Async)면 끝날 때까지 기다리도록 종료 대기 옵션을 함께 줘요.
+ * 보충 발행 명령. 위치 요청은 DB에 저장되고 운영 API의 워커가 이어서 처리합니다. 공개 이벤트의 비동기 리스너를 위해 종료 대기 옵션을 둡니다.
  *
  * <pre>
  * ./gradlew bootRun --args='--notice.backfill=published,locations
  *     [--notice.backfill.include-closed=true]
  *     --spring.main.web-application-type=none --spring.rabbitmq.listener.simple.auto-startup=false
  *     --notice.status-refresh.enabled=false
+ *     --mujuthaek.area.location-worker-enabled=false
  *     --spring.task.execution.shutdown.await-termination=true
  *     --spring.task.execution.shutdown.await-termination-period=5m'
  * </pre>

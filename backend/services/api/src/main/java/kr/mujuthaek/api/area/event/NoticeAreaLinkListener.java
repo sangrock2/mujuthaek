@@ -1,32 +1,28 @@
 package kr.mujuthaek.api.area.event;
 
+import kr.mujuthaek.api.area.repository.NoticeLocationJobs;
 import kr.mujuthaek.api.area.service.NoticeAreaLinkService;
 import kr.mujuthaek.api.common.event.NoticeLocationsChanged;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-/**
- * notice의 공고 위치와 area의 기초 데이터 적재를 커밋 뒤에 비동기로 받아요. 좌표 찾기는 외부 API를 불러 느려서 공고 반영을 붙잡지 않게 해요. 트랜잭션 밖에서
- * 보내도 받아요(보충 발행 명령 등).
- *
- * <p>보충 발행(notice.backfill=locations)으로 전체를 다시 돌릴 때는 {@code
- * --spring.task.execution.shutdown.await-termination=true}와 충분한 대기 시간을 같이 줘야 끝까지 처리해요(좌표 찾기는 외부
- * API).
- */
+/** 좌표 작업은 공고 공개와 함께 저장하고, 기초 데이터 적재 후 전체 재계산은 비동기로 받습니다. */
 @Component
 class NoticeAreaLinkListener {
 
   private final NoticeAreaLinkService link;
+  private final NoticeLocationJobs jobs;
 
-  NoticeAreaLinkListener(NoticeAreaLinkService link) {
+  NoticeAreaLinkListener(NoticeAreaLinkService link, NoticeLocationJobs jobs) {
     this.link = link;
+    this.jobs = jobs;
   }
 
-  @Async
-  @TransactionalEventListener(fallbackExecution = true)
+  @EventListener
   void on(NoticeLocationsChanged event) {
-    link.apply(event);
+    jobs.enqueue(event);
   }
 
   @Async
