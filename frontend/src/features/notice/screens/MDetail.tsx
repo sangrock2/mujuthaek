@@ -42,7 +42,7 @@ import { UnitPrices } from "@/features/notice/components/UnitPrices";
 import { UnitPrepValue } from "@/features/notice/components/UnitPrep";
 import type { StandardNotice } from "@/features/notice/mocks/notice";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
-import { useNotice } from "@/features/notice/queries";
+import { useNotice, useNoticeBenefits } from "@/features/notice/queries";
 import { usePdfViewer } from "@/features/notice/usePdfViewer";
 import { track } from "@/shared/lib/analytics";
 import { cn } from "@/shared/lib/cn";
@@ -264,6 +264,7 @@ function MApiUnits({
 export function MDetail({ id }: { id: string }) {
   const { data, loading, error } = useNotice(id);
   const n = data?.kind === "standard" ? data : undefined;
+  const relatedBenefits = useNoticeBenefits(id, Boolean(n));
   useDetailTitle(n?.title);
   const j = useNoticeJudgment(n);
   const pdf = usePdfViewer();
@@ -280,7 +281,7 @@ export function MDetail({ id }: { id: string }) {
       </MPage>
     );
   }
-  const benefitsAll = n.benefits ?? [];
+  const benefitsAll = relatedBenefits.data ?? n.benefits ?? [];
   const benefits = allBenefits ? benefitsAll : benefitsAll.slice(0, MOBILE_BENEFIT_COUNT);
   /** 주택목록에서 고른 집 단지의 생활권으로 (웹과 같아요) */
   const showLife = (siteId: string) => {
@@ -406,7 +407,7 @@ export function MDetail({ id }: { id: string }) {
         {benefits.length > 0 && (
           <section aria-labelledby="bn-h" className={cn(card, "px-[20px] pt-[16px] pb-[6px]")}>
             <h3 id="bn-h" className="mx-0 mt-0 mb-[2px] text-[17px] font-extrabold">
-              입주하면 받을 수 있는 혜택
+              이 공고와 함께 확인할 혜택
             </h3>
             {n.benefitArea && (
               <span className="text-text-tertiary mb-[4px] text-[13px]">

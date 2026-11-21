@@ -17,10 +17,10 @@ import type {
 } from "@/features/benefits/mocks/benefits";
 
 type ApiOverall = "ELIGIBLE" | "NEEDS_INPUT" | "INELIGIBLE";
-type ApiApplyStatus = "UPCOMING" | "APPLYING" | "CLOSED" | "ALWAYS";
+type ApiApplyStatus = "UPCOMING" | "APPLYING" | "CLOSED" | "ALWAYS" | "UNKNOWN";
 
 /** POST /api/v1/benefits/search 한 줄 (백엔드 BenefitSearchResponse.Item) */
-type ApiBenefitItem = {
+export type ApiBenefitItem = {
   id: string;
   title: string;
   agency: string | null;

@@ -7,13 +7,15 @@ public enum ApplyStatus {
   UPCOMING,
   APPLYING,
   CLOSED,
-  ALWAYS;
+  ALWAYS,
+  UNKNOWN;
 
   public static ApplyStatus of(
       boolean applyAlways, LocalDate start, LocalDate end, LocalDate today) {
     if (applyAlways) return ALWAYS;
     if (start != null && today.isBefore(start)) return UPCOMING;
     if (end != null && end.isBefore(today)) return CLOSED;
+    if (start == null && end == null) return UNKNOWN;
     return APPLYING;
   }
 }

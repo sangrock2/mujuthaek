@@ -107,6 +107,9 @@ public final class BenefitJudge {
 
   /** 조건 한 줄. 화면 문구(label)는 조건 원문이에요. */
   static Item judge(Condition c, Applicant a, LocalDate today, IncomeBenchmarks benchmarks) {
+    if (c.rawText() != null && c.rawText().contains("소득인정액")) {
+      return unknown(c, "소득과 재산을 함께 반영한 소득인정액이 필요해요. 원문에서 확인 방법을 봐 주세요.");
+    }
     if (!c.known()) return unknown(c, "원문 조건을 확인해 주세요");
     return switch (c.type()) {
       case "AGE" -> age(c, a, today);
