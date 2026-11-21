@@ -45,6 +45,27 @@ def settle_related(*texts: Any) -> bool:
     return bool(SETTLE_WORDS.search(" ".join(str(t or "") for t in texts)))
 
 
+# 제목과 실제 제공 내용이 명백히 다른 영역일 때만 제외해요. 대상 조건에 적힌
+# '주거급여 수급자'나 기관의 사업 목적에 적힌 '지역정착'은 제공 내용이 아니에요.
+UNRELATED_HOUSING_TITLE = re.compile(
+    r"음식물\s*쓰레기|(?:개별)?주택가격.*(?:알림|알리미)|(?:태양광|신재생\s*에너지)"
+    r"|웨딩\s*(?:포토|촬영)|(?:창업|벤처)\s*펀드|영농\s*정착|농업인.*정착기반|농기계|농기구"
+    r"|대학\s*기숙사\s*(?:확충|신축)|토지매입비.*(?:융자|지원)"
+)
+DIRECT_HOUSING_SUPPORT = re.compile(
+    r"주거비|주거안정비|월세|임대료|임차료|임차보증금|전세보증금|입주보증금|전월세|전[·ㆍ・]월세"
+    r"|주택\s*(?:구입|매입)\s*(?:자금|비용)|이사\s*(?:비|비용)|주거환경\s*개선"
+    r"|(?:임대주택|빈집|기숙사)\s*(?:제공|입주|모집)|전입\s*(?:지원금|장려금|정착금)"
+)
+
+
+def clearly_unrelated_benefit(title: str, support: str | None) -> bool:
+    """겸용 정책이나 제공 내용이 불분명한 정책은 기존 추출·검수 흐름에 맡겨요."""
+    if DIRECT_HOUSING_SUPPORT.search(support or ""):
+        return False
+    return bool(UNRELATED_HOUSING_TITLE.search(title))
+
+
 # 창업지원 범위: 창업 공간 + 지원금·정책자금만 (2026-10-19 결정). 교육·멘토링·컨설팅·행사·경진대회·판로·홍보는 빼요.
 # 출처 분류만으로는 섞여 있어서(K-Startup '시설ㆍ공간ㆍ보육'에 창업교육, '사업화'에 언론홍보) 이름의 단어도 같이 봐요.
 #   1. 이름에 교육·행사 단어가 있고 공간 단어가 없으면 빼요 ('멘토링 입주기업 모집'은 남겨요)

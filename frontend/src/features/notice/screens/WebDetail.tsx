@@ -40,7 +40,7 @@ import { UnitPrepValue } from "@/features/notice/components/UnitPrep";
 import { SitesMap } from "@/features/notice/components/SitesMap";
 import { NoticeLocationSection } from "@/features/notice/components/NoticeLocationSection";
 import { noticeParams, useJudgmentViewed } from "@/features/notice/analytics";
-import { useNotice } from "@/features/notice/queries";
+import { useNotice, useNoticeBenefits } from "@/features/notice/queries";
 import { track } from "@/shared/lib/analytics";
 import { usePdfViewer } from "@/features/notice/usePdfViewer";
 import { unitStatus, useUnitPicker } from "@/features/notice/useUnitPicker";
@@ -389,6 +389,7 @@ function ApiBlockUnits({
 export function WebDetail({ id }: { id: string }) {
   const { data, loading, error } = useNotice(id);
   const n = data?.kind === "standard" ? data : undefined;
+  const relatedBenefits = useNoticeBenefits(id, Boolean(n));
   useDetailTitle(n?.title);
   const j = useNoticeJudgment(n);
   const pdf = usePdfViewer();
@@ -410,7 +411,7 @@ export function WebDetail({ id }: { id: string }) {
   }
   const doc = withMine(n.doc, j.judgment?.mineTypes ?? []);
   const money = j.judgment?.money;
-  const benefits = n.benefits ?? [];
+  const benefits = relatedBenefits.data ?? n.benefits ?? [];
   /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 옆에 열고, 없으면 기관 사이트로 */
   const original = noticeOriginal(doc, pdf, (via) =>
     track("notice_source_open", { ...noticeParams(n), via }),
@@ -542,9 +543,9 @@ export function WebDetail({ id }: { id: string }) {
                   className="rounded-card-lg bg-surface flex flex-col px-[30px] pt-[24px] pb-[14px]"
                 >
                   <div className="mb-[8px] flex items-baseline justify-between">
-                    <h2 className={sectionTitle}>입주하면 받을 수 있는 혜택</h2>
+                    <h2 className={sectionTitle}>이 공고와 함께 확인할 혜택</h2>
                     <span className="text-text-tertiary text-[13px]">
-                      {n.benefitArea} · 내 조건 판정
+                      {n.benefitArea ? `${n.benefitArea} · ` : ""}내 조건 판정
                     </span>
                   </div>
                   {benefits.map((b, i) => (

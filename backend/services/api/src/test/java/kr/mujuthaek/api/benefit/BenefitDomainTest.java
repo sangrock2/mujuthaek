@@ -24,7 +24,7 @@ class BenefitDomainTest {
         .isEqualTo(BenefitStatus.CLOSED);
     assertThat(BenefitStatus.of(true, false, null, TODAY, TODAY)).isEqualTo(BenefitStatus.OPEN);
     assertThat(ApplyStatus.of(true, null, null, TODAY)).isEqualTo(ApplyStatus.ALWAYS);
-    assertThat(ApplyStatus.of(false, null, null, TODAY)).isEqualTo(ApplyStatus.APPLYING);
+    assertThat(ApplyStatus.of(false, null, null, TODAY)).isEqualTo(ApplyStatus.UNKNOWN);
   }
 
   @Test

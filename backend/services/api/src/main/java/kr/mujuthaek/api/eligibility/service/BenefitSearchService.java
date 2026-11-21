@@ -71,7 +71,7 @@ public class BenefitSearchService {
         summary, categoryCounts, pageOf.items(), pageOf.nextCursor(), pageOf.hasNext());
   }
 
-  private static Comparator<BenefitSearchResponse.Item> order(String sort) {
+  static Comparator<BenefitSearchResponse.Item> order(String sort) {
     Comparator<BenefitSearchResponse.Item> deadline =
         Comparator.comparing(
             BenefitSearchResponse.Item::dday, Comparator.nullsLast(Comparator.naturalOrder()));

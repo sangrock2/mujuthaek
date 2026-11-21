@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import kr.mujuthaek.api.benefit.domain.ApplyStatus;
 import kr.mujuthaek.api.benefit.service.BenefitForJudgment;
 import kr.mujuthaek.api.benefit.service.BenefitQueryService;
 import kr.mujuthaek.api.common.exception.CustomException;
@@ -210,7 +211,7 @@ public class BenefitEvaluationService {
         j.result().overall() == kr.mujuthaek.api.eligibility.rule.Overall.INELIGIBLE
             ? 0
             : j.annualWon(),
-        applyStatus(b, today),
+        ApplyStatus.of(b.applyAlways(), b.applyStart(), b.applyEnd(), today).name(),
         b.applyEnd(),
         b.applyAlways() || b.applyEnd() == null
             ? null
@@ -218,13 +219,6 @@ public class BenefitEvaluationService {
         j.result().overall(),
         b.supports().stream().anyMatch(s -> PREPARE_COST.contains(s.kind())),
         b.needsReview());
-  }
-
-  private static String applyStatus(BenefitForJudgment b, LocalDate today) {
-    if (b.applyAlways()) return "ALWAYS";
-    if (b.applyStart() != null && today.isBefore(b.applyStart())) return "UPCOMING";
-    if (b.applyEnd() != null && b.applyEnd().isBefore(today)) return "CLOSED";
-    return "APPLYING";
   }
 
   /** 지원 내용 한 줄 ("월 최대 20만 원 · 12개월", "최대 1억 원 대출", "이자 50% 지원"). 첫 지원 내용 기준이에요. */

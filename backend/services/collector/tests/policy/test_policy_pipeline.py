@@ -97,6 +97,29 @@ def test_api_files_are_saved_with_event(api, web, policy_store, file_store, poli
     assert any(k.startswith("raw/bokjiro_central/WLF00001188/v1/00-") for k in file_store.objects)
 
 
+@pytest.mark.parametrize(
+    ("support", "expected_events"),
+    [
+        ("영농 시설과 기자재를 지원합니다.", 0),
+        ("귀농 초기 월세를 지원합니다.", 1),
+    ],
+)
+def test_only_clearly_unrelated_policy_is_skipped_before_extraction(
+    api, web, policy_store, file_store, policy_settings, support, expected_events
+):
+    policy = {
+        **s.YOUTH_POLICY,
+        "plcyNm": "청년농업인정착기반조성",
+        "plcyExplnCn": "영농정착지원을 통한 청년농업인 양성",
+        "plcySprtCn": support,
+    }
+    source = youth(api, web, policy)
+
+    run(source, api, web, policy_store, file_store, policy_settings)
+
+    assert len(policy_store.events) == expected_events
+
+
 def test_bizinfo_print_file_is_main_document(api, web, policy_store, file_store, policy_settings):
     source = BizinfoSource(KEY)
     api.pages[list_url(source)] = s.bizinfo_list([s.BIZINFO_STARTUP, s.BIZINFO_SME])
