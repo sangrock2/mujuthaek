@@ -4,13 +4,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
-import kr.mujuthaek.api.benefit.domain.ApplyStatus;
 import kr.mujuthaek.api.benefit.service.BenefitForJudgment;
+import kr.mujuthaek.api.common.exception.CustomException;
+import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.eligibility.dto.response.BenefitSearchResponse;
 import kr.mujuthaek.api.eligibility.rule.Applicant;
 import kr.mujuthaek.api.eligibility.rule.Overall;
-import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.service.NoticeQueryService;
 import org.springframework.stereotype.Service;
 
@@ -35,29 +34,25 @@ public class NoticeBenefitService {
 
   /** 입주 지역으로 후보를 찾고 거주 자격은 신청자가 입력한 현재 주소로 판정해요. */
   public List<BenefitSearchResponse.Item> forNotice(UUID id, Applicant applicant) {
-    var notice = notices.detail(id);
-    var header = notice.header();
-    String type = header.noticeType();
-    if (!"HOUSING".equals(header.field())
-        || !RECRUITING.contains(header.status())
+    var notice =
+        notices.findSummary(id).orElseThrow(() -> new CustomException(ErrorCode.NOTICE_NOT_FOUND));
+    String type = notice.noticeType();
+    if (!"HOUSING".equals(notice.field())
+        || !RECRUITING.contains(notice.status())
         || (type != null && SALE.contains(type))) {
       return List.of();
     }
 
     List<String> regions =
-        Stream.concat(
-                Stream.of(header.regionCode()),
-                notice.sites().stream().map(NoticeDetailResponse.Site::regionCode))
-            .filter(code -> code != null && code.matches("[0-9]{5}([0-9]{5})?"))
-            .map(code -> code.substring(0, 5))
-            .distinct()
-            .toList();
+        notice.regionCodes() == null
+            ? List.of()
+            : notice.regionCodes().stream().map(code -> code.substring(0, 5)).distinct().toList();
     boolean privateRental = "PUBLIC_SUPPORT_PRIVATE_RENTAL".equals(type);
     return evaluations.judgeAll(regions, applicant).stream()
         .filter(j -> relatedToHousing(j.benefit(), regions.isEmpty(), privateRental))
         .map(evaluations::item)
         .filter(i -> i.overall() != Overall.INELIGIBLE)
-        .filter(i -> !ApplyStatus.UNKNOWN.name().equals(i.applyStatus()))
+        .filter(i -> !"UNKNOWN".equals(i.applyStatus()))
         .sorted(BenefitSearchService.order("RECOMMENDED"))
         .limit(12)
         .toList();

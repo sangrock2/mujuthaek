@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import kr.mujuthaek.api.benefit.service.BenefitForJudgment;
 import kr.mujuthaek.api.benefit.service.BenefitQueryService;
@@ -25,8 +26,8 @@ import kr.mujuthaek.api.eligibility.rule.benefit.BenefitJudge;
 import kr.mujuthaek.api.eligibility.service.BenefitEvaluationService;
 import kr.mujuthaek.api.eligibility.service.CriteriaService;
 import kr.mujuthaek.api.eligibility.service.NoticeBenefitService;
-import kr.mujuthaek.api.notice.dto.response.NoticeDetailResponse;
 import kr.mujuthaek.api.notice.service.NoticeQueryService;
+import kr.mujuthaek.api.notice.service.NoticeSummary;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
@@ -48,17 +49,11 @@ class NoticeBenefitControllerTest {
                 Clock.systemUTC(),
                 new SimpleMeterRegistry(),
                 32));
-    var detail = mock(NoticeDetailResponse.class);
-    var noticeHeader = mock(NoticeDetailResponse.Header.class);
-    when(notices.detail(noticeId)).thenReturn(detail);
-    when(detail.header()).thenReturn(noticeHeader);
-    when(noticeHeader.field()).thenReturn("HOUSING");
-    when(noticeHeader.status()).thenReturn("UPCOMING");
-    when(detail.sites())
-        .thenReturn(
-            List.of(
-                new NoticeDetailResponse.Site(
-                    "a", "BUILDING", null, null, "1154500000", null, null, null, List.of())));
+    var notice = mock(NoticeSummary.class);
+    when(notices.findSummary(noticeId)).thenReturn(Optional.of(notice));
+    when(notice.field()).thenReturn("HOUSING");
+    when(notice.status()).thenReturn("UPCOMING");
+    when(notice.regionCodes()).thenReturn(List.of("1154500000"));
 
     var rent = benefit("주거급여", "RENT", true, Overall.NEEDS_INPUT);
     var denied = benefit("지원 불가", "RENT", true, Overall.INELIGIBLE);
@@ -97,6 +92,7 @@ class NoticeBenefitControllerTest {
     when(b.id()).thenReturn(UUID.randomUUID());
     when(b.title()).thenReturn(title);
     when(b.applyAlways()).thenReturn(applyAlways);
+    when(b.applyStatus(any())).thenReturn(applyAlways ? "ALWAYS" : "UNKNOWN");
     when(b.supports())
         .thenReturn(List.of(new BenefitForJudgment.Support(kind, null, null, null, null, null)));
     return new BenefitEvaluationService.Judged(

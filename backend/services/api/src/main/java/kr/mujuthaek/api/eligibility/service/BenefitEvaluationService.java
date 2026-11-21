@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
-import kr.mujuthaek.api.benefit.domain.ApplyStatus;
 import kr.mujuthaek.api.benefit.service.BenefitForJudgment;
 import kr.mujuthaek.api.benefit.service.BenefitQueryService;
 import kr.mujuthaek.api.common.exception.CustomException;
@@ -211,7 +210,7 @@ public class BenefitEvaluationService {
         j.result().overall() == kr.mujuthaek.api.eligibility.rule.Overall.INELIGIBLE
             ? 0
             : j.annualWon(),
-        ApplyStatus.of(b.applyAlways(), b.applyStart(), b.applyEnd(), today).name(),
+        b.applyStatus(today),
         b.applyEnd(),
         b.applyAlways() || b.applyEnd() == null
             ? null
