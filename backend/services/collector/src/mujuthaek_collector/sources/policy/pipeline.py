@@ -52,7 +52,15 @@ from mujuthaek_collector.sources.policy.attachments import (
     relevant,
     with_ext,
 )
-from mujuthaek_collector.sources.policy.base import SCOPE_LABELS, PolicyDetail, PolicyItem, PolicySource, shop_recruitment
+from mujuthaek_collector.sources.policy.base import (
+    BENEFIT,
+    SCOPE_LABELS,
+    PolicyDetail,
+    PolicyItem,
+    PolicySource,
+    clearly_unrelated_benefit,
+    shop_recruitment,
+)
 from mujuthaek_collector.sources.policy.client import ApiError, MaskedFetcher, mask
 from mujuthaek_collector.sources.policy.config import PolicySettings
 from mujuthaek_collector.sources.policy.event import build_policy_event
@@ -232,6 +240,10 @@ def process_policy(ctx: PolicyContext, policy: PolicyRow) -> bool:
     item = PolicyItem(policy.policy_id, policy.title, policy.marker, policy.list_raw)
     detail = source.fetch_detail(ctx.api, item)
     keep_public_links(ctx, policy, detail)
+    if source.classify(item.title, detail.record) == BENEFIT and clearly_unrelated_benefit(item.title, detail.benefit):
+        ctx.store.mark_done(policy.id)
+        log.info("혜택 범위 밖: 추출 이벤트 없이 종료", extra={"source": source.code, "policy": policy.policy_id})
+        return False
 
     wants_documents = source.needs_documents(detail.record)
     candidates = [Candidate(f, "API", detail.detail_url) for f in detail.files] if wants_documents else []

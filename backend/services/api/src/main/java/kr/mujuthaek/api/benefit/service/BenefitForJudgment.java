@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import kr.mujuthaek.api.benefit.domain.ApplyStatus;
 
 /**
  * 판정에 쓰는 혜택 한 건 (eligibility가 읽어요). 금액은 원이에요.
@@ -29,6 +30,10 @@ public record BenefitForJudgment(
     List<Support> supports,
     List<Condition> conditions,
     java.time.Instant updatedAt) {
+
+  public String applyStatus(LocalDate today) {
+    return ApplyStatus.of(applyAlways, applyStart, applyEnd, today).name();
+  }
 
   /**
    * @param kind RENT · DEPOSIT_LOAN · PURCHASE_LOAN · HOUSING_SUPPLY · MOVE_IN_GRANT · CASH · OTHER

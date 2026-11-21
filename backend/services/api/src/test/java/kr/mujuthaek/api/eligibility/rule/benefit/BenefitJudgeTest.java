@@ -74,6 +74,20 @@ class BenefitJudgeTest {
   }
 
   @Test
+  void 소득인정액을_월소득_구간으로_판정하지_않는다() {
+    Condition recognized =
+        new Condition(
+            "INCOME_MEDIAN_PCT",
+            Map.of("max", 48, "basis", "HOUSEHOLD"),
+            1,
+            true,
+            "가구 소득인정액이 기준 중위소득 48% 이하");
+    Item result = item(recognized, a().household(1).income("MEDIAN_INCOME", 5, 10).build());
+    assertThat(result.status()).isEqualTo(Status.UNKNOWN);
+    assertThat(result.reason()).contains("소득인정액");
+  }
+
+  @Test
   void 가구_소득_기준인데_본인_소득만_있으면_넘을_때만_불충족_아니면_원문_확인() {
     Condition pct = c("INCOME_MEDIAN_PCT", Map.of("max", 180, "basis", "HOUSEHOLD"), 1);
     Item under = item(pct, a().household(2).income("MEDIAN_INCOME", 90, 100).build());

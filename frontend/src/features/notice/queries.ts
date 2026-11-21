@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
+import { useJudgeInput, type ApiBenefitItem } from "@/features/benefits/api";
 import { mockQuery } from "@/features/mock-query";
 import { toNotice, type ApiNoticeDetail } from "@/features/notice/detail";
 import { api } from "@/shared/lib/api/client";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { endpoints } from "@/shared/lib/api/endpoints";
-import { notices, type Notice } from "@/features/notice/mocks/notice";
+import { notices, type Notice, type NoticeBenefit } from "@/features/notice/mocks/notice";
 
 export const noticeKeys = {
   detail: (id: string) => ["notice", "detail", id] as const,
@@ -37,3 +38,22 @@ function useMockNotice(id: string): NoticeState {
 export const useNotice: (id: string, enabled?: boolean) => NoticeState = USE_MOCKS
   ? useMockNotice
   : useApiNotice;
+
+export function useNoticeBenefits(id: string, hasNotice: boolean) {
+  const { ready, applicant } = useJudgeInput();
+  return useQuery({
+    queryKey: ["notice", "benefits", id, applicant],
+    enabled: !USE_MOCKS && ready && hasNotice,
+    staleTime: 60_000,
+    gcTime: 60_000,
+    queryFn: async (): Promise<NoticeBenefit[]> => {
+      const items = await api.post<ApiBenefitItem[]>(endpoints.noticeBenefits(id), { applicant });
+      return items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        desc: item.amountText ?? item.summary ?? "상세 조건을 확인해 주세요",
+        verdict: item.overall === "ELIGIBLE" ? "ok" : "check",
+      }));
+    },
+  });
+}

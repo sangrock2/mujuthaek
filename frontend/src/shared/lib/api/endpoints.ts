@@ -55,6 +55,7 @@ export const endpoints = {
   areaCriteria: "/api/v1/areas/criteria",
   /** 공고 하나의 판정 (조건별 결과) */
   noticeEvaluate: (id: string) => apiPath`/api/v1/eligibility/notices/${id}/evaluate`,
+  noticeBenefits: (id: string) => apiPath`/api/v1/eligibility/notices/${id}/benefits`,
   /** 웹 푸시 기기 등록(PUT)·해제(DELETE). 본문은 subscription.toJSON() 그대로 */
   pushSubscriptions: "/api/users/me/push-subscriptions",
   /** 알림을 봤는지·눌렀는지 알리기 (/{id}/shown · /{id}/clicked, 로그인 없이) */
