@@ -11,7 +11,8 @@ import deployment_plan
 import frontend_release as frontend
 
 
-PUBLIC_ORIGIN = 'https://mujuthaek.vercel.app'
+# Use the canonical host so the eligibility POST never crosses the alias redirect.
+PUBLIC_ORIGIN = 'https://mujuthaek.store'
 ACTIVE_NOTICES_PATH = '/api/v1/notices?field=HOUSING&statuses=APPLYING,UPCOMING,ALWAYS&size=1'
 
 
