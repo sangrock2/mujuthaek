@@ -189,7 +189,9 @@ export function toBenefitDetail(
         label: g.items.map((i) => i.label).join(" 또는 "),
         result: resultOf[g.status],
         reason:
-          g.status === "MET" ? undefined : (g.items.find((i) => i.reason)?.reason ?? undefined),
+          g.status === "MET"
+            ? undefined
+            : (g.items.find((i) => i.status === g.status && i.reason)?.reason ?? undefined),
         inputHref:
           g.status === "UNKNOWN"
             ? inputHrefOf(g.items.filter((i) => i.status === "UNKNOWN").flatMap((i) => i.needs))
@@ -283,7 +285,13 @@ export function useBenefitDetailQuery(id: string | undefined, base: Benefit | un
     () => (detail.data ? toBenefitDetail(detail.data, evaluation.data, base) : undefined),
     [detail.data, evaluation.data, base],
   );
-  return { data, loading: detail.isPending, error: detail.isError };
+  return {
+    data,
+    loading: detail.isPending,
+    error: detail.isError,
+    evaluationPending: evaluation.isPending,
+    evaluationError: evaluation.isError,
+  };
 }
 
 export type { ApiBenefitSearch };
