@@ -178,7 +178,7 @@ def promote_frontend():
     try:
         if change:
             frontend.promote()
-        production.smoke()
+        production.smoke(check_notice_journey='api' in plan['components'] and not plan['rollback'])
         outcome['ok'] = True
     except Exception:
         if change:

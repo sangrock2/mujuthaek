@@ -245,7 +245,7 @@ class ReleasePhases(unittest.TestCase):
         self.ack()
         phases.promote_frontend()
         self.promote.assert_called_once_with()
-        self.smoke.assert_called_once_with()
+        self.smoke.assert_called_once_with(check_notice_journey=True)
         self.assertTrue(phases.read('frontend-outcome.json')['ok'])
         phases.finalize_release()
         self.complete.assert_called_once_with('release-new', self.candidate)
@@ -257,8 +257,16 @@ class ReleasePhases(unittest.TestCase):
         self.ack(self.base['frontend'])
         phases.promote_frontend()
         self.promote.assert_not_called()
+        self.smoke.assert_called_once_with(check_notice_journey=True)
         phases.finalize_release()
         self.complete.assert_called_once_with('release-new', self.base['frontend'])
+
+    def test_frontend_only_release_keeps_basic_smoke_checks(self):
+        self.plan['components'] = ['frontend']
+        self.save_plan()
+        self.ack()
+        phases.promote_frontend()
+        self.smoke.assert_called_once_with(check_notice_journey=False)
 
     def test_known_frontend_failure_and_recovery_restores_both_then_base_pointer(self):
         self.ack()

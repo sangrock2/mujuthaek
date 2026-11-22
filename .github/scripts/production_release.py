@@ -4,21 +4,66 @@ import os
 import subprocess
 import urllib.request
 from pathlib import Path
+from uuid import UUID
 
 import backend_release as backend
 import deployment_plan
 import frontend_release as frontend
 
 
-def smoke():
+PUBLIC_ORIGIN = 'https://mujuthaek.vercel.app'
+ACTIVE_NOTICES_PATH = '/api/v1/notices?field=HOUSING&statuses=APPLYING,UPCOMING,ALWAYS&size=1'
+
+
+def public_json(origin, path, payload=None):
+    data = json.dumps(payload).encode('utf-8') if payload is not None else None
+    headers = {'Content-Type': 'application/json'} if data is not None else {}
+    request = urllib.request.Request(origin + path, data=data, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if response.status != 200:
+            raise RuntimeError(f'{path}: expected HTTP 200, got {response.status}')
+        if response.headers.get_content_type() != 'application/json':
+            raise RuntimeError(f'{path}: expected a JSON response')
+        return json.load(response)
+
+
+def smoke_notice_journey(origin):
+    page = public_json(origin, ACTIVE_NOTICES_PATH)
+    items = page.get('items') if isinstance(page, dict) else None
+    if not isinstance(items, list):
+        raise RuntimeError('Public notice list response is missing items')
+    if not items:
+        print('Notice detail and related benefits skipped: no active public housing notices')
+        return
+    try:
+        notice_id = str(UUID(items[0]['id']))
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise RuntimeError('Public notice list returned an invalid notice ID') from error
+    detail = public_json(origin, f'/api/v1/notices/{notice_id}')
+    header = detail.get('header') if isinstance(detail, dict) else None
+    if (not isinstance(header, dict) or header.get('id') != notice_id or header.get('field') != 'HOUSING'
+            or not isinstance(header.get('title'), str) or not header['title'].strip()):
+        raise RuntimeError('Public housing notice detail did not match the selected notice')
+    benefits = public_json(origin, f'/api/v1/eligibility/notices/{notice_id}/benefits', {'applicant': {}})
+    if not isinstance(benefits, list) or any(
+        not isinstance(item, dict) or not item.get('id') or not item.get('title')
+        or item.get('overall') not in ('ELIGIBLE', 'NEEDS_INPUT') for item in benefits
+    ):
+        raise RuntimeError('Related benefits returned an invalid response')
+    print(f'Public housing notice detail and related benefits verified ({len(benefits)} results)')
+
+
+def smoke(*, check_notice_journey=False):
     for path, status in [('/', 200), ('/api/v1/regions', 200)]:
-        with urllib.request.urlopen('https://mujuthaek.vercel.app' + path, timeout=30) as response:
+        with urllib.request.urlopen(PUBLIC_ORIGIN + path, timeout=30) as response:
             if response.status != status:
                 raise RuntimeError('Public smoke check failed')
             if path.startswith('/api/'):
                 if 'application/json' not in response.headers.get('Content-Type', ''):
                     raise RuntimeError('API returned an HTML page instead of JSON')
                 json.load(response)
+    if check_notice_journey:
+        smoke_notice_journey(PUBLIC_ORIGIN)
 
 
 def frontend_source(data):
@@ -91,7 +136,7 @@ def main():
     try:
         if change_frontend:
             frontend.promote()
-        smoke()
+        smoke(check_notice_journey='api' in selected and not rollback)
         complete(release, info)
     except Exception:
         try:
