@@ -343,6 +343,33 @@ class NoticeIngestionIntegrationTest {
   }
 
   @Test
+  void 기관이_조기_마감한_공고는_후속_버전이_원래_일정으로_되돌리지_않는다() {
+    ingestion.apply(body(fixture()));
+    UUID id = onlyNotice();
+    jdbc.sql(
+            """
+        update notice.notices set source_closed_on = date '2026-10-26',
+               source_closure_url = 'https://agency.example/closure', apply_end = date '2026-10-26',
+               status = 'CLOSED', next_status_check_at = null
+         where id = :id
+        """)
+        .param("id", id)
+        .update();
+
+    ObjectNode changed = withRawVersion(fixture(), 2);
+    changed.put("eventId", UUID.randomUUID().toString());
+    ((ObjectNode) changed.path("payload")).put("title", "정정된 제목");
+    ((ObjectNode) changed.path("payload").path("notice").path("notice")).put("title", "정정된 제목");
+
+    assertThat(ingestion.apply(body(changed))).isEqualTo(IngestionOutcome.NEW_VERSION);
+    var detail = query.detail(id);
+    assertThat(detail.header().status()).isEqualTo("CLOSED");
+    assertThat(detail.header().applyEnd()).isEqualTo(LocalDate.parse("2026-10-26"));
+    assertThat(detail.followUps().getFirst().detailUrl())
+        .isEqualTo("https://agency.example/closure");
+  }
+
+  @Test
   void 내용이_바뀐_새_원본_버전은_새_버전으로_교체하고_NoticeUpdated를_보낸다() {
     ingestion.apply(body(fixture()));
     ObjectNode changed = withRawVersion(fixture(), 2);
