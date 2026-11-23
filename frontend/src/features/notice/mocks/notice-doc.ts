@@ -99,6 +99,7 @@ export type NoticePdfFile = { id: string; name: string; pdfUrl: string; pageCoun
 
 /** 근거가 있는 원문 위치: 어느 PDF(fileId, 모르면 null)의 어느 문장(quote) */
 export type PdfAnchor = { fileId: string | null; quote: string | null };
+export type NoticeEvidence = { quote: string; page: number | null; fileId?: string | null };
 
 export type NoticeDoc = {
   /** 오늘 기준 접수 상태 (백엔드가 계산) */
@@ -132,6 +133,7 @@ export type NoticeDoc = {
     text: string;
     detail?: string;
     checking?: boolean;
+    evidence?: NoticeEvidence[];
   }[];
   housing: {
     id: string;

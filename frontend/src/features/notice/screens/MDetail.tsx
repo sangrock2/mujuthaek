@@ -14,6 +14,7 @@ import { MBackHeader, MBottomActions } from "@/shared/layout/MBackHeader";
 import { MPage } from "@/shared/layout/Responsive";
 import { EligibilityCard } from "@/features/notice/components/EligibilityCard";
 import { LifeCard } from "@/features/notice/components/LifeCard";
+import { NoticeBenefitRow } from "@/features/notice/components/NoticeBenefitRow";
 import {
   NoticeHeldBanner,
   NoticeSections,
@@ -24,7 +25,6 @@ import { NoticeVersions } from "@/features/notice/components/NoticeVersions";
 import { PdfViewer } from "@/features/notice/components/PdfViewer";
 import { RegulationNotice } from "@/features/notice/components/RegulationNotice";
 import { MRankCard } from "@/features/notice/components/RankCard";
-import { VerdictBadge } from "@/shared/ui/Badge";
 import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
 import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
@@ -291,8 +291,11 @@ export function MDetail({ id }: { id: string }) {
   const doc = withMine(n.doc, j.judgment?.mineTypes ?? []);
   const money = j.judgment?.money;
   /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 시트로 열고, 없으면 기관 사이트로 */
-  const original = noticeOriginal(doc, pdf, (via) =>
-    track("notice_source_open", { ...noticeParams(n), via }),
+  const original = noticeOriginal(
+    doc,
+    pdf,
+    (via) => track("notice_source_open", { ...noticeParams(n), via }),
+    j.judgment,
   );
   const openOriginal = original.openOriginal;
 
@@ -379,15 +382,18 @@ export function MDetail({ id }: { id: string }) {
           error={j.error}
           variant="mobile"
           onOpenOriginal={original.openEligibility}
+          onOpenReview={original.openReview}
         />
 
-        <NoticeHeldBanner doc={doc} variant="mobile" />
+        <NoticeHeldBanner doc={doc} variant="mobile" onOpenReview={original.openReview} />
         <NoticeVersions noticeId={n.id} variant="mobile" />
         <NoticeToc doc={doc} variant="mobile" />
         <NoticeSections
           doc={doc}
           variant="mobile"
           onOpenPage={original.hasPdf ? openOriginal : undefined}
+          onOpenReview={original.openReview}
+          reviewIds={new Set(original.reviewItems.map((item) => item.id))}
         />
 
         {n.hasUnits ? (
@@ -409,26 +415,12 @@ export function MDetail({ id }: { id: string }) {
             <h3 id="bn-h" className="mx-0 mt-0 mb-[2px] text-[17px] font-extrabold">
               이 공고와 함께 확인할 혜택
             </h3>
-            {n.benefitArea && (
-              <span className="text-text-tertiary mb-[4px] text-[13px]">
-                {n.benefitArea} · 내 조건 판정
-              </span>
-            )}
+            <p className="text-text-sub mb-1 text-[13px]">
+              {n.benefitArea ? `${n.benefitArea} 입주` : "입주"}에 관련된 주거비·이사비 지원을
+              모았어요.
+            </p>
             {benefits.map((b, i) => (
-              <Link
-                key={b.id}
-                href={routes.benefit(b.id)}
-                className={cn(
-                  "text-text hover:text-text flex items-center justify-between gap-[10px] py-[12px] no-underline",
-                  i < benefits.length - 1 && "border-line-soft border-b border-solid",
-                )}
-              >
-                <span className="flex flex-col gap-[2px]">
-                  <span className="text-[15px] font-bold">{b.title}</span>
-                  <span className="text-text-sub text-[13px]">{b.desc}</span>
-                </span>
-                <VerdictBadge verdict={b.verdict} size="xs" className="flex-none" />
-              </Link>
+              <NoticeBenefitRow key={b.id} benefit={b} mobile divided={i < benefits.length - 1} />
             ))}
             {benefitsAll.length > benefits.length && (
               <button

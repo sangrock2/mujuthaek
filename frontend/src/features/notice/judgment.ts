@@ -71,6 +71,7 @@ export type JudgedItem = {
   inputHref?: string;
   /** 근거 원문 쪽 */
   page?: number;
+  quote?: string;
 };
 
 export type JudgedTarget = {
@@ -119,6 +120,7 @@ function itemOf(i: ApiItem): JudgedItem {
     reason,
     inputHref: inputHrefOf(i.needs),
     page: i.evidence?.page ?? undefined,
+    quote: i.evidence?.text || undefined,
   };
 }
 

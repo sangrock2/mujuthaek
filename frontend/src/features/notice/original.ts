@@ -1,4 +1,6 @@
 import { pdfSections, sectionTitles } from "@/features/notice/format";
+import { pdfReviewItems } from "@/features/notice/pdfReview";
+import type { NoticeJudgment } from "@/features/notice/judgment";
 import type { usePdfViewer } from "@/features/notice/usePdfViewer";
 import type { NoticeDoc, NoticeSectionKey, PdfAnchor } from "@/features/notice/mocks/notice-doc";
 import { safeExternalUrl } from "@/shared/lib/safeUrl";
@@ -53,6 +55,7 @@ export function noticeOriginal(
   doc: NoticeDoc,
   pdf: ReturnType<typeof usePdfViewer>,
   onOpen?: (via: "pdf" | "site") => void,
+  judgment?: NoticeJudgment | null,
 ) {
   const openOriginal = (page?: number, label?: string, anchor?: PdfAnchor) => {
     const place = resolveOriginal(doc, page, anchor);
@@ -79,6 +82,30 @@ export function noticeOriginal(
   };
 
   const files = doc.source.files;
+  const reviewItems = pdfReviewItems(doc, judgment);
+  const openReview = (id: string) => {
+    const item = reviewItems.find((entry) => entry.id === id);
+    if (!item) return;
+    const place = item.location
+      ? resolveOriginal(doc, item.location.page, {
+          fileId: item.location.fileId,
+          quote: item.location.quote ?? null,
+        })
+      : (pdf.open &&
+          pdf.target &&
+          resolveOriginal(doc, pdf.target.page, {
+            fileId: pdf.target.fileId ?? null,
+            quote: null,
+          })) ||
+        resolveOriginal(doc);
+    if (!place) return;
+    if (!pdf.open) onOpen?.("pdf");
+    pdf.show(place.page, item.location ? item.label : undefined, {
+      fileId: place.fileId,
+      quote: place.quote,
+      reviewId: item.id,
+    });
+  };
   const current = files ? (files.find((f) => f.id === pdf.target?.fileId) ?? files[0]) : undefined;
   const src = current?.pdfUrl ?? doc.source.pdfUrl;
   // 뷰어 위 섹션 목차: 지금 연 PDF의 근거가 있는 섹션만 (다른 PDF의 쪽으로 옮기지 않게)
@@ -99,6 +126,8 @@ export function noticeOriginal(
         detailUrl: doc.source.detailUrl,
         target: pdf.target,
         sections,
+        reviewItems,
+        onReviewPick: openReview,
         onJump: (page: number, label: string) => {
           const key = keyOf.get(label);
           const anchor = key ? doc.anchors?.[key] : undefined;
@@ -107,5 +136,13 @@ export function noticeOriginal(
       }
     : null;
 
-  return { hasPdf: Boolean(doc.source.pdfUrl), openOriginal, openEligibility, viewer };
+  return {
+    hasPdf: Boolean(doc.source.pdfUrl),
+    openOriginal,
+    openEligibility,
+    openReview: viewer ? openReview : undefined,
+    reviewItems,
+    selectedReview: reviewItems.find((item) => item.id === pdf.target?.reviewId),
+    viewer,
+  };
 }
