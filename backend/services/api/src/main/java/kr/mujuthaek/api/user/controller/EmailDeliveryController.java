@@ -33,7 +33,7 @@ public class EmailDeliveryController
   public record Token(String token) {
     @Override
     public String toString() {
-      return "UnsubscribeToken[REDACTED]";
+      return "EmailToken[REDACTED]";
     }
   }
 
@@ -55,6 +55,13 @@ public class EmailDeliveryController
       return new EmailNotificationService.Eligibility(false, null);
     }
     return emails.eligible(body.userId(), body.email(), body.type());
+  }
+
+  @Override
+  @PostMapping("/api/email-notifications/verify")
+  @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+  public void verify(@RequestBody Token body) {
+    emails.verifyLink(body.token());
   }
 
   @PostMapping("/api/email-notifications/unsubscribe")
