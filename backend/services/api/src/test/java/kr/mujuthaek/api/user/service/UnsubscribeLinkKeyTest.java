@@ -37,7 +37,8 @@ class UnsubscribeLinkKeyTest {
 
   UnsubscribeLinkKeyTest() {
     Saved saved =
-        new Saved(USER, ADDRESS, null, null, null, null, 0, NOW, true, true, true, true, "nonce-1");
+        new Saved(
+            USER, ADDRESS, null, null, null, null, 0, NOW, true, true, true, true, "nonce-1", null);
     when(emails.find(USER)).thenReturn(Optional.of(saved));
   }
 

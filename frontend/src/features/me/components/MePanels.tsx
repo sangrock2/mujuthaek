@@ -189,7 +189,28 @@ export function NotificationSettingsPanel() {
   if (!settings.loggedIn) return <LoginPrompt what="알림 설정" />;
   return (
     <div className="flex flex-col gap-[22px]">
-      <div className="flex flex-col">
+      <div className="flex flex-col gap-[10px]">
+        <h2 className="text-[17px] font-extrabold">수신 채널</h2>
+        <div role="group" aria-label="수신 채널" className="flex flex-wrap items-center gap-[8px]">
+          <button
+            type="button"
+            aria-pressed={push.enabled}
+            disabled={push.pending}
+            onClick={() => void (push.enabled ? push.turnOff() : push.turnOn())}
+            className={cn(outlineChip(push.enabled), "px-[18px]")}
+          >
+            이 브라우저 · 앱 알림 {push.enabled ? "켜짐" : "꺼짐"}
+          </button>
+        </div>
+        {push.error && (
+          <span role="alert" className="text-danger-text text-[14px]">
+            {push.error}
+          </span>
+        )}
+      </div>
+      <EmailNotifications />
+      <div className="border-line-soft flex flex-col border-t pt-[16px]">
+        <h2 className="text-[17px] font-extrabold">공고 및 일정 알림</h2>
         {settingRows.map((n) => (
           <div
             key={n.key}
@@ -225,26 +246,6 @@ export function NotificationSettingsPanel() {
         {settings.failed && (
           <span role="alert" className="text-danger-text mt-[6px] text-[14px]">
             저장하지 못했어요. 잠시 뒤 다시 해 주세요
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-[10px]">
-        <span className="text-[16px] font-extrabold">받는 방법</span>
-        <div role="group" aria-label="받는 방법" className="flex flex-wrap items-center gap-[8px]">
-          <button
-            type="button"
-            aria-pressed={push.enabled}
-            disabled={push.pending}
-            onClick={() => void (push.enabled ? push.turnOff() : push.turnOn())}
-            className={cn(outlineChip(push.enabled), "px-[18px]")}
-          >
-            이 브라우저 · 앱 알림 {push.enabled ? "켜짐" : "꺼짐"}
-          </button>
-        </div>
-        <EmailNotifications />
-        {push.error && (
-          <span role="alert" className="text-danger-text text-[14px]">
-            {push.error}
           </span>
         )}
       </div>

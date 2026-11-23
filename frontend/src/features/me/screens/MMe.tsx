@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Lock, User } from "lucide-react";
+import { ChevronRight, User } from "lucide-react";
 import { ContactEmailCard } from "@/features/auth/components/ContactEmailParts";
 import { WithdrawButton } from "@/features/me/components/WithdrawButton";
 import { StoredInfoList, saveOnDeviceNote } from "@/features/me/components/StoredInfo";
@@ -140,10 +140,6 @@ export function MMe() {
               </span>
             ))}
           </div>
-          <span className="text-text-sub flex items-center gap-[6px] text-[13px]">
-            <Lock size={15} aria-hidden />
-            주거 소득·자산은 이 탭에 임시 보관해요
-          </span>
         </section>
 
         <nav aria-label="내 정보 메뉴" className="rounded-card bg-surface flex flex-col p-[6px]">

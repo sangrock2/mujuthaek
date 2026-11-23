@@ -2,6 +2,7 @@ package kr.mujuthaek.api.user.controller;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import kr.mujuthaek.api.user.service.EmailNotificationService;
 import kr.mujuthaek.api.user.service.EmailNotificationService.Settings;
@@ -29,6 +30,13 @@ public class EmailNotificationController
     }
   }
 
+  public record Code(@NotBlank @Pattern(regexp = "[0-9]{6}") String code) {
+    @Override
+    public String toString() {
+      return "EmailCode[REDACTED]";
+    }
+  }
+
   @GetMapping
   public Status get(@AuthenticationPrincipal LoginUser user) {
     return emails.get(user.userId());
@@ -36,10 +44,26 @@ public class EmailNotificationController
 
   @PostMapping("/request")
   public Status request(@AuthenticationPrincipal LoginUser user, @Valid @RequestBody Address body) {
+    requireConsent(body);
+    return emails.request(user.userId(), body.email());
+  }
+
+  @PostMapping("/request-code")
+  public Status requestCode(
+      @AuthenticationPrincipal LoginUser user, @Valid @RequestBody Address body) {
+    requireConsent(body);
+    return emails.requestCode(user.userId(), body.email());
+  }
+
+  @PostMapping("/verify-code")
+  public Status verifyCode(@AuthenticationPrincipal LoginUser user, @Valid @RequestBody Code body) {
+    return emails.verifyCode(user.userId(), body.code());
+  }
+
+  private void requireConsent(Address body) {
     if (!body.consent())
       throw new kr.mujuthaek.api.common.exception.CustomException(
           kr.mujuthaek.api.common.exception.ErrorCode.VALIDATION_FAILED, "이메일 수집·이용 동의가 필요해요");
-    return emails.request(user.userId(), body.email());
   }
 
   @PostMapping("/verify")

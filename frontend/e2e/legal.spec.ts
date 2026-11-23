@@ -15,7 +15,7 @@ for (const [path, title] of [
       path === "/privacy" ? "contact@mujuthaek.store" : "towo2ssss@gmail.com",
     );
     await expect(page.locator("main")).toContainText(
-      path === "/privacy" ? "2026년 11월 15일" : "2026년 11월 14일",
+      path === "/privacy" ? "2026년 11월 24일" : "2026년 11월 14일",
     );
     await expect(page.locator("main")).not.toContainText("게시할 예정이에요");
     await expect(page.locator("main")).not.toContainText("[회사명]");
@@ -64,10 +64,11 @@ test("legal history preserves the published text and rejects nonexistent version
   for (const kind of ["privacy", "terms"]) {
     await expect(page.locator(`a[href="/legal/${kind}/1.0"]`)).toBeVisible();
   }
+  await expect(page.locator('a[href="/legal/privacy/1.1"]')).toBeVisible();
   for (const kind of ["privacy", "terms"]) {
     await page.goto(`/${kind}`);
     const currentText = await page.locator("article").innerText();
-    const response = await page.goto(`/legal/${kind}/${kind === "privacy" ? "1.1" : "1.0"}`);
+    const response = await page.goto(`/legal/${kind}/${kind === "privacy" ? "1.2" : "1.0"}`);
     expect(response?.status()).toBe(200);
     expect(await page.locator("article").innerText()).toBe(currentText);
     await expect(page.getByRole("link", { name: "현재 적용 문서 보기" })).toHaveAttribute(

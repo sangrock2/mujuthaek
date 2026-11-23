@@ -3,6 +3,7 @@ package kr.mujuthaek.api.user.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -88,7 +89,8 @@ class EmailVerificationRequestTest {
                       false,
                       false,
                       false,
-                      i.getArgument(3)));
+                      i.getArgument(3),
+                      null));
               return null;
             })
         .when(emails)
@@ -99,7 +101,8 @@ class EmailVerificationRequestTest {
             anyString(),
             any(Instant.class),
             any(LocalDate.class),
-            anyInt());
+            anyInt(),
+            anyBoolean());
     return emails;
   }
 

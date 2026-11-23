@@ -4,7 +4,7 @@ import { PreparationList } from "@/features/preparations/PreparationList";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Lock, User } from "lucide-react";
+import { ChevronRight, User } from "lucide-react";
 import { ContactEmailCard } from "@/features/auth/components/ContactEmailParts";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebPage } from "@/shared/layout/Responsive";
@@ -258,10 +258,6 @@ export function WebMe({ initialTab }: { initialTab?: MeTab }) {
                     ))}
                 </dl>
               )}
-              <span className="text-text-sub inline-flex items-center gap-[6px] text-[14px]">
-                <Lock size={16} aria-hidden />
-                주거 조건의 소득·자산은 이 탭에 임시 보관해요. 판정 서버에는 구간으로 보내요
-              </span>
             </div>
           )}
 

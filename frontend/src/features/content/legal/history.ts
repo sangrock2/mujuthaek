@@ -1,7 +1,15 @@
 import { privacyPolicy, serviceTerms } from "./versions/v1";
 import { privacyPolicy as updatedPrivacy } from "./versions/v1_1";
 
+import { privacyPolicy as codePrivacy } from "./versions/v1_2";
+
 export const legalVersions = [
+  {
+    kind: "privacy",
+    publishedDate: "2026-11-24",
+    reason: "이메일 알림 등록 동의와 6자리 주소 인증 방식 안내",
+    document: codePrivacy,
+  },
   {
     kind: "privacy",
     publishedDate: "2026-11-15",
