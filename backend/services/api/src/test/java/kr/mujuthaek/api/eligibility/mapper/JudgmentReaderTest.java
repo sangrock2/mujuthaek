@@ -76,4 +76,19 @@ public class JudgmentReaderTest {
     assertThat(c).isInstanceOf(Judgment.Ask.class);
     assertThat(((Judgment.Ask) c).question()).isEqualTo("반려동물 금지");
   }
+
+  @org.junit.jupiter.api.Test
+  void incompleteResidencyRuleRequiresCheckingTheSource() {
+    var mapper = tools.jackson.databind.json.JsonMapper.builder().build();
+    var incomplete =
+        mapper.readTree(
+            """
+        {"kind":"RESIDENCE","id":"residence","regionCodes":["11545"],
+         "quote":"금천구에 2년 이상 거주하는","minMonths":null}
+        """);
+    assertThat(JudgmentReader.criterion(incomplete)).isInstanceOf(Judgment.Ask.class);
+    var complete = (tools.jackson.databind.node.ObjectNode) incomplete;
+    complete.put("minMonths", 24);
+    assertThat(JudgmentReader.criterion(complete)).isInstanceOf(Judgment.Residence.class);
+  }
 }
