@@ -1,0 +1,16 @@
+[Unit]
+Description=Mujuthaek read-only RabbitMQ operations alerts
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/mujuthaek-broker-alerts/broker_alerts.py
+LoadCredential=slack-webhook:/etc/mujuthaek-ops/slack-webhook
+StateDirectory=mujuthaek-broker-alerts
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=110
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
