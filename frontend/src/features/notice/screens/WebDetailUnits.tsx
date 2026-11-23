@@ -15,7 +15,7 @@ import {
 } from "@/features/chat/components/NoticeChat";
 import { NoticeSections, NoticeToc } from "@/features/notice/components/NoticeSections";
 import { NoticeTags } from "@/features/notice/components/NoticeTags";
-import { PdfViewer } from "@/features/notice/components/PdfViewer";
+import { NOTICE_PDF_PANEL_WIDTH, PdfViewer } from "@/features/notice/components/PdfViewer";
 import { WebRankCard } from "@/features/notice/components/RankCard";
 import { WebUnitFilter } from "@/features/notice/components/UnitFilter";
 import { dueText } from "@/features/notice/format";
@@ -54,17 +54,18 @@ export function WebDetailUnits({ id }: { id: string }) {
   );
   const openOriginal = original.openOriginal;
   const pdfUrl = original.viewer?.src;
+  const pdfSpace = pdf.open && pdfUrl ? NOTICE_PDF_PANEL_WIDTH : undefined;
 
   return (
     <WebPage>
       <div
-        className={cn(
-          "flex flex-1 flex-col [overflow-anchor:none]",
-          pdf.open && pdfUrl && "pl-[min(46vw,680px)]",
-        )}
+        className="flex flex-1 flex-col [overflow-anchor:none]"
+        style={{ paddingRight: pdfSpace }}
       >
         <WebHeader mode="home" current={routes.homes} />
-        <WebMain className="gap-[16px] pt-[24px] pb-[80px]">
+        <WebMain
+          className={cn("gap-[16px] pt-[24px] pb-[80px]", pdfSpace && "max-w-[760px] px-6 pt-4")}
+        >
           <nav
             aria-label="위치"
             className="text-text-tertiary flex items-center gap-[4px] text-[14px]"
@@ -88,7 +89,10 @@ export function WebDetailUnits({ id }: { id: string }) {
             <div className="flex min-w-0 flex-col gap-[16px]">
               <section
                 aria-label="공고 요약"
-                className="rounded-card-lg bg-surface flex flex-wrap items-end justify-between gap-[24px] px-[30px] py-[28px]"
+                className={cn(
+                  "rounded-card-lg bg-surface flex flex-wrap items-end justify-between",
+                  pdfSpace ? "gap-4 px-5 py-5" : "gap-[24px] px-[30px] py-[28px]",
+                )}
               >
                 <div className="flex flex-col gap-[10px]">
                   <NoticeTags
@@ -98,7 +102,14 @@ export function WebDetailUnits({ id }: { id: string }) {
                     tags={n.tags}
                     size="lg"
                   />
-                  <h1 className="tracking-h1 m-0 text-[34px] font-extrabold">{n.title}</h1>
+                  <h1
+                    className={cn(
+                      "tracking-h1 m-0 font-extrabold",
+                      pdfSpace ? "text-[26px]" : "text-[34px]",
+                    )}
+                  >
+                    {n.title}
+                  </h1>
                   <span className="text-text-sub text-[16px]">{n.meta}</span>
                 </div>
                 <dl className="m-0 flex flex-wrap gap-[10px]">
@@ -357,7 +368,7 @@ export function WebDetailUnits({ id }: { id: string }) {
                   className="flex min-w-0 flex-col gap-[16px]"
                   style={{ flex: `999 1 ${chatOpen ? DETAIL_MAIN_BASIS_WITH_CHAT : 560}px` }}
                 >
-                  <NoticeChat noticeId={n.id} variant="web" />
+                  <NoticeChat noticeId={n.id} variant="web" rightOffset={pdfSpace} />
                 </div>
               </div>
             </div>

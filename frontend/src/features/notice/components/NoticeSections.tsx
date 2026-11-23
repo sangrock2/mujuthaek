@@ -3,6 +3,8 @@
 import { ChevronDown, CircleAlert, ExternalLink, FileText, MapPin, Phone } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DocumentChecklist } from "./DocumentChecklist";
+import { PdfReviewLink } from "./PdfReviewList";
+import { conditionReviewId, heldReviewId } from "@/features/notice/pdfReview";
 import {
   categoryLabel,
   channelLabel,
@@ -33,10 +35,18 @@ type SectionsProps = {
   variant: Variant;
   /** 원문 PDF가 있을 때만: 해당 쪽 열기 (anchor: 그 쪽 근거가 어느 PDF의 어느 문장인지, 실제 응답만) */
   onOpenPage?: (page: number, label: string, anchor?: PdfAnchor) => void;
+  onOpenReview?: (id: string) => void;
+  reviewIds?: ReadonlySet<string>;
 };
 
 /** detail: 예외 조건. checking: 원문과 다시 확인하는 중 */
-type FoldItem = { id: string; text: string; detail?: string; checking?: boolean };
+type FoldItem = {
+  id: string;
+  text: string;
+  detail?: string;
+  checking?: boolean;
+  reviewId?: string;
+};
 
 /**
  * 분류별로 접어 둔 목록 (누가 신청할 수 있나요 · 어떻게 뽑나요). 분류마다 배지 하나에 첫 항목을 한 줄로 미리 보여주고, 누르면 항목이 한 칸씩 펼쳐져요
@@ -45,11 +55,13 @@ function FoldGroups({
   groups,
   badge,
   web,
+  onOpenReview,
 }: {
   groups: { key: string; label: string; items: FoldItem[] }[];
   /** 배지 색 */
   badge: string;
   web: boolean;
+  onOpenReview?: (id: string) => void;
 }) {
   const shown = groups.filter((g) => g.items.length);
   const sub = web ? "text-[15px]" : "text-[14px]";
@@ -105,11 +117,18 @@ function FoldGroups({
                       예외 · {e.detail}
                     </span>
                   )}
-                  {e.checking && (
-                    <span className="text-check-text inline-flex items-center gap-[4px] text-[13px] font-semibold">
-                      <CircleAlert size={14} aria-hidden />
-                      원문과 다시 확인하는 중이에요
-                    </span>
+                  {(e.checking || e.reviewId) && (
+                    <div className="flex flex-wrap items-center gap-x-3">
+                      {e.checking && (
+                        <span className="text-check-text inline-flex items-center gap-[4px] text-[13px] font-semibold">
+                          <CircleAlert size={14} aria-hidden />
+                          원문과 다시 확인하는 중이에요
+                        </span>
+                      )}
+                      {onOpenReview && e.reviewId && (
+                        <PdfReviewLink id={e.reviewId} open={onOpenReview} />
+                      )}
+                    </div>
                   )}
                 </li>
               ))}
@@ -175,7 +194,15 @@ const postedText = (ymd: string) =>
   formatDay(ymd, ymd.slice(0, 4) !== String(new Date().getFullYear()));
 
 /** 원문과 다시 확인하는 내용(보류한 항목·확인 중인 조건)이 있을 때 맨 위에 알려요 */
-export function NoticeHeldBanner({ doc, variant }: { doc: NoticeDoc; variant: Variant }) {
+export function NoticeHeldBanner({
+  doc,
+  variant,
+  onOpenReview,
+}: {
+  doc: NoticeDoc;
+  variant: Variant;
+  onOpenReview?: (id: string) => void;
+}) {
   const held = doc.held ?? [];
   if (!held.length) return null;
   const web = variant === "web";
@@ -188,7 +215,7 @@ export function NoticeHeldBanner({ doc, variant }: { doc: NoticeDoc; variant: Va
       )}
     >
       <CircleAlert size={18} className="text-check-text mt-[2px] flex-none" aria-hidden />
-      <span className="flex flex-col gap-[3px]">
+      <div className="flex flex-col gap-[3px]">
         <span className="text-check-text text-[15px] font-bold">
           원문과 다시 확인하는 내용이 있어요
         </span>
@@ -196,7 +223,17 @@ export function NoticeHeldBanner({ doc, variant }: { doc: NoticeDoc; variant: Va
           {held.map((h) => h.label).join(" · ")} 중 일부를 원문과 다시 확인하고 있어요. 확인이
           끝나기 전까지 빠지거나 바뀔 수 있으니 신청 전에 원문 공고를 꼭 확인하세요.
         </span>
-      </span>
+        {onOpenReview && (
+          <ul className="mt-1 flex list-none flex-wrap gap-x-4">
+            {held.map(({ label }) => (
+              <li key={label} className="flex items-center gap-2 text-[13px]">
+                <span>{label}</span>
+                <PdfReviewLink id={heldReviewId(label)} open={onOpenReview} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -261,7 +298,13 @@ export function NoticeToc({ doc, variant }: { doc: NoticeDoc; variant: Variant }
 }
 
 /** 공고 원문을 목차별로 정리한 섹션들 */
-export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
+export function NoticeSections({
+  doc,
+  variant,
+  onOpenPage,
+  onOpenReview,
+  reviewIds,
+}: SectionsProps) {
   const web = variant === "web";
   const keys = visibleSections(doc);
   const card = web
@@ -306,10 +349,16 @@ export function NoticeSections({ doc, variant, onOpenPage }: SectionsProps) {
       <FoldGroups
         web={web}
         badge="bg-fill text-text-sub"
+        onOpenReview={onOpenReview}
         groups={(Object.keys(categoryLabel) as EligibilityCategory[]).map((category) => ({
           key: category,
           label: categoryLabel[category],
-          items: doc.eligibility.filter((e) => e.category === category),
+          items: doc.eligibility
+            .filter((e) => e.category === category)
+            .map((e) => {
+              const id = conditionReviewId(e.id);
+              return { ...e, reviewId: onOpenReview && reviewIds?.has(id) ? id : undefined };
+            }),
         }))}
       />
     ),

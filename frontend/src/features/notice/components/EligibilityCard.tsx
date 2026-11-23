@@ -6,6 +6,8 @@ import { useState } from "react";
 import { ChevronDown, CircleCheck, CircleX, FileText } from "lucide-react";
 import { VerdictBadge, verdictLabel } from "@/shared/ui/Badge";
 import { CheckAction } from "@/shared/ui/CheckAction";
+import { PdfReviewLink } from "@/features/notice/components/PdfReviewList";
+import { judgedReviewId } from "@/features/notice/pdfReview";
 import type { JudgedItem, JudgedTarget, NoticeJudgment } from "@/features/notice/judgment";
 import { cn } from "@/shared/lib/cn";
 
@@ -16,16 +18,21 @@ type Props = {
   variant: "web" | "mobile";
   /** 근거 원문 열기 (쪽) */
   onOpenOriginal: (page?: number) => void;
+  onOpenReview?: (id: string) => void;
 };
+
+type Review = { targetId: string; open?: Props["onOpenReview"] };
 
 function Status({
   item,
   web,
   onOpenOriginal,
+  review,
 }: {
   item: JudgedItem;
   web: boolean;
   onOpenOriginal: Props["onOpenOriginal"];
+  review: Review;
 }) {
   const text = web ? "text-[15px]" : "text-[14px]";
   if (item.status === "met") {
@@ -51,9 +58,9 @@ function Status({
       </span>
     );
   }
-  return (
-    <CheckAction inputHref={item.inputHref} web={web} onReview={() => onOpenOriginal(item.page)} />
-  );
+  if (item.inputHref) return <CheckAction inputHref={item.inputHref} web={web} />;
+  if (review.open) return null;
+  return <CheckAction web={web} onReview={() => onOpenOriginal(item.page)} />;
 }
 
 function Row({
@@ -61,11 +68,13 @@ function Row({
   last,
   web,
   onOpenOriginal,
+  review,
 }: {
   item: JudgedItem;
   last: boolean;
   web: boolean;
   onOpenOriginal: Props["onOpenOriginal"];
+  review: Review;
 }) {
   return (
     <div
@@ -81,7 +90,12 @@ function Row({
           <span className="text-text-sub text-[13px] leading-[1.4]">{item.reason}</span>
         )}
       </span>
-      <Status item={item} web={web} onOpenOriginal={onOpenOriginal} />
+      <span className="flex shrink-0 flex-col items-end">
+        <Status item={item} web={web} onOpenOriginal={onOpenOriginal} review={review} />
+        {item.status === "unknown" && review.open && (
+          <PdfReviewLink id={judgedReviewId(review.targetId, item.id)} open={review.open} />
+        )}
+      </span>
     </div>
   );
 }
@@ -91,10 +105,12 @@ function Items({
   items,
   web,
   onOpenOriginal,
+  review,
 }: {
   items: JudgedItem[];
   web: boolean;
   onOpenOriginal: Props["onOpenOriginal"];
+  review: Review;
 }) {
   const decided = items.filter((i) => i.status !== "unknown");
   const unsure = items.filter((i) => i.status === "unknown");
@@ -106,6 +122,7 @@ function Items({
           item={item}
           web={web}
           onOpenOriginal={onOpenOriginal}
+          review={review}
           last={i === decided.length - 1 && !unsure.length}
         />
       ))}
@@ -135,6 +152,7 @@ function Items({
               web={web}
               last={i === unsure.length - 1}
               onOpenOriginal={onOpenOriginal}
+              review={review}
             />
           ))}
         </details>
@@ -200,7 +218,14 @@ function TargetSelect({
 }
 
 /** 공고 상세 › 내 자격: 공급 대상별 조건 체크 (✓ 충족 · ? 확인 필요 · ✗ 해당 안 됨) */
-export function EligibilityCard({ judgment, loading, error, variant, onOpenOriginal }: Props) {
+export function EligibilityCard({
+  judgment,
+  loading,
+  error,
+  variant,
+  onOpenOriginal,
+  onOpenReview,
+}: Props) {
   const web = variant === "web";
   const [picked, setPicked] = useState<string | null>(null);
   const targets = judgment?.targets ?? [];
@@ -221,7 +246,10 @@ export function EligibilityCard({ judgment, loading, error, variant, onOpenOrigi
       <div className={cn("flex items-center justify-between", web && "mb-[6px]")}>
         <Heading
           id="eligibility-h"
-          className={cn("m-0 font-extrabold", web ? "tracking-title text-[20px]" : "text-[17px]")}
+          className={cn(
+            "m-0 scroll-mt-28 font-extrabold",
+            web ? "tracking-title text-[20px]" : "text-[17px]",
+          )}
         >
           내 자격
         </Heading>
@@ -294,7 +322,14 @@ export function EligibilityCard({ judgment, loading, error, variant, onOpenOrigi
         </div>
       )}
 
-      {target && <Items items={target.items} web={web} onOpenOriginal={onOpenOriginal} />}
+      {target && (
+        <Items
+          items={target.items}
+          web={web}
+          onOpenOriginal={onOpenOriginal}
+          review={{ targetId: target.id, open: onOpenReview }}
+        />
+      )}
     </section>
   );
 }
