@@ -19,6 +19,7 @@ import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
 import { EligibilityCard } from "@/features/notice/components/EligibilityCard";
 import { LifeCard } from "@/features/notice/components/LifeCard";
+import { NoticeBenefitRow } from "@/features/notice/components/NoticeBenefitRow";
 import { NoticeTags } from "@/features/notice/components/NoticeTags";
 import { WebUnitFilter } from "@/features/notice/components/UnitFilter";
 import {
@@ -30,7 +31,6 @@ import { NoticeVersions } from "@/features/notice/components/NoticeVersions";
 import { PdfViewer } from "@/features/notice/components/PdfViewer";
 import { RegulationNotice } from "@/features/notice/components/RegulationNotice";
 import { WebRankCard } from "@/features/notice/components/RankCard";
-import { VerdictBadge } from "@/shared/ui/Badge";
 import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
 import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
@@ -539,31 +539,18 @@ export function WebDetail({ id }: { id: string }) {
 
               {benefits.length > 0 && (
                 <section
-                  aria-label="이 지역 정책"
+                  aria-label="이 공고와 함께 확인할 혜택"
                   className="rounded-card-lg bg-surface flex flex-col px-[30px] pt-[24px] pb-[14px]"
                 >
-                  <div className="mb-[8px] flex items-baseline justify-between">
+                  <div className="mb-[8px]">
                     <h2 className={sectionTitle}>이 공고와 함께 확인할 혜택</h2>
-                    <span className="text-text-tertiary text-[13px]">
-                      {n.benefitArea ? `${n.benefitArea} · ` : ""}내 조건 판정
-                    </span>
+                    <p className="text-text-sub mt-1 text-[13px]">
+                      {n.benefitArea ? `${n.benefitArea} 입주` : "입주"}에 관련된 주거비·이사비
+                      지원을 모았어요.
+                    </p>
                   </div>
                   {benefits.map((b, i) => (
-                    <Link
-                      key={b.id}
-                      href={routes.benefit(b.id)}
-                      className={cn(
-                        "text-text hover:text-text flex items-center gap-[14px] py-[14px] no-underline",
-                        i < benefits.length - 1 && "border-line-soft border-b border-solid",
-                      )}
-                    >
-                      <span className="flex flex-1 flex-col gap-[2px]">
-                        <span className="text-[16px] font-bold">{b.title}</span>
-                        <span className="text-text-sub text-[14px]">{b.desc}</span>
-                      </span>
-                      <VerdictBadge verdict={b.verdict} />
-                      <ChevronRight size={18} className="text-text-tertiary" aria-hidden />
-                    </Link>
+                    <NoticeBenefitRow key={b.id} benefit={b} divided={i < benefits.length - 1} />
                   ))}
                 </section>
               )}
