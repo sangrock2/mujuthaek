@@ -3,6 +3,7 @@ package kr.mujuthaek.api.eligibility.mapper;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import kr.mujuthaek.api.common.text.ResidenceDuration;
 import kr.mujuthaek.api.eligibility.rule.Judgment;
 import kr.mujuthaek.api.eligibility.rule.Judgment.Basics;
 import kr.mujuthaek.api.eligibility.rule.Judgment.Criterion;
@@ -39,6 +40,14 @@ public final class JudgmentReader {
     return out;
   }
 
+  private static Criterion residence(JsonNode condition, Basics basics) {
+    Integer months = integer(condition, "minMonths");
+    if (!ResidenceDuration.agreesWithMinimum(basics.quote(), months)) {
+      return new Judgment.Ask(basics, "원문의 거주기간 요건을 충족하나요? " + basics.quote(), "YES");
+    }
+    return new Judgment.Residence(basics, strings(condition.path("regionCodes")), months);
+  }
+
   static Criterion criterion(JsonNode c) {
     Basics b =
         new Basics(
@@ -50,8 +59,7 @@ public final class JudgmentReader {
     String kind = text(c, "kind");
     return switch (kind == null ? "" : kind) {
       case "AGE" -> new Judgment.Age(b, integer(c, "minAge"), integer(c, "maxAge"));
-      case "RESIDENCE" ->
-          new Judgment.Residence(b, strings(c.path("regionCodes")), integer(c, "minMonths"));
+      case "RESIDENCE" -> residence(c, b);
       case "HOMELESS" -> new Judgment.Homeless(b, text(c, "scope"), integer(c, "minYears"));
       case "INCOME" ->
           new Judgment.Income(

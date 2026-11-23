@@ -135,6 +135,25 @@ public final class NoticeDetailMapper {
         schedules(JsonNodeFactory.instance.objectNode().set("schedules", schedules), today));
   }
 
+  public static void excludeCancelledApplications(JsonNode payload, LocalDate closedOn) {
+    if (!(payload.path("notice").path("schedules")
+        instanceof tools.jackson.databind.node.ArrayNode schedules)) {
+      return;
+    }
+    // Keep the original indexes: held items refer to schedules by their original positions.
+    for (int i = 0; i < schedules.size(); i++) {
+      JsonNode schedule = schedules.get(i);
+      List<String> kinds = strings(schedule.path("kinds"));
+      String start = text(schedule.path("startsAt").path("value"));
+      if (kinds.equals(List.of("APPLICATION"))
+          && start != null
+          && start.length() >= 10
+          && start.substring(0, 10).compareTo(closedOn.toString()) > 0) {
+        schedules.set(i, JsonNodeFactory.instance.nullNode());
+      }
+    }
+  }
+
   static List<Schedule> schedules(JsonNode detail, LocalDate today) {
     Map<String, Evidence> evidence = evidence(detail);
     List<Schedule> out = new ArrayList<>();
@@ -144,6 +163,9 @@ public final class NoticeDetailMapper {
         continue;
       }
       JsonNode s = all.get(i);
+      if (s.isNull()) {
+        continue;
+      }
       String starts = text(s.path("startsAt").path("value"));
       String ends = text(s.path("endsAt").path("value"));
       out.add(
@@ -530,6 +552,17 @@ public final class NoticeDetailMapper {
   /**
    * 자격 조건. 상세에서 보류한 조건(/eligibility/{i}, 같은 순서)은 확인 필요로 표시하고 근거를 비워요. 근거는 같은 ID의 상세 자격 조건에서 찾아요.
    */
+  static String residenceDescription(JsonNode condition) {
+    String description = text(condition.path("description"));
+    String original = text(condition.path("originalText"));
+    if (!"RESIDENCE".equals(text(condition.path("category"))) || original == null) {
+      return description;
+    }
+    return kr.mujuthaek.api.common.text.ResidenceDuration.hasExplicitMinimum(original)
+        ? original
+        : description;
+  }
+
   static List<Condition> conditions(JsonNode payload, JsonNode detail) {
     Map<String, Evidence> evidence = evidence(detail);
     List<Condition> out = new ArrayList<>();
@@ -544,7 +577,7 @@ public final class NoticeDetailMapper {
               text(c.path("category")),
               text(c.path("target")),
               strings(c.path("targetGroups")),
-              text(c.path("description")),
+              residenceDescription(c),
               text(c.path("originalText")),
               c.path("inReview").asBoolean(false) || held,
               source == null ? List.of() : cite(evidence, source.path("evidenceIds"))));

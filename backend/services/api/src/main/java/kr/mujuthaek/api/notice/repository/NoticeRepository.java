@@ -339,11 +339,14 @@ public class NoticeRepository {
     jdbc.sql(
             "update notice.notices set field = :field, title = :title, provider = :provider,"
                 + " notice_type = :noticeType, supply_type_text = :supplyTypeText,"
-                + " region_code = :regionCode, apply_start = :applyStart, apply_end = :applyEnd,"
+                + " region_code = :regionCode, apply_start = :applyStart,"
+                + " apply_end = coalesce(source_closed_on, :applyEnd),"
                 + " posted_on = :postedOn, summary_text = :summary, detail_url = :detailUrl,"
                 + " current_version = :version, current_raw_post_id = :rawPostId,"
-                + " current_raw_version = :rawVersion, reviewed = :reviewed, status = :status,"
-                + " next_status_check_at = :nextCheck, needs_check = :needsCheck,"
+                + " current_raw_version = :rawVersion, reviewed = :reviewed,"
+                + " status = case when source_closed_on is null then :status else 'CLOSED' end,"
+                + " next_status_check_at = case when source_closed_on is null then :nextCheck end,"
+                + " needs_check = :needsCheck,"
                 + " announced_on = :announcedOn, updated_at = :now"
                 + " where id = :id")
         .params(listValues(id, n, version, listing))
@@ -400,6 +403,7 @@ public class NoticeRepository {
                 + " from notice.notices n join notice.notice_versions v"
                 + " on v.notice_id = n.id and v.version = n.current_version"
                 + " where n.next_status_check_at <= :now and n.merged_into is null"
+                + " and n.source_closed_on is null"
                 + " order by n.next_status_check_at limit :limit"
                 + " for update of n skip locked")
         .param("now", utc(now))
@@ -417,7 +421,8 @@ public class NoticeRepository {
 
   public void updateStatus(UUID noticeId, NoticeStatus status, Instant nextCheckAt, Instant now) {
     jdbc.sql(
-            "update notice.notices set status = :status, next_status_check_at = :nextCheck,"
+            "update notice.notices set status = case when source_closed_on is null then :status else 'CLOSED' end,"
+                + " next_status_check_at = case when source_closed_on is null then :nextCheck end,"
                 + " updated_at = :now where id = :id")
         .param("id", noticeId)
         .param("status", status.name())

@@ -202,7 +202,9 @@ public class NoticeQueries {
       int version,
       boolean reviewed,
       OffsetDateTime updatedAt,
-      String payload) {}
+      String payload,
+      LocalDate sourceClosedOn,
+      String sourceClosureUrl) {}
 
   public Optional<CurrentRow> current(UUID noticeId) {
     return jdbc
@@ -210,7 +212,8 @@ public class NoticeQueries {
             """
             select n.id, n.field, n.title, n.provider, n.notice_type, n.region_code, n.apply_start,
                    n.apply_end, n.posted_on, n.supply_type_text, n.detail_url, n.current_version,
-                   n.reviewed, n.updated_at, v.payload::text, n.status, n.needs_check
+                   n.reviewed, n.updated_at, v.payload::text, n.status, n.needs_check,
+                   n.source_closed_on, n.source_closure_url
             from notice.notices n
             join notice.notice_versions v on v.notice_id = n.id and v.version = n.current_version
             where n.id = coalesce((select m.merged_into from notice.notices m where m.id = :id), :id)
@@ -236,7 +239,9 @@ public class NoticeQueries {
                     rs.getInt(12),
                     rs.getBoolean(13),
                     rs.getObject(14, OffsetDateTime.class),
-                    rs.getString(15)))
+                    rs.getString(15),
+                    rs.getObject(18, LocalDate.class),
+                    rs.getString(19)))
         .stream()
         .findFirst();
   }

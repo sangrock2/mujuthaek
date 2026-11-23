@@ -137,6 +137,24 @@ public class NoticeQueryService {
             current.detailUrl(),
             row.needsCheck());
     JsonNode payload = payload(current);
+    var related = new java.util.ArrayList<NoticeDetailResponse.FollowUp>();
+    if (current.sourceClosedOn() != null) {
+      NoticeDetailMapper.excludeCancelledApplications(payload, current.sourceClosedOn());
+      related.add(
+          new NoticeDetailResponse.FollowUp(
+              "기관 조기 마감 안내", current.sourceClosureUrl(), current.sourceClosedOn(), List.of()));
+    }
+    followUps
+        .findByNotice(row.id())
+        .forEach(
+            f ->
+                related.add(
+                    NoticeDetailMapper.followUp(
+                        f.title(),
+                        f.detailUrl(),
+                        f.postedOn(),
+                        json.readTree(f.schedulesJson()),
+                        today)));
     // 지금 버전에서 보류한 위치의 점수는 빼요(위치 내용은 같아도 보류 항목만 늘어난 버전이면 이전 점수가 남아 있어요)
     Set<String> scored = NoticeContent.locationIds(payload.path("notice"));
     return NoticeDetailMapper.map(
@@ -152,16 +170,7 @@ public class NoticeQueryService {
                         s.score(),
                         s.calculatedAt().atZone(clock.getZone()).toOffsetDateTime()))
             .toList(),
-        followUps.findByNotice(row.id()).stream()
-            .map(
-                f ->
-                    NoticeDetailMapper.followUp(
-                        f.title(),
-                        f.detailUrl(),
-                        f.postedOn(),
-                        json.readTree(f.schedulesJson()),
-                        today))
-            .toList(),
+        List.copyOf(related),
         current.version(),
         current.reviewed(),
         local(current.updatedAt()),
