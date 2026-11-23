@@ -345,7 +345,7 @@ public class NoticeRepository {
                 + " current_version = :version, current_raw_post_id = :rawPostId,"
                 + " current_raw_version = :rawVersion, reviewed = :reviewed,"
                 + " status = case when source_closed_on is null then :status else 'CLOSED' end,"
-                + " next_status_check_at = case when source_closed_on is null then :nextCheck end,"
+                + " next_status_check_at = case when source_closed_on is null then cast(:nextCheck as timestamptz) end,"
                 + " needs_check = :needsCheck,"
                 + " announced_on = :announcedOn, updated_at = :now"
                 + " where id = :id")
@@ -422,7 +422,7 @@ public class NoticeRepository {
   public void updateStatus(UUID noticeId, NoticeStatus status, Instant nextCheckAt, Instant now) {
     jdbc.sql(
             "update notice.notices set status = case when source_closed_on is null then :status else 'CLOSED' end,"
-                + " next_status_check_at = case when source_closed_on is null then :nextCheck end,"
+                + " next_status_check_at = case when source_closed_on is null then cast(:nextCheck as timestamptz) end,"
                 + " updated_at = :now where id = :id")
         .param("id", noticeId)
         .param("status", status.name())
