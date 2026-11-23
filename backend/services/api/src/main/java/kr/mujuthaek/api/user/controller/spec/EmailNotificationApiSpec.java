@@ -23,6 +23,9 @@ public interface EmailNotificationApiSpec {
   @Operation(summary = "이메일 알림 수신 설정 저장")
   Status save(@Parameter(hidden = true) LoginUser user, Settings body);
 
-  @Operation(summary = "알림 이메일 삭제와 수신 중단")
+  @Operation(summary = "알림 이메일 수정 시작", description = "기존 주소의 인증 링크와 알림 수신 동의를 해제합니다.")
+  Status edit(@Parameter(hidden = true) LoginUser user);
+
+  @Operation(summary = "알림 이메일 수신 동의 철회")
   void remove(@Parameter(hidden = true) LoginUser user);
 }

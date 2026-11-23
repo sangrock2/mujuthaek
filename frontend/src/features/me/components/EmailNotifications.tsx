@@ -4,26 +4,37 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError } from "@/shared/lib/api/client";
-import { Toggle } from "@/shared/ui/Toggle";
 
-type Settings = { enabled: boolean; newNotice: boolean; deadline: boolean; reportAnswer: boolean };
-type Status = Settings & { email: string | null; verified: boolean };
+type Preferences = { newNotice: boolean; deadline: boolean; reportAnswer: boolean };
+type Status = Preferences & { email: string | null; verified: boolean; enabled: boolean };
+type Action = "request" | "save" | "edit" | "withdraw";
+
 const path = "/api/users/me/email-notifications";
-const labels = {
-  newNotice: "맞춤 신규 공고·지원 소식",
-  deadline: "신청 준비함·관심 공고 마감 3일 전·1일 전",
-  reportAnswer: "문의·제보 답변 도착",
-} as const;
+const empty: Status = {
+  email: null,
+  verified: false,
+  enabled: false,
+  newNotice: false,
+  deadline: false,
+  reportAnswer: false,
+};
+const options = [
+  ["newNotice", "맞춤 신규 공고·지원 소식"],
+  ["deadline", "신청 준비함·관심 공고 마감 3일 전·1일 전"],
+  ["reportAnswer", "문의·제보 답변 도착"],
+] as const;
+const defaultPreferences = { newNotice: true, deadline: true, reportAnswer: true };
 const button =
   "min-h-[44px] rounded-sm border border-line px-[14px] text-[14px] font-bold disabled:opacity-50";
 
-export function emailError(error: unknown) {
+function emailError(error: unknown) {
   if (error instanceof ApiError) {
     if (error.status === 429) return "인증 메일은 1분 간격으로 하루 5회까지 요청할 수 있어요.";
-    if (error.code === "EMAIL_VERIFICATION_INVALID")
-      return "인증 링크가 만료됐거나 이미 사용됐어요. 다시 요청해 주세요.";
+    if (error.code === "EMAIL_ADDRESS_LOCKED")
+      return "주소를 바꾸려면 이메일 수정하기를 눌러 주세요.";
     if (error.code === "EMAIL_DELIVERY_UNAVAILABLE")
-      return "메일 발송을 준비 중이거나 일시적으로 연결하지 못했어요. 잠시 뒤 다시 요청해 주세요.";
+      return "메일을 보내지 못했어요. 잠시 뒤 다시 요청해 주세요.";
+    if (error.code === "VALIDATION_FAILED") return "올바른 이메일 주소를 입력해 주세요.";
   }
   return "처리하지 못했어요. 잠시 뒤 다시 해 주세요.";
 }
@@ -38,50 +49,53 @@ export function EmailNotifications() {
     enabled: isMember(session.data),
     retry: false,
   });
-  const [address, setAddress] = useState<string>();
+  const [address, setAddress] = useState("");
   const [collectionConsent, setCollectionConsent] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [draft, setDraft] = useState<Settings | null>(null);
+  const [draft, setDraft] = useState<Preferences | null>(null);
   const [message, setMessage] = useState("");
+  const data = query.data;
+  const value = draft ?? (data?.enabled ? data : defaultPreferences);
   const mutation = useMutation({
-    mutationFn: async (action: "request" | "save" | "delete") => {
+    mutationFn: async (action: Action) => {
       if (action === "request")
         return api.post<Status>(path + "/request", {
-          email: address ?? query.data?.email ?? "",
-          consent: collectionConsent,
+          email: data?.email ?? address,
+          consent: Boolean(data?.email) || collectionConsent,
         });
-      if (action === "save") return api.put<Status>(path, { ...value, consent });
+      if (action === "save")
+        return api.put<Status>(path, {
+          enabled: true,
+          newNotice: value.newNotice,
+          deadline: value.deadline,
+          reportAnswer: value.reportAnswer,
+          consent,
+        });
+      if (action === "edit") return api.post<Status>(path + "/edit");
       await api.delete(path);
-      return {
-        email: null,
-        verified: false,
-        enabled: false,
-        newNotice: false,
-        deadline: false,
-        reportAnswer: false,
-      } as Status;
+      return empty;
     },
-    onSuccess: (data, action) => {
-      client.setQueryData(key, data);
+    onMutate: () => setMessage(""),
+    onSuccess: (updated, action) => {
+      client.setQueryData(key, updated);
       setDraft(null);
       setConsent(false);
-      if (action === "delete") {
-        setAddress("");
-        setCollectionConsent(false);
-      }
+      setAddress("");
+      setCollectionConsent(false);
       setMessage(
-        action === "request"
-          ? "인증 메일을 보냈어요. 15분 안에 링크를 열어 주소를 인증해 주세요."
-          : action === "delete"
-            ? "알림 이메일을 삭제했어요."
-            : "이메일 알림 설정을 저장했어요.",
+        {
+          request: "인증 메일을 보냈어요. 15분 안에 메일에 있는 링크를 열어 주세요.",
+          edit: "이전 인증 링크가 만료됐어요. 새 주소를 입력해 주세요.",
+          withdraw: "이메일 알림 동의를 철회했어요.",
+          save: "이메일 알림 설정을 저장했어요.",
+        }[action],
       );
     },
-    onError: (error) => setMessage(emailError(error)),
+    onError: (error, action) => {
+      setMessage(emailError(error));
+      if (action === "request") void client.invalidateQueries({ queryKey: key });
+    },
   });
-  const data = query.data;
-  const value = draft ??
-    data ?? { enabled: false, newNotice: true, deadline: true, reportAnswer: true };
   if (!session.data) return null;
   return (
     <section
@@ -90,8 +104,7 @@ export function EmailNotifications() {
     >
       <h3 className="text-[18px] font-extrabold">이메일로 받기</h3>
       <p className="text-text-sub text-[14px]">
-        계정 연락용 이메일과 별도로 등록해요. 주소 인증 후 수신에 동의해야 알림이 켜져요. 새
-        공고·지원 소식은 하루 두 번 모아 보내요.
+        계정 연락용 이메일과 별도로 등록해요. 주소 인증 후 수신에 동의하면 알림이 켜져요.
       </p>
       {query.isPending ? (
         <p>설정을 불러오는 중이에요.</p>
@@ -110,78 +123,103 @@ export function EmailNotifications() {
               type="email"
               autoComplete="email"
               maxLength={254}
-              value={address ?? data?.email ?? ""}
-              onChange={(e) => setAddress(e.target.value)}
+              value={data?.email ?? address}
+              readOnly={Boolean(data?.email) || mutation.isPending}
+              onChange={(event) => setAddress(event.target.value)}
               className="border-line bg-surface min-h-[44px] rounded-sm border px-[12px]"
             />
           </label>
-          <p className="text-text-sub text-[13px]">
-            이메일 주소는 인증과 선택한 알림 발송에 사용하며, 탈퇴 또는 알림 이메일 삭제 시
-            삭제해요. 미인증 주소는 24시간 경과 후 정기 삭제해요. 동의하지 않아도 다른 서비스는
-            이용할 수 있어요. 자세한 내용은 <a href="/privacy">개인정보처리방침</a>에서 확인해
-            주세요.
-          </p>
-          <label className="flex items-center gap-[8px] text-[14px]">
-            <input
-              type="checkbox"
-              checked={collectionConsent}
-              onChange={(e) => setCollectionConsent(e.target.checked)}
-            />
-            [선택] 알림 이메일 수집·이용에 동의해요
-          </label>
-          <button
-            type="button"
-            className={button}
-            disabled={mutation.isPending || !collectionConsent || !(address ?? data?.email)}
-            onClick={() => mutation.mutate("request")}
-          >
-            동의하고 인증 메일 받기
-          </button>
-          {data?.email && (
-            <p className="text-[14px]">
-              현재 주소: {data.email} · {data.verified ? "인증 완료" : "인증 대기"} ·{" "}
-              {data.enabled ? "수신 중" : "수신 꺼짐"}
-            </p>
+          {data?.email ? (
+            <>
+              <p className="text-text-sub text-[14px]">
+                {data.verified
+                  ? data.enabled
+                    ? "인증 완료 · 알림 수신 중"
+                    : "인증 완료 · 수신 동의 대기"
+                  : "이메일 인증 대기"}
+              </p>
+              {!data.verified && (
+                <>
+                  <p className="text-text-sub text-[13px]">
+                    인증 메일을 다시 요청하면 이전 링크가 만료돼요.
+                  </p>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={mutation.isPending}
+                    onClick={() => mutation.mutate("request")}
+                  >
+                    인증 메일 다시 받기
+                  </button>
+                </>
+              )}
+              <p className="text-text-sub text-[13px]">
+                이메일을 수정하면 이 주소의 인증과 수신 동의가 초기화돼요.
+              </p>
+              <button
+                type="button"
+                className={button}
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate("edit")}
+              >
+                이메일 수정하기
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-text-sub text-[13px]">
+                이메일 주소는 인증과 선택한 알림에 사용해요. 동의를 철회하거나 탈퇴하면 주소를
+                삭제해요. 미인증 주소는 24시간 뒤 정기 삭제해요.{" "}
+                <a href="/privacy">개인정보처리방침</a>
+              </p>
+              <label className="flex items-center gap-[8px] text-[14px]">
+                <input
+                  type="checkbox"
+                  checked={collectionConsent}
+                  onChange={(event) => setCollectionConsent(event.target.checked)}
+                />
+                [선택] 알림 이메일 수집·이용에 동의해요
+              </label>
+              <button
+                type="button"
+                className={button}
+                disabled={mutation.isPending || !collectionConsent || !address.trim()}
+                onClick={() => mutation.mutate("request")}
+              >
+                동의하고 인증 메일 받기
+              </button>
+            </>
           )}
           {data?.verified && (
             <fieldset className="flex flex-col gap-[12px]" disabled={mutation.isPending}>
               <legend className="mb-[10px] font-bold">받을 이메일 알림</legend>
-              {Object.entries(labels).map(([name, label]) => (
+              {options.map(([name, label]) => (
                 <label key={name} className="flex items-center gap-[8px]">
                   <input
                     type="checkbox"
-                    checked={value[name as keyof typeof labels]}
-                    onChange={(e) => setDraft({ ...value, [name]: e.target.checked })}
+                    checked={value[name]}
+                    onChange={(event) => setDraft({ ...value, [name]: event.target.checked })}
                   />
                   {label}
                 </label>
               ))}
-              <div className="flex items-center justify-between gap-[12px]">
-                <span>이메일 알림 수신</span>
-                <Toggle
-                  checked={value.enabled}
-                  onChange={(enabled) => setDraft({ ...value, enabled })}
-                  label="이메일 알림 수신"
-                />
-              </div>
-              {value.enabled && (
+              {!data.enabled && (
                 <label className="flex items-center gap-[8px] text-[14px]">
                   <input
                     type="checkbox"
                     checked={consent}
-                    onChange={(e) => setConsent(e.target.checked)}
+                    onChange={(event) => setConsent(event.target.checked)}
                   />
-                  [선택] 선택한 공고·마감·답변 알림을 이메일로 받는 데 동의해요. 언제든 해제할 수
-                  있어요.
+                  [선택] 선택한 알림을 이메일로 받는 데 동의해요
                 </label>
               )}
               <button
                 type="button"
                 className={button}
-                disabled={value.enabled && !consent}
+                disabled={(!data.enabled && !consent) || !options.some(([name]) => value[name])}
                 onClick={() => mutation.mutate("save")}
               >
-                알림 설정 저장
+                {data.enabled ? "알림 설정 저장" : "동의하고 알림 받기"}
               </button>
             </fieldset>
           )}
@@ -190,15 +228,15 @@ export function EmailNotifications() {
               type="button"
               className={button}
               disabled={mutation.isPending}
-              onClick={() => mutation.mutate("delete")}
+              onClick={() => mutation.mutate("withdraw")}
             >
-              알림 이메일 삭제·수신 중단
+              동의 철회
             </button>
           )}
         </>
       )}
       {message && (
-        <p role="status" className="text-[14px]">
+        <p role={mutation.isError ? "alert" : "status"} className="text-[14px]">
           {message}
         </p>
       )}

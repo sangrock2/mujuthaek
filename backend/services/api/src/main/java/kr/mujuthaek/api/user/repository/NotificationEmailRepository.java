@@ -103,12 +103,18 @@ public class NotificationEmailRepository {
         .update();
   }
 
-  public void verify(UUID id, Instant now) {
-    jdbc.sql(
-            "update account.notification_emails set verified_at=:now,token_hash=null,expires_at=null where user_id=:u")
-        .param("u", id)
-        .param("now", now.atOffset(ZoneOffset.UTC))
-        .update();
+  public boolean consumeVerification(String hash, UUID owner, Instant now) {
+    return jdbc.sql(
+                """
+            update account.notification_emails set verified_at=:now, token_hash=null, expires_at=null
+             where token_hash=:hash and expires_at > :now and email is not null and verified_at is null
+               and (cast(:owner as uuid) is null or user_id=cast(:owner as uuid))
+            """)
+            .param("hash", hash)
+            .param("owner", owner)
+            .param("now", now.atOffset(ZoneOffset.UTC))
+            .update()
+        == 1;
   }
 
   public void settings(
@@ -129,15 +135,17 @@ public class NotificationEmailRepository {
         .update();
   }
 
-  public void delete(UUID id) {
-    // 주소를 지워도 재발송 횟수는 유지해 삭제·재등록으로 한도를 우회하지 못하게 해요.
+  public void withdraw(UUID id, Instant now) {
+    // 주소나 토큰을 비워도 발송 횟수와 최근 철회는 유지해요.
     jdbc.sql(
             """
         update account.notification_emails set email=null,token_hash=null,expires_at=null,verified_at=null,
-          enabled=false,new_notice=false,deadline=false,report_answer=false,consent_version=null,consented_at=null,collection_consent_version=null
-        where user_id=:u
+          enabled=false,new_notice=false,deadline=false,report_answer=false,collection_consent_version=null,
+          revoked_at=:now
+        where user_id=:u and email is not null
         """)
         .param("u", id)
+        .param("now", now.atOffset(ZoneOffset.UTC))
         .update();
   }
 

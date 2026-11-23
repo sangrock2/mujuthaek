@@ -104,6 +104,11 @@ public class EmailNotificationService {
           var now = clock.instant();
           var day = now.atZone(ZoneId.of("Asia/Seoul")).toLocalDate();
           Saved previous = emails.find(id).orElse(null);
+          if (previous != null
+              && previous.email() != null
+              && (previous.verifiedAt() != null || !previous.email().equals(address))) {
+            throw new CustomException(ErrorCode.EMAIL_ADDRESS_LOCKED);
+          }
           int count =
               previous != null && day.equals(previous.requestDay()) ? previous.requestCount() : 0;
           if (count >= 5
@@ -121,35 +126,46 @@ public class EmailNotificationService {
   }
 
   @Transactional
+  public void verifyLink(String token) {
+    consumeLink(token, null);
+  }
+
+  @Transactional
   public Status verify(UUID id, String token) {
-    emails.lock(id);
-    Saved saved = emails.find(id).orElseThrow(EmailNotificationService::invalid);
+    consumeLink(token, id);
+    return get(id);
+  }
+
+  private void consumeLink(String token, UUID owner) {
     if (token == null
         || !token.matches("[a-f0-9]{64}")
-        || saved.tokenHash() == null
-        || saved.expiresAt() == null
-        || !saved.expiresAt().isAfter(clock.instant())
-        || !equal(saved.tokenHash(), hash(token))) throw invalid();
-    emails.verify(id, clock.instant());
-    return get(id);
+        || !emails.consumeVerification(hash(token), owner, clock.instant())) {
+      throw invalid();
+    }
   }
 
   @Transactional
   public Status save(UUID id, Settings s) {
     emails.lock(id);
+    if (!s.enabled()) {
+      emails.withdraw(id, clock.instant());
+      return get(id);
+    }
     Saved saved = emails.find(id).orElseThrow(EmailNotificationService::invalid);
-    if (s.enabled() && (saved.verifiedAt() == null || !s.consent())) {
+    if (saved.verifiedAt() == null || (!saved.enabled() && !s.consent())) {
       throw new CustomException(ErrorCode.VALIDATION_FAILED, "인증된 이메일과 수신 동의가 필요해요");
     }
-    emails.settings(
-        id, s.enabled(), s.newNotice(), s.deadline(), s.reportAnswer(), clock.instant());
+    if (!s.newNotice() && !s.deadline() && !s.reportAnswer()) {
+      throw new CustomException(ErrorCode.VALIDATION_FAILED, "받을 알림을 하나 이상 골라 주세요");
+    }
+    emails.settings(id, true, s.newNotice(), s.deadline(), s.reportAnswer(), clock.instant());
     return get(id);
   }
 
   @Transactional
-  public void remove(UUID id) {
+  public void withdraw(UUID id) {
     emails.lock(id);
-    emails.delete(id);
+    emails.withdraw(id, clock.instant());
   }
 
   @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 3600000)
@@ -237,8 +253,7 @@ public class EmailNotificationService {
     Saved saved = emails.find(id).orElseThrow(EmailNotificationService::invalid);
     String expected = v2 ? signedV2(saved) : signedV1(saved);
     if (expected == null || !equal(token, expected)) throw invalid();
-    emails.settings(
-        id, false, saved.newNotice(), saved.deadline(), saved.reportAnswer(), clock.instant());
+    emails.withdraw(id, clock.instant());
   }
 
   /**
