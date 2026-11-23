@@ -16,6 +16,12 @@ sudo python3 broker_status.py --previous broker-before.json > broker-now.json
 
 ## 실패 큐 재처리
 
+### 자동 적체 알림
+
+`mujuthaek-broker-alerts.timer`를 운영 호스트에 설치하면 5분마다 주요 큐와 아웃박스를 읽기 전용으로 확인합니다. 실패 큐는 비어 있지 않으면 알리고, 소비자 없는 대기, 15분 이상 걸린 대기·미발행, 20건 이상으로 줄지 않는 대기는 연속 점검에서 확인되면 알립니다. 수동 보류 큐는 제외합니다. 동일 경고는 한 번 보내고 해소된 뒤 재발하면 다시 보냅니다.
+
+설치 시 `broker_alerts.py`, `broker_status.py`, `slack_alerts.py`를 `/usr/local/lib/mujuthaek-broker-alerts`에 배치하고 `systemd/` 아래 두 파일을 `/etc/systemd/system`에 설치합니다. 웹훅은 root 전용 `/etc/mujuthaek-ops/slack-webhook`에 입력합니다. `systemctl start mujuthaek-broker-alerts.service`가 성공한 뒤 `systemctl enable --now mujuthaek-broker-alerts.timer`로 예약합니다. 앱 컨테이너 재시작이나 메시지 재처리는 필요하지 않습니다.
+
 원인을 수정한 뒤 한 번에 최대 100건까지 실행합니다. 기본 한도는 10건입니다. 발행 확인과 필수 라우팅을 함께 사용하므로 대상 큐가 메시지를 받았다는 확인이 온 뒤에만 원본을 ACK합니다. 재처리 한도 3회에 도달한 메시지는 확인을 거쳐 실패 큐에 남깁니다. 발행 확인 뒤 ACK 전에 연결이 끊기면 중복 전달될 수 있으므로 기존 이벤트 ID를 유지합니다.
 
 ### 기존 격리 배포에 적용

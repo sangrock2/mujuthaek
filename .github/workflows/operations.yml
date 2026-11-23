@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       send_report:
-        description: Send a private snapshot to the owner's configured email
+        description: Send the private email snapshot and a redacted Slack summary
         type: boolean
         default: false
 permissions:
@@ -44,6 +44,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TOKEN_EXPIRES_AT: ${{ vars.VERCEL_TOKEN_EXPIRES_AT }}
           OPERATIONS_CONFIG: ${{ secrets.OPERATIONS_CONFIG }}
+          OPERATIONS_SLACK_WEBHOOK_URL: ${{ secrets.OPERATIONS_SLACK_WEBHOOK_URL }}
           SEND_REPORT: ${{ inputs.send_report }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
         shell: bash

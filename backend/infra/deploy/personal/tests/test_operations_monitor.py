@@ -43,6 +43,30 @@ class OperationsTests(unittest.TestCase):
         self.assertFalse(recovered)
         self.assertTrue(monitor.fresh_alerts(monitor.evaluate({'credits_usd': 99}, self.now), {'active': list(recovered)}))
 
+    def test_budget_thresholds_and_slack_redaction(self):
+        report = {'budget_limit_usd': 60, 'budget_includes_credits': False,
+                  'monthly_gross_usd': 48, 'monthly_forecast_usd': 62, 'credits_usd': 4.17}
+        alerts = monitor.evaluate(report, self.now)
+        self.assertIn('budget:actual:80', alerts)
+        self.assertIn('budget:forecast:100', alerts)
+        self.assertNotIn('budget:actual:50', alerts)
+        self.assertNotIn('4.17', ' '.join(monitor.slack_summary(alerts)))
+
+    def test_failed_slack_retries_without_resending_an_already_delivered_email(self):
+        report = {'errors': [], 'credits_usd': 4.17}
+        active = list(monitor.evaluate(report, self.now))
+        with patch.object(monitor, 'aws', return_value={'Account': monitor.ACCOUNT}), \
+             patch.object(monitor, 'read_state', return_value={'initialized': True, 'active': active}), \
+             patch.object(monitor, 'collect', return_value=report), \
+             patch.object(monitor, 'put_json') as put, patch.object(monitor, 'send_report') as email, \
+             patch.dict(monitor.os.environ, {'OPERATIONS_SLACK_WEBHOOK_URL': 'synthetic'}), \
+             patch.object(monitor.slack_alerts, 'send', side_effect=monitor.slack_alerts.SlackError):
+            with self.assertRaises(monitor.CheckError):
+                monitor.run()
+        email.assert_not_called()
+        self.assertEqual(put.call_args.args[2]['active'], active)
+        self.assertEqual(put.call_args.args[2]['slack_active'], [])
+
     def test_expiry_milliseconds_and_relevant_scope(self):
         expires = self.now + timedelta(days=6)
         payload = {'token': {'expiresAt': (self.now + timedelta(days=100)).timestamp() * 1000,

@@ -12,6 +12,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+import slack_alerts
+
 ACCOUNT = ''
 REGION = 'ap-northeast-2'
 BUCKET = ''
@@ -20,6 +22,7 @@ BUDGET = RECIPIENT = SENDER = TEAM = PROJECT = CREDIT_EXPIRY = ''
 USERS = CREDIT_LEVELS = ()
 BUDGET_LIMIT = 0
 EXPIRY_LEVELS = (30, 7, 1, 0)
+BUDGET_LEVELS = (50, 80, 100)
 
 
 def configure(config):
@@ -81,6 +84,15 @@ def evaluate(report, now):
         alerts[f'error:{error}'] = error
     if 'budget_limit_usd' in report and (report['budget_limit_usd'] != BUDGET_LIMIT or report['budget_includes_credits']):
         alerts['budget-config'] = 'AWS 예산이 승인된 크레딧 차감 전 기준과 다릅니다.'
+    limit = report.get('budget_limit_usd', 0)
+    if limit > 0:
+        spend = report.get('monthly_gross_usd', 0)
+        crossed = [level for level in BUDGET_LEVELS if spend * 100 >= limit * level]
+        if crossed:
+            level = max(crossed)
+            alerts[f'budget:actual:{level}'] = f'AWS 이번 달 실제 사용액이 예산의 {level}%에 도달했습니다.'
+        if report.get('monthly_forecast_usd', 0) >= limit:
+            alerts['budget:forecast:100'] = 'AWS 이번 달 예상 사용액이 예산의 100%에 도달했습니다.'
     if 'vercel' in report:
         token = report['vercel']
         if token.get('expires_at'):
@@ -243,6 +255,18 @@ def send_report(directory, report, alerts):
     aws('ses', 'send-email', '--from', SENDER, '--to', RECIPIENT, '--message', 'file://' + path.as_posix())
 
 
+def slack_summary(alerts):
+    summaries = []
+    for key, message in alerts.items():
+        if key.startswith('credits:'):
+            summaries.append('AWS 크레딧 잔액이 설정한 알림 기준에 도달했습니다.')
+        elif key.startswith('key-age:'):
+            summaries.append('운영 IAM 자격 증명의 교체 권고 기준에 도달했습니다.')
+        else:
+            summaries.append(message)
+    return list(dict.fromkeys(summaries))
+
+
 def run(send_snapshot=False):
     now = datetime.now(timezone.utc)
     if aws('sts', 'get-caller-identity')['Account'] != ACCOUNT:
@@ -256,8 +280,25 @@ def run(send_snapshot=False):
         put_json(directory, 'latest.json', report)
         if new or send_snapshot or not previous.get('initialized'):
             send_report(directory, report, new)
-        # Commit delivery state only after successful SES send; failures retry next run.
-        put_json(directory, 'state.json', {'version': 1, 'initialized': True, 'checked_at': now.isoformat(), 'active': list(alerts)})
+        state = {'version': 1, 'initialized': True, 'checked_at': now.isoformat(), 'active': list(alerts)}
+        prior_slack = previous.get('slack_active', [])
+        state['slack_active'] = [key for key in alerts if key in prior_slack]
+        webhook = os.environ.get('OPERATIONS_SLACK_WEBHOOK_URL', '').strip()
+        slack_new = fresh_alerts(alerts, {'active': prior_slack})
+        slack_failed = False
+        if webhook and (slack_new or send_snapshot):
+            try:
+                slack_alerts.send(webhook, '[무주택자들] 운영 점검',
+                                  slack_summary(alerts if send_snapshot else slack_new)
+                                  or ['현재 활성 운영 경고가 없습니다.'])
+            except slack_alerts.SlackError:
+                slack_failed = True
+            else:
+                state['slack_active'] = list(alerts)
+        # Track each channel's confirmed deliveries independently so Slack retries do not resend email.
+        put_json(directory, 'state.json', state)
+        if slack_failed:
+            raise CheckError('Slack operations summary was not delivered.')
         return not report['errors']
 
 
