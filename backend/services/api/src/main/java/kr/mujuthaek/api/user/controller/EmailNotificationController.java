@@ -52,8 +52,14 @@ public class EmailNotificationController
     return emails.save(user.userId(), body);
   }
 
+  @PostMapping("/edit")
+  public Status edit(@AuthenticationPrincipal LoginUser user) {
+    emails.withdraw(user.userId());
+    return emails.get(user.userId());
+  }
+
   @DeleteMapping
   public void remove(@AuthenticationPrincipal LoginUser user) {
-    emails.remove(user.userId());
+    emails.withdraw(user.userId());
   }
 }

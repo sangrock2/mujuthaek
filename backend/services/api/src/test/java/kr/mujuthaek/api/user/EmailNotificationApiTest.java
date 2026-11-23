@@ -2,6 +2,7 @@ package kr.mujuthaek.api.user;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -35,6 +36,7 @@ class EmailNotificationApiTest {
   @Autowired JdbcClient jdbc;
   @MockitoBean NotificationServerClient mail;
   static final String PATH = "/api/users/me/email-notifications";
+  static final String VERIFY_LINK = "/api/email-notifications/verify";
 
   @Test
   void requiresLoginAndExplicitCollectionConsent() throws Exception {
@@ -52,7 +54,7 @@ class EmailNotificationApiTest {
   }
 
   @Test
-  void verificationIsOwnerBoundSingleUseAndDoesNotEnableUntilConsent() throws Exception {
+  void publicVerificationIsSingleUseAndDoesNotEnableUntilConsent() throws Exception {
     LoginUser user = login();
     String token = request(user);
     String stored =
@@ -65,12 +67,12 @@ class EmailNotificationApiTest {
         .andExpect(status().isBadRequest());
     mvc.perform(as(login(), post(PATH + "/verify")).content(token(token)))
         .andExpect(status().isBadRequest());
-    mvc.perform(as(user, post(PATH + "/verify")).content(token(token)))
+    mvc.perform(verifyLink(token)).andExpect(status().isNoContent());
+    mvc.perform(as(user, get(PATH)))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.verified").value(true))
         .andExpect(jsonPath("$.enabled").value(false));
-    mvc.perform(as(user, post(PATH + "/verify")).content(token(token)))
-        .andExpect(status().isBadRequest());
+    mvc.perform(verifyLink(token)).andExpect(status().isBadRequest());
     mvc.perform(as(user, put(PATH)).content(settings(true, false)))
         .andExpect(status().isBadRequest());
     mvc.perform(as(user, put(PATH)).content(settings(true, true)))
@@ -82,10 +84,11 @@ class EmailNotificationApiTest {
   }
 
   @Test
-  void deleteStopsDeliveryAndCannotResetResendLimit() throws Exception {
+  void withdrawalClearsTheAddressAndCannotResetResendLimit() throws Exception {
     LoginUser user = login();
-    request(user);
+    String token = request(user);
     mvc.perform(as(user, delete(PATH))).andExpect(status().isOk());
+    mvc.perform(verifyLink(token)).andExpect(status().isBadRequest());
     mvc.perform(as(user, get(PATH)))
         .andExpect(jsonPath("$.email").doesNotExist())
         .andExpect(jsonPath("$.enabled").value(false));
@@ -103,8 +106,7 @@ class EmailNotificationApiTest {
             "update account.notification_emails set expires_at=now()-interval '1 minute' where user_id=:u")
         .param("u", user.userId())
         .update();
-    mvc.perform(as(user, post(PATH + "/verify")).content(token(token)))
-        .andExpect(status().isBadRequest());
+    mvc.perform(verifyLink(token)).andExpect(status().isBadRequest());
   }
 
   @Test
@@ -140,7 +142,9 @@ class EmailNotificationApiTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(token(unsubscribe)))
         .andExpect(status().isOk());
-    mvc.perform(as(user, get(PATH))).andExpect(jsonPath("$.enabled").value(false));
+    mvc.perform(as(user, get(PATH)))
+        .andExpect(jsonPath("$.email").doesNotExist())
+        .andExpect(jsonPath("$.enabled").value(false));
   }
 
   /** 메일 앱의 「수신 거부」 버튼(RFC 8058): 로그인 없이 폼 POST로 끄고, 서명이 틀리면 400 (2026-11-16 보안 감사 4장). */
@@ -179,13 +183,67 @@ class EmailNotificationApiTest {
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .content("List-Unsubscribe=One-Click"))
         .andExpect(status().isOk());
-    mvc.perform(as(user, get(PATH))).andExpect(jsonPath("$.enabled").value(false));
+    mvc.perform(as(user, get(PATH)))
+        .andExpect(jsonPath("$.email").doesNotExist())
+        .andExpect(jsonPath("$.enabled").value(false));
+  }
+
+  @Test
+  void twoAccountsCanVerifyTheSameAddressIndependently() throws Exception {
+    LoginUser first = login();
+    LoginUser second = login();
+    request(first);
+    sendRequest(second, "verified@example.com").andExpect(status().isOk());
+    var capture = ArgumentCaptor.forClass(String.class);
+    verify(mail, times(2)).sendEmailVerification(anyString(), capture.capture());
+    var links = capture.getAllValues();
+    assertThat(links.get(0)).isNotEqualTo(links.get(1));
+    mvc.perform(verifyLink(links.get(0))).andExpect(status().isNoContent());
+    mvc.perform(as(first, get(PATH))).andExpect(jsonPath("$.verified").value(true));
+    mvc.perform(as(second, get(PATH))).andExpect(jsonPath("$.verified").value(false));
+    mvc.perform(verifyLink(links.get(1))).andExpect(status().isNoContent());
+    mvc.perform(as(first, delete(PATH))).andExpect(status().isOk());
+    mvc.perform(as(second, get(PATH)))
+        .andExpect(jsonPath("$.email").value("verified@example.com"))
+        .andExpect(jsonPath("$.verified").value(true));
+  }
+
+  @Test
+  void editingUnlocksTheAddressAndInvalidatesThePendingLink() throws Exception {
+    LoginUser user = login();
+    String original = request(user);
+    sendRequest(user, "changed@example.com").andExpect(status().isConflict());
+    mvc.perform(as(user, post(PATH + "/edit")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.email").doesNotExist());
+    mvc.perform(verifyLink(original)).andExpect(status().isBadRequest());
+    sendRequest(user, "changed@example.com").andExpect(status().isTooManyRequests());
+    jdbc.sql(
+            "update account.notification_emails set requested_at=now()-interval '2 minutes' where user_id=:id")
+        .param("id", user.userId())
+        .update();
+    sendRequest(user, "changed@example.com").andExpect(status().isOk());
+    var capture = ArgumentCaptor.forClass(String.class);
+    verify(mail, times(2)).sendEmailVerification(anyString(), capture.capture());
+    mvc.perform(verifyLink(capture.getAllValues().get(1))).andExpect(status().isNoContent());
+    mvc.perform(as(user, get(PATH)))
+        .andExpect(jsonPath("$.email").value("changed@example.com"))
+        .andExpect(jsonPath("$.verified").value(true));
+  }
+
+  private MockHttpServletRequestBuilder verifyLink(String value) {
+    return post(VERIFY_LINK).contentType(MediaType.APPLICATION_JSON).content(token(value));
+  }
+
+  private org.springframework.test.web.servlet.ResultActions sendRequest(
+      LoginUser user, String address) throws Exception {
+    return mvc.perform(
+        as(user, post(PATH + "/request"))
+            .content("{\"email\":\"" + address + "\",\"consent\":true}"));
   }
 
   private String request(LoginUser user) throws Exception {
-    mvc.perform(
-            as(user, post(PATH + "/request"))
-                .content("{\"email\":\"verified@example.com\",\"consent\":true}"))
+    sendRequest(user, "verified@example.com")
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.verified").value(false));
     var capture = ArgumentCaptor.forClass(String.class);

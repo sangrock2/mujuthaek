@@ -2,9 +2,6 @@ package kr.mujuthaek.api.user.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -69,8 +66,7 @@ class UnsubscribeLinkKeyTest {
 
     withKey.unsubscribe(v2);
     withKey.unsubscribe(v1);
-    verify(emails, org.mockito.Mockito.times(2))
-        .settings(eq(USER), eq(false), anyBoolean(), anyBoolean(), anyBoolean(), any());
+    verify(emails, org.mockito.Mockito.times(2)).withdraw(USER, NOW);
   }
 
   @Test
@@ -91,7 +87,6 @@ class UnsubscribeLinkKeyTest {
     var withKey = service(INTERNAL, DEDICATED);
 
     assertThatThrownBy(() -> withKey.unsubscribe(forged)).isInstanceOf(CustomException.class);
-    verify(emails, never())
-        .settings(eq(USER), eq(false), anyBoolean(), anyBoolean(), anyBoolean(), any());
+    verify(emails, never()).withdraw(USER, NOW);
   }
 }
