@@ -291,8 +291,11 @@ export function MDetail({ id }: { id: string }) {
   const doc = withMine(n.doc, j.judgment?.mineTypes ?? []);
   const money = j.judgment?.money;
   /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 시트로 열고, 없으면 기관 사이트로 */
-  const original = noticeOriginal(doc, pdf, (via) =>
-    track("notice_source_open", { ...noticeParams(n), via }),
+  const original = noticeOriginal(
+    doc,
+    pdf,
+    (via) => track("notice_source_open", { ...noticeParams(n), via }),
+    j.judgment,
   );
   const openOriginal = original.openOriginal;
 
@@ -379,15 +382,18 @@ export function MDetail({ id }: { id: string }) {
           error={j.error}
           variant="mobile"
           onOpenOriginal={original.openEligibility}
+          onOpenReview={original.openReview}
         />
 
-        <NoticeHeldBanner doc={doc} variant="mobile" />
+        <NoticeHeldBanner doc={doc} variant="mobile" onOpenReview={original.openReview} />
         <NoticeVersions noticeId={n.id} variant="mobile" />
         <NoticeToc doc={doc} variant="mobile" />
         <NoticeSections
           doc={doc}
           variant="mobile"
           onOpenPage={original.hasPdf ? openOriginal : undefined}
+          onOpenReview={original.openReview}
+          reviewIds={new Set(original.reviewItems.map((item) => item.id))}
         />
 
         {n.hasUnits ? (

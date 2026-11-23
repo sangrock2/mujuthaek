@@ -12,9 +12,10 @@ export type PdfTarget = {
   nonce: number;
   fileId?: string;
   quote?: string;
+  reviewId?: string;
 };
 
-export type PdfTargetExtra = { fileId?: string | null; quote?: string | null };
+export type PdfTargetExtra = { fileId?: string | null; quote?: string | null; reviewId?: string };
 
 /**
  * 원문 PDF 열기 · 닫기.
@@ -26,6 +27,7 @@ export function usePdfViewer() {
   const nonce = useRef(0);
   /** 이 화면에서 기록을 하나 쌓았는지 (닫을 때 뒤로가기로 지워요) */
   const pushed = useRef(false);
+  const opener = useRef<HTMLElement | null>(null);
   const position = useRef<{ element: Element | null; top: number; y: number } | null>(null);
   const rememberPosition = useCallback(() => {
     if (!window.matchMedia("(min-width: 1024px)").matches) return;
@@ -69,6 +71,13 @@ export function usePdfViewer() {
   }, [open]);
 
   useEffect(() => {
+    if (!open && opener.current) {
+      opener.current.focus({ preventScroll: true });
+      opener.current = null;
+    }
+  }, [open]);
+
+  useEffect(() => {
     const onPop = () => {
       pushed.current = false;
       setOpen(new URLSearchParams(window.location.search).has("pdf"));
@@ -79,7 +88,11 @@ export function usePdfViewer() {
 
   const show = useCallback(
     (page = 1, label?: string, extra?: PdfTargetExtra) => {
-      rememberPosition();
+      if (!open) {
+        rememberPosition();
+        opener.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }
       nonce.current += 1;
       setTarget({
         page,
@@ -87,6 +100,7 @@ export function usePdfViewer() {
         nonce: nonce.current,
         fileId: extra?.fileId ?? undefined,
         quote: extra?.quote ?? undefined,
+        reviewId: extra?.reviewId,
       });
       if (
         !window.matchMedia("(min-width: 1024px)").matches &&
@@ -99,7 +113,7 @@ export function usePdfViewer() {
       }
       setOpen(true);
     },
-    [rememberPosition],
+    [open, rememberPosition],
   );
 
   const close = useCallback(() => {

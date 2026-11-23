@@ -14,6 +14,7 @@ import type {
   NoticeDoc,
   NoticeHousingType,
   NoticeDocumentGroup,
+  NoticeEvidence,
   NoticeFollowUp,
   NoticeHeldPart,
   NoticePdfFile,
@@ -24,7 +25,7 @@ import type {
 } from "@/features/notice/mocks/notice-doc";
 
 /** fileId: page가 어느 첨부 PDF의 쪽인지 (files[].id, 모르면 null · 이전 응답엔 없음) */
-type Evidence = { quote: string; page: number | null; fileId?: string | null };
+type Evidence = NoticeEvidence;
 type TimeRange = { start: string; end: string };
 
 type ApiSchedule = {
@@ -515,6 +516,7 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
       id: c.id,
       category: categoryOf[c.category ?? ""] ?? "OTHER",
       text: c.description ?? c.originalText ?? "",
+      evidence: c.evidence,
       // 예외 조건(detail)과 따로: 예전엔 detail에 넣어 「예외 · 원문과 다시 확인하는 중이에요」로 보였어요
       checking: c.inReview || undefined,
     })),

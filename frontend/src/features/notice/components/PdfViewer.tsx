@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Minus, Plus, X } from "lucide-react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import { PdfReviewList } from "@/features/notice/components/PdfReviewList";
 import { type QuoteBox, quoteBoxes } from "@/features/notice/pdfQuote";
+import type { PdfReviewItem } from "@/features/notice/pdfReview";
 import type { PdfTarget } from "@/features/notice/usePdfViewer";
 import { cn } from "@/shared/lib/cn";
 import { safeExternalUrl } from "@/shared/lib/safeUrl";
@@ -15,6 +17,7 @@ const ZOOM_STEP = 0.2;
 const PAGE_GAP = 12;
 /** 강조한 문장 위로 남길 여백 */
 const QUOTE_MARGIN = 96;
+export const NOTICE_PDF_PANEL_WIDTH = "min(46vw, 680px)";
 
 /** 강조 결과: 찾았으면 그 쪽 안 위치(px), 못 찾았으면 missed */
 type QuoteResult = { nonce: number; top?: number; missed?: boolean };
@@ -33,7 +36,9 @@ type PdfViewerProps = {
   sections?: { label: string; page: number }[];
   /** 섹션을 누르면 그 쪽으로 이동해요 */
   onJump?: (page: number, label: string) => void;
-  /** web: 왼쪽 패널 · mobile: 아래 시트 · dialog: 가운데 창(관리자) */
+  reviewItems?: PdfReviewItem[];
+  onReviewPick?: (id: string) => void;
+  /** web: 오른쪽 패널 · mobile: 아래 시트 · dialog: 가운데 창(관리자) */
   variant: "web" | "mobile" | "dialog";
 };
 
@@ -54,6 +59,8 @@ function PdfViewerPanel({
   variant,
   sections = [],
   onJump,
+  reviewItems = [],
+  onReviewPick,
 }: PdfViewerProps) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState(false);
@@ -62,8 +69,6 @@ function PdfViewerPanel({
   const [zoom, setZoom] = useState(1);
   const [current, setCurrent] = useState(1);
   const [width, setWidth] = useState(0);
-  /** 섹션 표시를 숨긴 이동(nonce) */
-  const [chipHidden, setChipHidden] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const pageEls = useRef(new Map<number, HTMLDivElement>());
   const [quote, setQuote] = useState<QuoteResult | null>(null);
@@ -126,23 +131,14 @@ function PdfViewerPanel({
     setCurrent(page);
   }, []);
 
-  // 목차에서 누른 쪽으로 이동하고, 어느 섹션인지 잠깐 보여줘요
+  // 목차에서 누른 쪽으로 이동해요.
   useEffect(() => {
     if (!doc || !target || width === 0) return;
     goTo(Math.min(Math.max(1, target.page), doc.numPages), false);
-    const t = window.setTimeout(() => setChipHidden(target.nonce), 2500);
-    return () => window.clearTimeout(t);
   }, [doc, target, width, goTo]);
-  const missed = quote?.missed === true && quote.nonce === target?.nonce;
-  const chip =
-    doc && target && (target.label || missed) && chipHidden !== target.nonce
-      ? [
-          target.label && `${target.label} (p.${Math.min(target.page, doc.numPages)})`,
-          missed && "근거 문장 위치는 표시하지 못했어요",
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : null;
+  const invalidReviewPage = Boolean(doc && target?.reviewId && target.page > doc.numPages);
+  const missed = invalidReviewPage || (quote?.missed === true && quote.nonce === target?.nonce);
+  const highlighted = quote?.nonce === target?.nonce && quote?.top !== undefined;
 
   // 근거 문장을 찾으면 그 줄이 보이게 내려요
   const onQuote = useCallback(
@@ -153,22 +149,27 @@ function PdfViewerPanel({
       const el = target
         ? pageEls.current.get(Math.min(target.page, doc?.numPages ?? target.page))
         : undefined;
-      if (box && el) box.scrollTo({ top: Math.max(0, el.offsetTop + result.top - QUOTE_MARGIN) });
+      if (box && el)
+        box.scrollTo({ top: el.offsetTop + Math.max(-PAGE_GAP, result.top - QUOTE_MARGIN) });
     },
     [target, doc],
   );
   const highlight =
-    doc && target?.quote
+    doc && target?.quote && !invalidReviewPage
       ? { page: Math.min(target.page, doc.numPages), quote: target.quote, nonce: target.nonce }
       : null;
 
-  // 스크롤 위치로 지금 쪽 계산
+  // 다음 쪽이 화면 아래에 보여도 지금 읽는 쪽은 화면 위쪽을 기준으로 골라요.
   const onScroll = () => {
     const box = scroller.current;
     if (!box || !doc) return;
-    const mid = box.scrollTop + box.clientHeight / 3;
+    if (box.scrollTop > 0 && box.scrollHeight - box.clientHeight - box.scrollTop <= 1) {
+      setCurrent(doc.numPages);
+      return;
+    }
+    const top = box.scrollTop + PAGE_GAP + 1;
     let page = 1;
-    for (const [n, el] of pageEls.current) if (el.offsetTop <= mid && n > page) page = n;
+    for (const [n, el] of pageEls.current) if (el.offsetTop <= top && n > page) page = n;
     setCurrent(page);
   };
 
@@ -289,14 +290,24 @@ function PdfViewerPanel({
   const body = (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {toolbar}
-      {sectionBar}
-      {chip && (
-        <span
-          role="status"
-          className="rounded-pill bg-brand shadow-float absolute top-[108px] left-1/2 z-[1] -translate-x-1/2 px-[14px] py-[7px] text-[13px] font-bold whitespace-nowrap text-white"
-        >
-          {chip}
-        </span>
+      {reviewItems.length > 0 && onReviewPick && (
+        <PdfReviewList
+          items={reviewItems}
+          selected={target?.reviewId}
+          highlighted={highlighted}
+          missed={missed}
+          onPick={onReviewPick}
+        />
+      )}
+      {target?.reviewId && sectionBar ? (
+        <details key={target.reviewId} className="border-line-soft border-b">
+          <summary className="text-text-sub cursor-pointer px-3 py-1.5 text-[12px] font-bold">
+            원문 목차
+          </summary>
+          {sectionBar}
+        </details>
+      ) : (
+        sectionBar
       )}
       <div
         ref={scroller}
@@ -390,9 +401,7 @@ function PdfViewerPanel({
               <span className="truncate text-[18px] font-extrabold">
                 {dialog ? fileName : "PDF 원문"}
               </span>
-              <span className="text-text-sub text-[13px]">
-                {dialog ? "근거 위치의 원문이에요" : "닫으면 보던 공고로 돌아가요"}
-              </span>
+              {!dialog && <span className="text-text-sub truncate text-[12px]">{fileName}</span>}
             </div>
             <button type="button" aria-label="원문 닫기" onClick={onClose} className={iconBtn}>
               <X size={22} aria-hidden />
@@ -407,7 +416,8 @@ function PdfViewerPanel({
   return (
     <section
       aria-label="공고 원문"
-      className="bg-surface border-line shadow-float fixed top-0 bottom-0 left-0 z-[30] flex w-[min(46vw,680px)] flex-col border-r border-solid"
+      className="bg-surface border-line shadow-float fixed top-0 right-0 bottom-0 z-[30] flex flex-col border-l border-solid"
+      style={{ width: NOTICE_PDF_PANEL_WIDTH }}
     >
       <div className="flex items-start justify-between gap-[12px] px-[20px] pt-[16px] pb-[10px]">
         <div className="flex min-w-0 flex-col gap-[2px]">

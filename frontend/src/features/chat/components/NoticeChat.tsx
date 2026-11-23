@@ -42,7 +42,7 @@ import { ApiError } from "@/shared/lib/api/client";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
 
-type Props = { noticeId: string; variant: "web" | "mobile" };
+type Props = { noticeId: string; variant: "web" | "mobile"; rightOffset?: string };
 
 /** 아래에서 이만큼 안이면 「맨 아래에 있다」로 보고 새 메시지를 따라 내려가요 */
 const BOTTOM_SLACK = 60;
@@ -84,7 +84,7 @@ export const DETAIL_MAIN_BASIS_WITH_CHAT = 420;
 const iconBtn =
   "text-text inline-flex size-[44px] flex-none cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent";
 
-export function NoticeChat({ noticeId, variant }: Props) {
+export function NoticeChat({ noticeId, variant, rightOffset }: Props) {
   const web = variant === "web";
   // 뒤로 가기로 닫기는 모바일 시트만 (PC 패널은 PDF 원문 패널과 함께 열 수 있어서 방문 기록을 쓰지 않아요)
   const { open, show, hide } = usePanel(noticeId, !web);
@@ -172,6 +172,7 @@ export function NoticeChat({ noticeId, variant }: Props) {
             chat={chat}
             noticeId={noticeId}
             web={web}
+            rightOffset={rightOffset}
             onClose={hide}
             draft={draft}
             onDraft={setDraft}
@@ -511,6 +512,7 @@ function ChatWindow({
   chat,
   noticeId,
   web,
+  rightOffset,
   onClose,
   draft,
   onDraft,
@@ -520,6 +522,7 @@ function ChatWindow({
   chat: Chat;
   noticeId: string;
   web: boolean;
+  rightOffset?: string;
   onClose: () => void;
   draft: string;
   onDraft: (text: string) => void;
@@ -672,7 +675,7 @@ function ChatWindow({
       aria-modal="false"
       aria-labelledby="chat-window-h"
       className="bg-surface border-line shadow-float fixed top-0 right-0 bottom-0 z-[30] flex flex-col gap-[8px] border-l border-solid"
-      style={{ width: PANEL_WIDTH }}
+      style={{ width: PANEL_WIDTH, right: rightOffset }}
     >
       {header}
       {body}

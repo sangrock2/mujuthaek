@@ -14,7 +14,7 @@ import { ReportButton } from "@/features/report/components/ReportButton";
 import { WebFavoriteButton } from "@/features/favorites/components/FavoriteButtons";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronRight, FileText, MapPin } from "lucide-react";
+import { ArrowRight, ChevronRight, FileText, MapPin, X } from "lucide-react";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
 import { EligibilityCard } from "@/features/notice/components/EligibilityCard";
@@ -28,7 +28,7 @@ import {
   NoticeToc,
 } from "@/features/notice/components/NoticeSections";
 import { NoticeVersions } from "@/features/notice/components/NoticeVersions";
-import { PdfViewer } from "@/features/notice/components/PdfViewer";
+import { NOTICE_PDF_PANEL_WIDTH, PdfViewer } from "@/features/notice/components/PdfViewer";
 import { RegulationNotice } from "@/features/notice/components/RegulationNotice";
 import { WebRankCard } from "@/features/notice/components/RankCard";
 import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
@@ -413,11 +413,15 @@ export function WebDetail({ id }: { id: string }) {
   const money = j.judgment?.money;
   const benefits = relatedBenefits.data ?? n.benefits ?? [];
   /** 원문 PDF가 있으면 근거의 PDF·쪽·문장을 옆에 열고, 없으면 기관 사이트로 */
-  const original = noticeOriginal(doc, pdf, (via) =>
-    track("notice_source_open", { ...noticeParams(n), via }),
+  const original = noticeOriginal(
+    doc,
+    pdf,
+    (via) => track("notice_source_open", { ...noticeParams(n), via }),
+    j.judgment,
   );
   const openOriginal = original.openOriginal;
   const pdfUrl = original.viewer?.src;
+  const pdfSpace = pdf.open && pdfUrl ? NOTICE_PDF_PANEL_WIDTH : undefined;
   /** 주택목록에서 고른 집 단지의 생활권으로 */
   const showLife = (siteId: string) => {
     setLifeSite(siteId);
@@ -431,14 +435,39 @@ export function WebDetail({ id }: { id: string }) {
   return (
     <WebPage>
       <div
-        className={cn(
-          "flex flex-1 flex-col [overflow-anchor:none]",
-          pdf.open && pdfUrl && "pl-[min(46vw,680px)]",
-        )}
+        className="flex flex-1 flex-col [overflow-anchor:none]"
+        style={{ paddingRight: pdfSpace }}
       >
-        {/* 상단 바는 화면마다 위에 붙어 있어요(높이 69px: 오른쪽 칸이 그 아래에 붙어요) */}
-        <WebHeader mode="home" current={routes.homes} />
-        <WebMain className="gap-[20px] pt-[24px] pb-[80px]">
+        {pdfSpace ? (
+          <div className="bg-surface border-line-soft sticky top-0 z-[20] flex items-start justify-between gap-3 border-b px-4 py-3 lg:px-6">
+            <div className="min-w-0">
+              <span className="text-text-sub block truncate text-[12px] font-semibold">
+                {original.selectedReview?.group?.label ?? "공고 원문 비교"}
+              </span>
+              <p className="text-text line-clamp-2 text-[16px] font-extrabold">
+                {original.selectedReview?.label ?? n.title}
+              </p>
+              {original.selectedReview?.reason && (
+                <p className="text-text-sub mt-0.5 line-clamp-2 text-[13px]">
+                  {original.selectedReview.reason}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={pdf.close}
+              className="bg-fill text-text inline-flex min-h-[40px] shrink-0 cursor-pointer items-center gap-1 rounded-sm px-2.5 text-[13px] font-bold"
+            >
+              <X size={15} aria-hidden />
+              비교 닫기
+            </button>
+          </div>
+        ) : (
+          <WebHeader mode="home" current={routes.homes} />
+        )}
+        <WebMain
+          className={cn("gap-[20px] pt-[24px] pb-[80px]", pdfSpace && "max-w-[760px] px-6 pt-4")}
+        >
           <nav
             aria-label="위치"
             className="text-text-tertiary flex items-center gap-[4px] text-[14px]"
@@ -467,7 +496,12 @@ export function WebDetail({ id }: { id: string }) {
                 aria-label="공고 요약"
                 className="rounded-card-lg bg-surface overflow-hidden"
               >
-                <div className="flex flex-col gap-[20px] px-[30px] pt-[28px] pb-[30px]">
+                <div
+                  className={cn(
+                    "flex flex-col",
+                    pdfSpace ? "gap-4 px-5 py-5" : "gap-[20px] px-[30px] pt-[28px] pb-[30px]",
+                  )}
+                >
                   <div className="flex flex-col gap-[10px]">
                     <NoticeTags
                       verdict={j.judgment?.verdict ?? "check"}
@@ -476,7 +510,14 @@ export function WebDetail({ id }: { id: string }) {
                       tags={n.tags}
                       size="lg"
                     />
-                    <h1 className="tracking-h1 m-0 text-[34px] font-extrabold">{n.title}</h1>
+                    <h1
+                      className={cn(
+                        "tracking-h1 m-0 font-extrabold",
+                        pdfSpace ? "text-[26px]" : "text-[34px]",
+                      )}
+                    >
+                      {n.title}
+                    </h1>
                     <span className="text-text-sub text-[16px]">{n.meta}</span>
                     {doc.summary && <p className="m-0 text-[16px] leading-[1.6]">{doc.summary}</p>}
                   </div>
@@ -485,7 +526,13 @@ export function WebDetail({ id }: { id: string }) {
                     style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
                   >
                     {n.facts.map((f) => (
-                      <div key={f.label} className="bg-bg rounded-tile px-[18px] py-[16px]">
+                      <div
+                        key={f.label}
+                        className={cn(
+                          "bg-bg rounded-tile",
+                          pdfSpace ? "px-3 py-2.5" : "px-[18px] py-[16px]",
+                        )}
+                      >
                         <dt className="text-text-sub text-[13px]">{f.label}</dt>
                         <dd className="mx-0 mt-[4px] mb-0 text-[17px] font-bold">{f.value}</dd>
                       </div>
@@ -506,19 +553,42 @@ export function WebDetail({ id }: { id: string }) {
                     </div>
                   )}
                   <RegulationNotice noticeId={n.id} variant="web" />
+                  {!pdfSpace && (
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        href="#eligibility-h"
+                        className="bg-brand hover:bg-brand-strong inline-flex min-h-[44px] items-center gap-1.5 rounded-sm px-4 text-[14px] font-bold text-white no-underline"
+                      >
+                        내 자격 보기
+                        <ArrowRight size={16} aria-hidden />
+                      </a>
+                      {original.hasPdf && (
+                        <button
+                          type="button"
+                          onClick={() => openOriginal()}
+                          className="bg-fill text-brand-strong inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-sm px-4 text-[14px] font-bold"
+                        >
+                          <FileText size={16} aria-hidden />
+                          공고 PDF 열기
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </section>
 
               {/* 이 공고 이야기 창 (여는 곳은 오른쪽 「이야기」 단추) */}
-              <NoticeChat noticeId={n.id} variant="web" />
+              <NoticeChat noticeId={n.id} variant="web" rightOffset={pdfSpace} />
 
-              <NoticeHeldBanner doc={doc} variant="web" />
+              <NoticeHeldBanner doc={doc} variant="web" onOpenReview={original.openReview} />
               <NoticeVersions noticeId={n.id} variant="web" />
               <NoticeToc doc={doc} variant="web" />
               <NoticeSections
                 doc={doc}
                 variant="web"
                 onOpenPage={original.hasPdf ? openOriginal : undefined}
+                onOpenReview={original.openReview}
+                reviewIds={new Set(original.reviewItems.map((item) => item.id))}
               />
 
               {n.units && n.units.length > 0 && <BlockUnits units={n.units} />}
@@ -565,6 +635,7 @@ export function WebDetail({ id }: { id: string }) {
                 error={j.error}
                 variant="web"
                 onOpenOriginal={original.openEligibility}
+                onOpenReview={original.openReview}
               />
 
               {n.ranking && <WebRankCard ranking={n.ranking} />}
