@@ -506,20 +506,12 @@ for (const path of [
   "/legal/privacy/1.1",
   "/auth/callback",
   "/withdrawn",
+  "/email/verify",
   "/email/unsubscribe",
   "/offline",
 ])
   assert.equal(session.isTermsFreePath(path), true, `동의 전에도 머무름: ${path}`);
-for (const path of [
-  "/",
-  "/home",
-  "/me",
-  "/alerts",
-  "/signupx",
-  "/termsx",
-  "/email/verify",
-  "/admin",
-])
+for (const path of ["/", "/home", "/me", "/alerts", "/signupx", "/termsx", "/admin"])
   assert.equal(session.isTermsFreePath(path), false, `동의 화면으로 보냄: ${path}`);
 
 // ── 보안 헤더·CSP (2026-11-16 보안 감사 4장) ──────────────────────────────

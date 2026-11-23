@@ -89,7 +89,7 @@ export const isMember = (session: Session | null | undefined): session is Sessio
 
 /**
  * 필수 약관에 동의하기 전에도 머무를 수 있는 화면: 동의 화면, 동의할 문서(약관·처리방침·이력), 간편 로그인 처리, 탈퇴 완료,
- * 메일 수신 거부(로그인 없이 써요), 오프라인 안내
+ * 메일로 이메일 인증·동의 철회(로그인 없이 써요), 오프라인 안내
  */
 const TERMS_FREE_PATHS = [
   routes.signup,
@@ -98,6 +98,7 @@ const TERMS_FREE_PATHS = [
   routes.privacy,
   routes.legal,
   routes.withdrawn,
+  "/email/verify",
   "/email/unsubscribe",
   "/offline",
 ];
