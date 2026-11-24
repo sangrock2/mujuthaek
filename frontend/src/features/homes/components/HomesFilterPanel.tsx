@@ -9,12 +9,14 @@ export function HomesFilterPanel({
   filters,
   onReset,
   withSort,
+  compact,
 }: {
   filters: HomesFilters;
   /** 필터 초기화 (지역까지 처음으로) */
   onReset: () => void;
   /** 정렬도 여기서 고르기 (모바일. 웹은 목록 위에 따로 있어요) */
   withSort?: boolean;
+  compact?: boolean;
 }) {
   const groups = filterGroups.filter(
     // 유형은 임대 유형이라 빌려서 들어가기에서만 보여요
@@ -62,28 +64,44 @@ export function HomesFilterPanel({
         </label>
       )}
       {groups.map((g) => (
-        <fieldset key={g.key} className="m-0 flex flex-col gap-[4px] border-0 p-0">
+        <fieldset
+          key={g.key}
+          className={cn("m-0 flex gap-1 border-0 p-0", compact ? "flex-wrap" : "flex-col")}
+        >
           <legend className="mb-[8px] p-0 text-[15px] font-extrabold">{g.legend}</legend>
           {g.options.map((o) => (
-            <label key={o.key} className="flex min-h-[44px] items-center gap-[10px] text-[15px]">
+            <label
+              key={o.key}
+              className={cn(
+                "flex min-h-[40px] items-center gap-2 text-[14px]",
+                compact &&
+                  "relative cursor-pointer rounded-full px-3 text-[13px] has-focus-visible:outline-2",
+                compact &&
+                  (filters.checked[o.key]
+                    ? "bg-brand-soft text-brand-strong"
+                    : "text-text bg-fill"),
+              )}
+            >
               <input
                 type="checkbox"
                 checked={filters.checked[o.key]}
                 onChange={(e) => filters.toggle(o.key, e.target.checked)}
-                className="m-0 size-[18px]"
+                className={compact ? "sr-only" : "m-0 size-[18px]"}
               />
               {o.label}
             </label>
           ))}
         </fieldset>
       ))}
-      <button
-        type="button"
-        onClick={onReset}
-        className="bg-fill text-text-sub min-h-[44px] cursor-pointer rounded-sm border-0 text-[14px] font-bold"
-      >
-        필터 초기화
-      </button>
+      {!compact && (
+        <button
+          type="button"
+          onClick={onReset}
+          className="bg-fill text-text-sub min-h-[44px] cursor-pointer rounded-sm border-0 text-[14px] font-bold"
+        >
+          필터 초기화
+        </button>
+      )}
     </>
   );
 }

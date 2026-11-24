@@ -14,62 +14,82 @@ const menu = [
 
 export type ContentMenuHref = (typeof menu)[number]["href"];
 
+export function CustomerCenterHeader({
+  current,
+  sticky = false,
+}: {
+  current: ContentMenuHref;
+  sticky?: boolean;
+}) {
+  return (
+    <header
+      className={cn("border-line bg-surface border-b border-solid", sticky && "sticky top-0 z-20")}
+    >
+      <div className="mx-auto box-border flex min-h-[60px] w-full max-w-[1200px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-[68px] md:gap-x-6 md:px-8">
+        <div className="flex items-center gap-2 md:gap-[14px]">
+          <Link
+            href={routes.main}
+            aria-label="무주택자들 소개"
+            className="text-text hover:text-text inline-flex items-center gap-[9px] no-underline"
+          >
+            <Logo size={30} />
+            <span className="tracking-logo text-[16px] font-extrabold md:text-[19px]">
+              무주택자들
+            </span>
+          </Link>
+          <span className="border-line text-text-sub border-l border-solid pl-2 text-[13px] font-bold md:pl-[14px] md:text-[16px]">
+            고객센터
+          </span>
+        </div>
+        <Link
+          href={routes.home}
+          className="bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] items-center gap-1 rounded-sm px-2 text-[12px] font-bold no-underline md:px-4 md:text-[15px]"
+        >
+          서비스로 가기
+          <ChevronRight size={16} strokeWidth={2.2} aria-hidden />
+        </Link>
+      </div>
+      <div className="mx-auto box-border w-full max-w-[1200px] px-4 md:px-8">
+        <nav aria-label="고객센터 메뉴" className="flex flex-wrap gap-x-3 md:gap-x-6">
+          {menu.map((m) => {
+            const active = m.href === current;
+            return (
+              <Link
+                key={m.href}
+                href={m.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "inline-flex min-h-[36px] items-center text-[13px] no-underline sm:min-h-[44px] md:min-h-[52px] md:text-[16px]",
+                  active
+                    ? "text-text hover:text-text font-bold shadow-[inset_0_-3px_0_var(--color-brand)]"
+                    : "text-text-sub hover:text-text-sub font-medium",
+                )}
+              >
+                {m.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
 /** 고객센터(공지 · FAQ · 만든 방법 · 약관 · 개인정보처리방침) PC 바탕: 고객센터 헤더 + 하단 링크 */
 export function WebContentShell({
   current,
   children,
+  className,
 }: {
   current: ContentMenuHref;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="bg-bg text-text flex min-h-screen w-full flex-col">
-      <header className="border-line bg-surface sticky top-0 z-20 border-b border-solid">
-        <div className="mx-auto box-border flex min-h-[68px] w-full max-w-[1200px] flex-wrap items-center justify-between gap-x-[24px] gap-y-[12px] px-[32px]">
-          <div className="flex items-center gap-[14px]">
-            <Link
-              href={routes.main}
-              aria-label="무주택자들 소개"
-              className="text-text hover:text-text inline-flex items-center gap-[9px] no-underline"
-            >
-              <Logo size={30} />
-              <span className="tracking-logo text-[19px] font-extrabold">무주택자들</span>
-            </Link>
-            <span className="border-line text-text-sub border-l border-solid pl-[14px] text-[16px] font-bold">
-              고객센터
-            </span>
-          </div>
-          <Link
-            href={routes.home}
-            className="bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] items-center gap-[4px] rounded-sm px-[16px] text-[15px] font-bold no-underline"
-          >
-            서비스로 가기
-            <ChevronRight size={16} strokeWidth={2.2} aria-hidden />
-          </Link>
-        </div>
-        <div className="mx-auto box-border w-full max-w-[1200px] px-[32px]">
-          <nav aria-label="고객센터 메뉴" className="flex flex-wrap gap-x-[24px] gap-y-[4px]">
-            {menu.map((m) => {
-              const active = m.href === current;
-              return (
-                <Link
-                  key={m.href}
-                  href={m.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "inline-flex min-h-[52px] items-center text-[16px] no-underline",
-                    active
-                      ? "text-text hover:text-text font-bold shadow-[inset_0_-3px_0_var(--color-brand)]"
-                      : "text-text-sub hover:text-text-sub font-medium",
-                  )}
-                >
-                  {m.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-      </header>
+    <div
+      className={cn("stitch-surface bg-bg text-text flex min-h-screen w-full flex-col", className)}
+    >
+      <CustomerCenterHeader current={current} sticky />
 
       {children}
 

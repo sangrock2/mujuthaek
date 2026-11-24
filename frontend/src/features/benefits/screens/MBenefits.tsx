@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
 import { BenefitEmptyState } from "../components/BenefitEmptyState";
+import { InfiniteScroll } from "@/shared/ui/InfiniteScroll";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import Link from "next/link";
 import { MTabBar } from "@/shared/layout/MTabBar";
@@ -17,14 +17,13 @@ import { benefitCategories, type BenefitCategory } from "@/features/benefits/moc
 type CatFilter = "전체" | BenefitCategory;
 
 export function MBenefits() {
-  const data = useBenefits();
   const [cat, setCat] = useState<CatFilter>("전체");
+  const data = useBenefits(cat === "전체" ? undefined : cat);
 
-  const shown = cat === "전체" ? data.items : data.items.filter((b) => b.cat === cat);
   const cats: CatFilter[] = ["전체", ...benefitCategories];
 
   return (
-    <MPage>
+    <MPage className="stitch-surface">
       <MTopBar mode="home" />
       <main
         id="main-content"
@@ -33,19 +32,11 @@ export function MBenefits() {
       >
         <div className="flex flex-col gap-[4px] px-[4px]">
           <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">내 혜택</h1>
-          <span className="text-text-sub text-[15px]">
-            <PersonalizationSummary
-              kind="benefits"
-              loading={data.loading}
-              error={data.error}
-              eligible={data.total}
-            />
-          </span>
         </div>
         <div
           role="group"
           aria-label="분야"
-          className="flex gap-[6px] overflow-x-auto px-[4px] pb-[2px]"
+          className="bg-bg sticky top-[56px] z-[1] flex gap-[6px] overflow-x-auto px-[4px] py-2"
         >
           {cats.map((c) => {
             const count = c === "전체" ? data.total : data.counts[c];
@@ -58,10 +49,11 @@ export function MBenefits() {
                 onClick={() => setCat(c)}
                 className={cn(
                   "rounded-pill min-h-[40px] flex-none cursor-pointer border-0 px-[14px] text-[14px] font-bold",
-                  on ? "bg-text text-white" : "bg-surface text-text-sub",
+                  on ? "bg-brand text-white" : "bg-surface text-text-sub",
                 )}
               >
-                {c} {count}
+                {c}
+                {!data.loading && !data.error && ` ${count}`}
               </button>
             );
           })}
@@ -75,10 +67,18 @@ export function MBenefits() {
         {(data.loading || data.error) && (
           <QueryFeedback error={data.error} label="혜택" queryKey={["benefits"]} />
         )}
-        {!data.loading && !data.error && shown.length === 0 && (
+        {!data.loading && !data.error && !data.hasMore && data.items.length === 0 && (
           <BenefitEmptyState filtered={cat !== "전체"} onReset={() => setCat("전체")} />
         )}
-        {shown.map((b) => (
+        {!data.loading && !data.error && (
+          <div className="flex items-center justify-between gap-2 px-1">
+            <h2 className="m-0 text-base font-extrabold">혜택 목록</h2>
+            <span className="text-text-sub text-sm tabular-nums">
+              전체 {(cat === "전체" ? data.total : data.counts[cat]).toLocaleString("ko-KR")}건
+            </span>
+          </div>
+        )}
+        {data.items.map((b, index) => (
           <Link
             key={b.id}
             href={routes.benefit(b.id)}
@@ -86,7 +86,7 @@ export function MBenefits() {
           >
             <span className="flex items-center justify-between gap-[8px]">
               <span className="text-text-tertiary text-[13px]">
-                {b.cat} · {b.orgShort}
+                {index + 1}. {b.cat} · {b.orgShort}
               </span>
               <span className="text-text-sub text-[13px] font-extrabold">{b.dday}</span>
             </span>
@@ -97,19 +97,7 @@ export function MBenefits() {
             </span>
           </Link>
         ))}
-        {data.hasMore && (
-          <button
-            type="button"
-            onClick={data.loadMore}
-            disabled={data.loadingMore}
-            className="bg-surface text-text min-h-[48px] cursor-pointer rounded-[18px] border-0 text-[15px] font-bold disabled:opacity-60"
-          >
-            {data.loadingMore ? "불러오는 중" : "더 보기"}
-          </button>
-        )}
-        <span className="text-text-sub px-[4px] pt-[4px] text-[13px] leading-[1.6]">
-          혜택 정보는 각 기관 공고를 정리한 거예요. 신청 전에 정책 원문을 꼭 확인해 주세요
-        </span>
+        <InfiniteScroll data={data} label="혜택" />
       </main>
       <MTabBar mode="home" current={routes.benefits} />
     </MPage>

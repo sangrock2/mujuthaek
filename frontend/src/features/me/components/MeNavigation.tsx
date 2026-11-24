@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import {
   Bell,
   BriefcaseBusiness,
@@ -86,14 +87,16 @@ export function MeNavigation({
   onSelect,
   favorites,
   replies,
+  footer,
 }: {
   mobile?: boolean;
   current?: MeDestination;
   onSelect?: (tab: MeDestination) => void;
   favorites?: number;
   replies: number;
+  footer?: ReactNode;
 }) {
-  function renderItem(item: MenuItem) {
+  function renderItem(item: MenuItem, pinned = false) {
     const tab = item.tab;
     const selected = item.tab !== undefined && item.tab === current;
     const Icon = item.icon;
@@ -120,6 +123,7 @@ export function MeNavigation({
           "rounded-control text-text hover:text-brand-strong flex min-h-[44px] items-center gap-[10px] px-[11px] py-[7px] text-[14px] font-semibold no-underline",
           selected ? "bg-brand-soft text-brand-strong font-extrabold" : "hover:bg-fill",
           mobile && "min-h-[48px] text-[15px]",
+          pinned && "text-[16px] font-bold",
         )}
       >
         <Icon
@@ -143,25 +147,46 @@ export function MeNavigation({
       aria-label="내 정보 메뉴"
       className={cn(
         "flex flex-col gap-[12px]",
-        !mobile && "rounded-card border-line-soft bg-surface gap-[8px] border p-[8px]",
+        !mobile && "rounded-card bg-surface min-h-0 flex-1 gap-0",
       )}
     >
-      {!mobile && renderItem(overview)}
-      {groups.map((group, index) => (
-        <div
-          key={group.title}
-          className={cn(
-            mobile
-              ? "rounded-card border-line-soft bg-surface border p-[8px]"
-              : index > 0 && "border-line-soft border-t pt-[7px]",
+      {!mobile && (
+        <div className="border-line-soft shrink-0 border-b p-2">
+          {current === "overview" ? (
+            <h1 className="m-0">{renderItem(overview, true)}</h1>
+          ) : (
+            renderItem(overview, true)
           )}
-        >
-          <h2 className="text-text-sub px-[11px] pt-[6px] pb-[3px] text-[12px] font-bold">
-            {group.title}
-          </h2>
-          {group.items.map(renderItem)}
         </div>
-      ))}
+      )}
+      <div
+        role={mobile ? undefined : "region"}
+        aria-label={mobile ? undefined : "마이페이지 메뉴 목록"}
+        tabIndex={mobile ? undefined : 0}
+        className={cn(
+          "flex flex-col gap-2",
+          mobile
+            ? "gap-3"
+            : "min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 focus-visible:outline-offset-[-3px]",
+        )}
+      >
+        {groups.map((group, index) => (
+          <div
+            key={group.title}
+            className={cn(
+              mobile
+                ? "rounded-card border-line-soft bg-surface border p-[8px]"
+                : index > 0 && "border-line-soft border-t pt-[7px]",
+            )}
+          >
+            <h2 className="text-text-sub px-[11px] pt-[6px] pb-[3px] text-[12px] font-bold">
+              {group.title}
+            </h2>
+            {group.items.map((item) => renderItem(item))}
+          </div>
+        ))}
+      </div>
+      {footer && <div className="border-line-soft shrink-0 border-t p-2">{footer}</div>}
     </nav>
   );
 }

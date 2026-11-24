@@ -69,8 +69,9 @@ export function LegalHelp({ privacy }: { privacy: boolean }) {
         </>
       )}
       <p className="text-text-sub mt-[16px] mb-0">
-        이 안내는 현재 기능의 이용 방법입니다. 개인정보의 처리 범위·삭제 예외·백업 처리는 아래
-        전문을 확인해 주세요. 이메일 앱이 열리지 않으면 {LEGAL_CONTACT}으로 직접 보내주세요.
+        이 안내는 현재 기능의 이용 방법입니다. 개인정보의 처리 범위·삭제 예외·백업 처리는
+        개인정보처리방침 전문을 확인해 주세요. 이메일 앱이 열리지 않으면 {LEGAL_CONTACT}으로 직접
+        보내주세요.
       </p>
     </section>
   );

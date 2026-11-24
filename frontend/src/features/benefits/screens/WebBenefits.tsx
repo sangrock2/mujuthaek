@@ -1,14 +1,14 @@
 "use client";
 
 import { useDetailTitle } from "@/shared/lib/useDetailTitle";
-import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
 import { BenefitEmptyState } from "../components/BenefitEmptyState";
+import { InfiniteScroll } from "@/shared/ui/InfiniteScroll";
 
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import { ReportButton } from "@/features/report/components/ReportButton";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
 import { Badge, VerdictBadge } from "@/shared/ui/Badge";
@@ -73,13 +73,9 @@ function SelectedBenefit({ base }: { base: Benefit }) {
   const { data, loading, error } = useBenefit(base.id, base);
   if (!data) {
     return (
-      <section
-        aria-label="혜택 상세"
-        className="rounded-card-lg bg-surface text-text-sub flex min-w-0 items-center justify-center p-[30px] text-[15px]"
-        style={{ flex: "999 1 520px" }}
-      >
+      <div className="text-text-sub flex min-w-0 items-center justify-center p-[30px] text-[15px]">
         {(loading || error) && <QueryFeedback error={error} label="혜택" queryKey={["benefits"]} />}
-      </section>
+      </div>
     );
   }
   return <BenefitDetail b={data} />;
@@ -88,11 +84,9 @@ function SelectedBenefit({ base }: { base: Benefit }) {
 function BenefitDetail({ b }: { b: Benefit }) {
   useDetailTitle(b.title);
   return (
-    <section
-      aria-label="혜택 상세"
+    <div
       aria-live="polite"
-      className="rounded-card-lg bg-surface flex min-w-0 flex-col gap-[24px] p-[30px]"
-      style={{ flex: "999 1 520px" }}
+      className="flex min-w-0 flex-col gap-[24px] px-6 pt-4 pb-7 [overflow-wrap:anywhere] xl:px-[30px]"
     >
       <div className="flex flex-col gap-[10px]">
         <div className="flex flex-wrap gap-[6px]">
@@ -129,7 +123,7 @@ function BenefitDetail({ b }: { b: Benefit }) {
 
       <div className="flex flex-col">
         <div className="mb-[4px] flex items-center justify-between">
-          <h3 className="tracking-title m-0 text-[19px] font-extrabold">내 자격</h3>
+          <h3 className="tracking-title m-0 text-[19px] font-extrabold">내 자격 확인</h3>
           {b.sourceUrl && (
             <a
               href={b.sourceUrl}
@@ -214,40 +208,82 @@ function BenefitDetail({ b }: { b: Benefit }) {
           )}
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
 export function WebBenefits({ initialId }: { initialId?: string }) {
-  const data = useBenefits();
   const [cat, setCat] = useState<CatFilter>("전체");
-  const [selId, setSelId] = useState(initialId ?? data.items[0]?.id);
+  const data = useBenefits(cat === "전체" ? undefined : cat);
+  const [selId, setSelId] = useState(initialId);
+  const list = useRef<HTMLElement>(null);
+  const detail = useRef<HTMLElement>(null);
+  const selectionRequest = useRef(0);
+  const [movingNext, setMovingNext] = useState(false);
 
-  const shown = cat === "전체" ? data.items : data.items.filter((b) => b.cat === cat);
-  const sel = shown.find((b) => b.id === selId) ?? shown[0];
-  // 다른 화면에서 혜택 하나를 열었는데 목록에 없으면(지역 밖 등) 그 혜택만 보여줘요
-  const opened =
-    initialId && !data.items.some((b) => b.id === initialId) && !data.loading
-      ? initialId
-      : undefined;
+  const selected =
+    data.items.find((benefit) => benefit.id === selId) ??
+    (selId && !data.loading ? { ...placeholder, id: selId } : data.items[0]);
+  const selectedIndex = data.items.findIndex((benefit) => benefit.id === selected?.id);
+  const total = cat === "전체" ? data.total : data.counts[cat];
+  const selectedId = selected?.id;
+
+  useLayoutEffect(() => {
+    detail.current?.scrollTo(0, 0);
+  }, [selectedId]);
+
+  function selectBenefit(id: string, revealInList = false) {
+    selectionRequest.current++;
+    setMovingNext(false);
+    setSelId(id);
+    window.history.replaceState(null, "", routes.benefit(id));
+    if (revealInList) {
+      requestAnimationFrame(() => {
+        list.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
+      });
+    }
+  }
+
+  async function moveNext() {
+    const next = data.items[selectedIndex + 1];
+    if (next) {
+      selectBenefit(next.id, true);
+    } else if (data.hasMore && !movingNext) {
+      const request = ++selectionRequest.current;
+      setMovingNext(true);
+      try {
+        const items = await data.loadMore();
+        const index = items.findIndex((benefit) => benefit.id === selectedId);
+        if (request === selectionRequest.current && index >= 0 && items[index + 1]) {
+          selectBenefit(items[index + 1].id, true);
+        }
+      } finally {
+        if (request === selectionRequest.current) setMovingNext(false);
+      }
+    }
+  }
+
   const cats: CatFilter[] = ["전체", ...benefitCategories];
+  const changeCategory = (category: CatFilter) => {
+    if (category === cat) return;
+    selectionRequest.current++;
+    setMovingNext(false);
+    list.current?.scrollTo(0, 0);
+    setSelId(undefined);
+    setCat(category);
+    if (selId) window.history.replaceState(null, "", routes.benefits);
+  };
 
   return (
-    <WebPage>
+    <WebPage className="stitch-surface h-dvh min-h-0 overflow-hidden [&>header]:shrink-0">
       <WebHeader mode="home" current={routes.benefits} />
-      <WebMain>
-        <div className="flex flex-wrap items-end justify-between gap-[16px]">
+      <WebMain className="min-h-0 gap-[16px] pt-[24px] pb-[16px]">
+        <div className="flex shrink-0 flex-wrap items-end justify-between gap-[16px]">
           <div className="flex flex-col gap-[6px]">
             <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">내 혜택</h1>
-            <span className="text-text-sub text-[16px]">
-              <PersonalizationSummary
-                kind="benefits"
-                loading={data.loading}
-                error={data.error}
-                eligible={data.total}
-              />
-              {data.yearlyAmount !== "–" && ` · 1년에 ${data.yearlyAmount}`}
-            </span>
+            {data.yearlyAmount !== "–" && (
+              <span className="text-text-sub text-sm">연간 예상 혜택 {data.yearlyAmount}</span>
+            )}
           </div>
           <div role="group" aria-label="분야" className="flex flex-wrap gap-[6px]">
             {cats.map((c) => {
@@ -258,83 +294,128 @@ export function WebBenefits({ initialId }: { initialId?: string }) {
                   key={c}
                   type="button"
                   aria-pressed={on}
-                  onClick={() => setCat(c)}
+                  onClick={() => changeCategory(c)}
                   className={cn(
                     "rounded-pill min-h-[42px] cursor-pointer border-0 px-[16px] text-[15px] font-bold",
-                    on ? "bg-text text-white" : "bg-surface text-text-sub",
+                    on ? "bg-brand text-white" : "bg-surface text-text-sub",
                   )}
                 >
-                  {c} {count}
+                  {c}
+                  {!data.loading && !data.error && ` ${count}`}
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-start gap-[20px]">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,360px)_minmax(0,1fr)] gap-[20px]">
           <section
+            ref={list}
             aria-label="혜택 목록"
-            className="flex min-w-0 flex-col gap-[10px]"
-            style={{ flex: "1 1 360px" }}
+            tabIndex={0}
+            className="rounded-card bg-surface min-h-0 min-w-0 overflow-y-auto overscroll-contain focus-visible:outline-offset-[-3px]"
           >
-            {(data.loading || data.error) && (
-              <QueryFeedback error={data.error} label="혜택" queryKey={["benefits"]} />
-            )}
-            {!data.loading && !data.error && shown.length === 0 && (
-              <BenefitEmptyState filtered={cat !== "전체"} onReset={() => setCat("전체")} />
-            )}
-            {shown.map((b) => {
-              const on = !opened && b.id === sel?.id;
-              return (
-                <button
-                  key={b.id}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => {
-                    setSelId(b.id);
-                    // 고른 혜택을 주소에도 남겨요 (공유 · 즐겨찾기 · 새로 고침, 모바일 상세 주소와 같아요)
-                    window.history.replaceState(null, "", routes.benefit(b.id));
-                  }}
-                  className={cn(
-                    "bg-surface text-text flex cursor-pointer flex-col gap-[8px] rounded-[22px] border-2 border-solid px-[20px] py-[18px] text-left",
-                    on ? "border-brand" : "border-surface",
-                  )}
-                >
-                  <span className="flex w-full items-center justify-between gap-[8px]">
-                    <span className="text-text-tertiary text-[13px]">
-                      {b.cat} · {b.org}
+            <div className="bg-surface border-line-soft sticky top-0 z-10 flex items-center justify-between gap-3 border-b px-4 py-3">
+              <h2 className="m-0 text-base font-extrabold">혜택 목록</h2>
+              {!data.loading && !data.error && (
+                <span className="text-text-sub text-sm tabular-nums">
+                  전체 {total.toLocaleString("ko-KR")}건
+                </span>
+              )}
+            </div>
+            <div className="flex min-w-0 flex-col gap-1 p-2">
+              {(data.loading || data.error) && (
+                <QueryFeedback error={data.error} label="혜택" queryKey={["benefits"]} />
+              )}
+              {!data.loading && !data.error && !data.hasMore && data.items.length === 0 && (
+                <BenefitEmptyState
+                  filtered={cat !== "전체"}
+                  onReset={() => changeCategory("전체")}
+                />
+              )}
+              {data.items.map((b, index) => {
+                const on = b.id === selected?.id;
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => selectBenefit(b.id)}
+                    className={cn(
+                      "rounded-control text-text flex cursor-pointer scroll-mt-14 items-start gap-3 border-0 px-3 py-3 text-left",
+                      on ? "bg-brand-soft" : "bg-surface hover:bg-fill",
+                    )}
+                  >
+                    <span className="text-text-sub pt-0.5 text-[12px] font-bold tabular-nums">
+                      {index + 1}
                     </span>
-                    <span className="text-text-sub text-[14px] font-extrabold">{b.dday}</span>
-                  </span>
-                  <span className="tracking-title text-[18px] font-extrabold">{b.title}</span>
-                  <span className="flex w-full items-center justify-between gap-[8px]">
-                    <span className="text-[15px] font-semibold">{b.amount}</span>
-                    <VerdictBadge verdict={b.verdict} size="md" className="flex-none text-[12px]" />
-                  </span>
-                </button>
-              );
-            })}
-            {data.hasMore && (
-              <button
-                type="button"
-                onClick={data.loadMore}
-                disabled={data.loadingMore}
-                className="bg-surface text-text min-h-[48px] cursor-pointer rounded-[18px] border-0 text-[15px] font-bold disabled:opacity-60"
-              >
-                {data.loadingMore ? "불러오는 중" : "더 보기"}
-              </button>
-            )}
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="flex w-full items-center justify-between gap-[8px]">
+                        <span className="text-text-tertiary text-[13px]">
+                          {b.cat} · {b.org}
+                        </span>
+                        <span className="text-text-sub text-[14px] font-extrabold">{b.dday}</span>
+                      </span>
+                      <span className="tracking-title text-[18px] font-extrabold">{b.title}</span>
+                      <span className="flex w-full items-center justify-between gap-[8px]">
+                        <span className="text-[15px] font-semibold">{b.amount}</span>
+                        <VerdictBadge
+                          verdict={b.verdict}
+                          size="md"
+                          className="flex-none text-[12px]"
+                        />
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              <InfiniteScroll data={data} label="혜택" scrollRoot={list} />
+            </div>
           </section>
 
-          {opened ? (
-            <SelectedBenefit key={opened} base={{ ...placeholder, id: opened }} />
-          ) : (
-            sel && <SelectedBenefit key={sel.id} base={sel} />
+          {selected && (
+            <section
+              ref={detail}
+              aria-label="혜택 상세"
+              tabIndex={0}
+              className="rounded-card-lg bg-surface min-h-0 min-w-0 overflow-y-auto overscroll-contain"
+            >
+              {selectedIndex >= 0 && (
+                <div className="bg-surface border-line-soft sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b px-6 py-2">
+                  <span
+                    aria-live="polite"
+                    className="text-text-sub text-sm font-semibold tabular-nums"
+                  >
+                    {selectedIndex + 1} / {total.toLocaleString("ko-KR")}번째 확인 중
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      aria-label="이전 혜택"
+                      disabled={selectedIndex === 0}
+                      onClick={() => selectBenefit(data.items[selectedIndex - 1].id, true)}
+                      className="rounded-control bg-fill text-text flex size-11 cursor-pointer items-center justify-center border-0 disabled:opacity-40"
+                    >
+                      <ChevronLeft size={18} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="다음 혜택"
+                      disabled={
+                        movingNext || (selectedIndex === data.items.length - 1 && !data.hasMore)
+                      }
+                      onClick={() => void moveNext()}
+                      className="rounded-control bg-fill text-text flex size-11 cursor-pointer items-center justify-center border-0 disabled:opacity-40"
+                    >
+                      <ChevronRight size={18} aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              )}
+              <SelectedBenefit key={selected.id} base={selected} />
+            </section>
           )}
         </div>
-        <span className="text-text-sub text-[13px]">
-          혜택 정보는 각 기관 공고를 정리한 거예요. 신청 전에 정책 원문을 꼭 확인해 주세요
-        </span>
       </WebMain>
     </WebPage>
   );

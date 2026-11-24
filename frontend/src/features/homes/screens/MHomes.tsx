@@ -9,6 +9,7 @@ import { HomesFilterPanel } from "@/features/homes/components/HomesFilterPanel";
 import { MTabBar } from "@/shared/layout/MTabBar";
 import { MTopBar } from "@/shared/layout/MTopBar";
 import { MPage } from "@/shared/layout/Responsive";
+import { InfiniteScroll } from "@/shared/ui/InfiniteScroll";
 import { tenureParam } from "@/features/homes/filters";
 import { ListingCard } from "@/features/homes/components/ListingCard";
 import { useHomeList } from "@/features/homes/list";
@@ -22,7 +23,6 @@ import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
 
 /** 지도 모드에서 목록에 남기는 개수 */
-const MAP_LIST_COUNT = 2;
 
 /** 아래에서 올라오는 필터 시트 (입주 방식 · 정렬 · 유형 · 내 판정). 바깥을 누르거나 Esc로 닫아요 */
 function FilterSheet({
@@ -127,7 +127,6 @@ export function MHomes() {
   const visible = list.listings;
   const verdicts = useMemo(() => new Map(visible.map((l) => [l.id, l.verdict])), [visible]);
   const verdictOf = useCallback((id: string) => verdicts.get(id), [verdicts]);
-  const items = isMap ? visible.slice(0, MAP_LIST_COUNT) : visible;
 
   const viewButton = (v: "list" | "map", label: string) => (
     <button
@@ -144,39 +143,57 @@ export function MHomes() {
   );
 
   return (
-    <MPage>
+    <MPage className="stitch-surface">
       <MTopBar mode="home" />
       <main
         id="main-content"
         tabIndex={-1}
         className="flex flex-1 flex-col gap-[14px] px-[16px] pt-[20px] pb-[28px]"
       >
-        <div className="rounded-card border-line-soft bg-surface flex flex-wrap items-end justify-between gap-[8px] border p-[13px]">
-          <div className="flex flex-col gap-[4px]">
+        <div className="flex flex-col gap-2 rounded-[16px] bg-white px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
             <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">주거 공고</h1>
-            <span className="text-text-sub flex flex-wrap items-center gap-x-[10px] text-[15px]">
-              <span>
-                <PersonalizationSummary
-                  kind="homes"
-                  loading={list.loading}
-                  error={list.error}
-                  eligible={list.eligibleCount}
-                  needsInput={list.needsInputCount}
-                />
-              </span>
-              <EditConditionsLink />
+            <div
+              role="group"
+              aria-label="보기 방식"
+              className="bg-fill flex shrink-0 rounded-full p-0.5"
+            >
+              {viewButton("list", "목록")}
+              {viewButton("map", "지도")}
+            </div>
+          </div>
+          <div className="text-text-sub flex flex-wrap items-center gap-x-3 text-[14px]">
+            <span>
+              <PersonalizationSummary
+                kind="homes"
+                loading={list.loading}
+                error={list.error}
+                eligible={list.eligibleCount}
+                needsInput={list.needsInputCount}
+              />
             </span>
           </div>
-          <div role="group" aria-label="보기 방식" className="bg-fill flex rounded-sm p-[3px]">
-            {viewButton("list", "목록")}
-            {viewButton("map", "지도")}
+          <div className="flex flex-wrap items-center gap-x-3">
+            <EditConditionsLink />
+            <Link
+              href={routes.score}
+              className="text-text bg-fill inline-flex min-h-9 items-center rounded-[10px] px-2 text-[12px] font-semibold no-underline"
+            >
+              청약 가점 계산
+            </Link>
+            <Link
+              href={routes.loans}
+              className="text-text bg-fill inline-flex min-h-9 items-center rounded-[10px] px-2 text-[12px] font-semibold no-underline"
+            >
+              대출 자격 확인
+            </Link>
           </div>
         </div>
 
         <section aria-label="지역" className="px-[4px]">
           <RegionSelect filter={region} compact />
         </section>
-        <div className="flex gap-[6px] overflow-x-auto px-[4px] pb-[2px]">
+        <div className="bg-bg sticky top-[56px] z-10 flex gap-[6px] overflow-x-auto px-[4px] py-2">
           <button
             type="button"
             aria-haspopup="dialog"
@@ -200,91 +217,62 @@ export function MHomes() {
           >
             {filters.sort}
           </button>
-          <Link
-            href={routes.score}
-            className="rounded-pill bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] flex-none items-center px-[14px] text-[14px] font-bold no-underline"
-          >
-            청약 가점 계산
-          </Link>
-          <Link
-            href={routes.loans}
-            className="rounded-pill bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] flex-none items-center px-[14px] text-[14px] font-bold no-underline"
-          >
-            대출 자격 확인
-          </Link>
         </div>
 
-        <div className="flex flex-wrap items-baseline justify-between gap-x-[14px] gap-y-[4px]">
-          <h2 className="tracking-title m-0 text-[17px] font-extrabold">공고 목록</h2>
-          <p className="text-text-sub text-[12px]">
-            예상 준비금은 대출 승인액과 부대비용에 따라 달라져요.
-          </p>
-        </div>
-        {isMap && (
+        {isMap ? (
           <HomesMap
             regionCodes={region.codes}
             tenure={tenureParam[filters.mode]}
             verdictOf={verdictOf}
-            className="h-[340px]"
+            className="h-[min(60dvh,520px)]"
           />
-        )}
+        ) : (
+          <>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-[14px] gap-y-[4px]">
+              <h2 className="sr-only">공고 목록</h2>
+              {!list.loading && !list.error && (
+                <span className="bg-brand-soft text-brand-strong rounded-full px-2.5 py-1 text-[13px] font-bold tabular-nums">
+                  총 {list.resultCount.toLocaleString("ko-KR")}건
+                </span>
+              )}
+            </div>
 
-        {(list.loading || list.error) && (
-          <QueryFeedback error={list.error} label="공고" queryKey={["notices"]} />
-        )}
-        {!list.loading && !list.error && visible.length === 0 && (
-          <div className="rounded-card bg-surface text-text-sub flex flex-col items-center gap-[12px] px-[20px] py-[36px] text-center text-[15px]">
-            {region.label}에는 지금 지원할 수 있는 공고가 없어요
-            <button
-              type="button"
-              onClick={region.reset}
-              className="bg-fill text-text min-h-[44px] cursor-pointer rounded-sm border-0 px-[16px] text-[14px] font-bold"
-            >
-              전체 지역 보기
-            </button>
-          </div>
-        )}
+            {(list.loading || list.error) && (
+              <QueryFeedback error={list.error} label="공고" queryKey={["notices"]} />
+            )}
+            {!list.loading && !list.error && !list.hasMore && visible.length === 0 && (
+              <div className="rounded-card bg-surface text-text-sub flex flex-col items-center gap-[12px] px-[20px] py-[36px] text-center text-[15px]">
+                {region.label}에는 지금 지원할 수 있는 공고가 없어요
+                <button
+                  type="button"
+                  onClick={region.reset}
+                  className="bg-fill text-text min-h-[44px] cursor-pointer rounded-sm border-0 px-[16px] text-[14px] font-bold"
+                >
+                  전체 지역 보기
+                </button>
+              </div>
+            )}
 
-        {items.map((item) => (
-          <ListingCard
-            key={item.id}
-            item={item}
-            regionLabel={region.regionLabelOf(item)}
-            onLike={() => trackLike(item.id)}
-          />
-        ))}
-        {isMap && visible.length > MAP_LIST_COUNT && (
-          <button
-            type="button"
-            onClick={() => setView("list")}
-            className="rounded-control bg-surface text-text min-h-[52px] cursor-pointer self-stretch border-0 text-[15px] font-bold"
-          >
-            목록으로 {visible.length}곳 모두 보기
-          </button>
-        )}
-        {list.hasMore && !isMap && (
-          <button
-            type="button"
-            onClick={list.loadMore}
-            disabled={list.loadingMore}
-            className="rounded-control bg-surface text-text min-h-[52px] cursor-pointer self-stretch border-0 text-[15px] font-bold disabled:cursor-default disabled:opacity-60"
-          >
-            {list.loadingMore
-              ? "불러오는 중"
-              : list.remaining
-                ? `${list.remaining}곳 더 보기`
-                : "더 보기"}
-          </button>
-        )}
-        {!filters.checked.ineligible && (
-          <button
-            type="button"
-            onClick={filters.showIneligible}
-            className="text-text-sub inline-flex min-h-[44px] cursor-pointer items-center self-center border-0 bg-transparent p-0 text-[14px] font-semibold"
-          >
-            지원 불가 공고까지 모두 보기
-            {list.ineligibleCount ? ` (${list.ineligibleCount}곳)` : ""}
-          </button>
+            {visible.map((item) => (
+              <ListingCard
+                key={item.id}
+                item={item}
+                regionLabel={region.regionLabelOf(item)}
+                onLike={() => trackLike(item.id)}
+              />
+            ))}
+            <InfiniteScroll data={list} label="공고" />
+            {!filters.checked.ineligible && (
+              <button
+                type="button"
+                onClick={filters.showIneligible}
+                className="text-text-sub inline-flex min-h-[44px] cursor-pointer items-center self-center border-0 bg-transparent p-0 text-[14px] font-semibold"
+              >
+                지원 불가 공고까지 모두 보기
+                {list.ineligibleCount ? ` (${list.ineligibleCount}곳)` : ""}
+              </button>
+            )}
+          </>
         )}
       </main>
       <MTabBar mode="home" current={routes.homes} />

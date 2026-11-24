@@ -23,7 +23,24 @@ for (const [path, title] of [
       "href",
       `https://mujuthaek.store${path}`,
     );
-    await expect(page.getByRole("navigation", { name: "문서 목차" })).toBeVisible();
+    const toc = page.getByRole("navigation", { name: "문서 목차" });
+    const body = page.getByRole("region", { name: "문서 본문" });
+    const header = page.getByRole("banner");
+    const headerBefore = await header.boundingBox();
+    await expect(toc).toBeVisible();
+    await expect(
+      toc.getByRole("link", { name: /문의하거나|약관·정책 이력 보기|주요 내용/ }),
+    ).toHaveCount(0);
+    await toc.getByRole("link").nth(2).click();
+    await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    expect(await header.boundingBox()).toEqual(headerBefore);
+    const menu = page.getByRole("navigation", { name: "고객센터 메뉴" });
+    await expect(menu.getByRole("link")).toHaveCount(5);
+    await expect(menu.getByRole("link", { name: title, exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     await expect(page.getByRole("link", { name: "약관·정책 이력 보기" })).toHaveAttribute(
       "href",
       "/legal",
@@ -44,6 +61,18 @@ for (const [path, title] of [
       await expect(page.locator("article")).toContainText("로컬 복구 사본은 자동 만료되지 않고");
       await expect(page.locator("article")).toContainText("날짜별 해시");
     } else {
+      const main = page.locator("main");
+      await expect(main.getByRole("heading", { name: "먼저 확인해 주세요" })).toHaveCount(0);
+      const help = main.getByRole("region", { name: "서비스 문의와 이의 신청 안내" });
+      await expect(
+        help.getByRole("heading", { name: "문의하거나 이의를 신청하려면" }),
+      ).toBeVisible();
+      await expect(
+        main.locator("article + div").getByRole("complementary", { name: "주요 내용" }),
+      ).toBeAttached();
+      await expect(
+        main.locator("article + div").getByRole("region", { name: "서비스 문의와 이의 신청 안내" }),
+      ).toBeAttached();
       await expect(page.locator("article")).toContainText("만 14세 이상");
       await expect(page.locator("article")).toContainText("고의·중대한 과실");
       await expect(page.locator("article")).toContainText(

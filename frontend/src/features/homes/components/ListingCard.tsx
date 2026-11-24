@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { CalendarDays, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { CardFavoriteHeart } from "@/features/favorites/components/FavoriteButtons";
 import type { HomeListing } from "@/features/homes/mocks/homes";
 import { routes } from "@/shared/lib/routes";
+import { cn } from "@/shared/lib/cn";
 import { RankChip, VerdictBadge } from "@/shared/ui/Badge";
-import { InfoTag } from "@/shared/ui/Chip";
 
 export function ListingCard({
   item,
@@ -15,55 +15,53 @@ export function ListingCard({
   regionLabel: string;
   onLike: () => void;
 }) {
-  const due = item.dueLong ?? item.due;
   return (
-    <article className="rounded-card border-line-soft bg-surface relative flex min-w-0 flex-col border">
+    <article className="relative min-w-0 rounded-[16px] bg-white">
       <Link
         href={routes.notice(item.id)}
-        className="rounded-card text-text hover:text-brand-strong flex min-w-0 flex-1 flex-col gap-[8px] p-[15px] no-underline lg:p-[18px]"
+        className="text-text hover:text-brand-strong flex min-w-0 flex-col gap-2 rounded-[16px] px-4 py-3 no-underline sm:px-5 sm:py-4"
       >
-        <div className="flex min-h-[30px] flex-wrap items-center gap-[5px] pr-[45px]">
-          <VerdictBadge verdict={item.verdict} size="xs" />
-          {item.rank && <RankChip rank={item.rank} size="xs" />}
-        </div>
-        <p className="text-text-sub text-[13px]">
-          {[item.org, regionLabel].filter(Boolean).join(" · ")}
-        </p>
-        <h2 className="tracking-title m-0 text-[17px] leading-[1.4] font-extrabold break-words lg:text-[19px]">
-          {item.title}
-        </h2>
-        {item.price && <p className="text-text text-[14px] font-semibold">{item.price}</p>}
-        {(item.life || item.tags.length > 0) && (
-          <div className="flex flex-wrap gap-[4px]">
-            {item.life && <InfoTag>{item.life}</InfoTag>}
-            {item.tags.map((tag) => (
-              <InfoTag key={tag}>{tag}</InfoTag>
-            ))}
-          </div>
-        )}
-        <div className="border-line-soft text-text-sub mt-auto flex flex-wrap items-center gap-x-[12px] gap-y-[6px] border-t pt-[10px] text-[13px]">
-          {due && (
-            <span className="rounded-badge bg-fill text-text inline-flex items-center gap-[5px] px-[8px] py-[4px] font-bold">
-              <CalendarDays size={14} aria-hidden /> {due}
+        <div className="text-text-sub flex flex-wrap items-center gap-1.5 pr-10 text-[12px]">
+          <span className="bg-fill rounded-full px-2 py-1">
+            {[item.org, regionLabel].filter(Boolean).join(" · ")}
+          </span>
+          {item.due && (
+            <span
+              className={cn(
+                "text-brand-strong rounded-full px-2 py-1 tabular-nums",
+                /^D-\d/.test(item.due) && "bg-brand-soft font-bold",
+              )}
+            >
+              {item.due}
             </span>
           )}
-          <span className="min-w-0 flex-1">
+        </div>
+        <h3 className="m-0 pr-10 text-[17px] leading-[1.45] font-bold break-words sm:text-[18px]">
+          {item.title}
+        </h3>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <VerdictBadge verdict={item.verdict} size="xs" />
+            {item.rank && <RankChip rank={item.rank} size="xs" />}
+          </div>
+          <span className="text-brand-strong ml-auto flex items-center gap-1.5 text-right text-[13px] font-semibold">
             {item.prepAmount ? (
               <>
-                예상 준비금 <strong className="text-text">{item.prepAmount}</strong>
+                <span className="text-text-sub font-normal">예상 준비금</span>
+                <strong className="text-[17px] font-bold tabular-nums">{item.prepAmount}</strong>
               </>
             ) : (
               item.prepNote
             )}
+            <ChevronRight size={16} className="shrink-0" aria-hidden />
           </span>
-          <ChevronRight size={16} className="text-text-tertiary ml-auto shrink-0" aria-hidden />
         </div>
       </Link>
       <CardFavoriteHeart
         type="NOTICE"
         id={item.id}
         onAdd={onLike}
-        className="absolute top-[8px] right-[8px] size-[44px]"
+        className="absolute top-3 right-3 size-[44px]"
       />
     </article>
   );

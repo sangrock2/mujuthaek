@@ -28,7 +28,7 @@ import { routes } from "@/shared/lib/routes";
 export function MMeSection({ section }: { section: MeTab }) {
   const params = useSearchParams();
   return (
-    <MPage>
+    <MPage className="stitch-surface">
       <MBackHeader
         title={meTitles[section]}
         backHref={routes.me}

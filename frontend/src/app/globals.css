@@ -97,7 +97,23 @@
   --content-max: 1200px;
 }
 
+/* Stitch 화면의 모서리 크기. 색상은 공통 토큰을 사용해요. */
+.stitch-surface {
+  --radius-sm: 10px;
+  --radius-control: 12px;
+  --radius-card: 16px;
+  --radius-card-lg: 20px;
+}
+
 @layer base {
+  * {
+    scrollbar-width: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
+  }
+
   body {
     /* 디자인은 브라우저 기본 줄간격(normal)을 써요 */
     line-height: normal;
@@ -131,7 +147,7 @@
     accent-color: var(--color-brand);
   }
 
-  :where(a, button, input, select, textarea, summary):focus-visible {
+  :where(a, button, input, select, textarea, summary, [tabindex="0"]):focus-visible {
     outline: 3px solid var(--color-brand);
     outline-offset: 2px;
   }
