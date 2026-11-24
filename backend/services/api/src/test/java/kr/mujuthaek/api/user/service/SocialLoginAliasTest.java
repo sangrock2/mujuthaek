@@ -39,7 +39,7 @@ class SocialLoginAliasTest {
     UUID userId = UUID.randomUUID();
     when(accounts.findByProviderAndProviderUserId(provider, id))
         .thenReturn(Optional.of(new SocialAccount(userId, provider, id, NOW)));
-    when(users.findById(userId)).thenReturn(Optional.of(user));
+    when(users.lockById(userId)).thenReturn(Optional.of(user));
     return user;
   }
 

@@ -5,14 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import Link from "next/link";
 import { SlidersHorizontal, X } from "lucide-react";
-import { CardFavoriteHeart } from "@/features/favorites/components/FavoriteButtons";
 import { HomesFilterPanel } from "@/features/homes/components/HomesFilterPanel";
 import { MTabBar } from "@/shared/layout/MTabBar";
 import { MTopBar } from "@/shared/layout/MTopBar";
 import { MPage } from "@/shared/layout/Responsive";
-import { RankChip, VerdictBadge } from "@/shared/ui/Badge";
-import { InfoTag } from "@/shared/ui/Chip";
 import { tenureParam } from "@/features/homes/filters";
+import { ListingCard } from "@/features/homes/components/ListingCard";
 import { useHomeList } from "@/features/homes/list";
 import { useHomesFilters, type HomesFilters } from "@/features/homes/useHomesFilters";
 import { HomesMap } from "@/features/homes/components/HomesMap";
@@ -138,7 +136,7 @@ export function MHomes() {
       onClick={() => setView(v)}
       className={cn(
         "min-h-[44px] cursor-pointer rounded-[9px] border-0 px-[12px] text-[14px] font-bold",
-        view === v ? "bg-text text-white" : "text-text-sub bg-transparent",
+        view === v ? "bg-brand text-white" : "text-text-sub bg-transparent",
       )}
     >
       {label}
@@ -153,9 +151,9 @@ export function MHomes() {
         tabIndex={-1}
         className="flex flex-1 flex-col gap-[14px] px-[16px] pt-[20px] pb-[28px]"
       >
-        <div className="flex items-end justify-between gap-[10px] px-[4px]">
+        <div className="rounded-card border-line-soft bg-surface flex flex-wrap items-end justify-between gap-[8px] border p-[13px]">
           <div className="flex flex-col gap-[4px]">
-            <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">내 집</h1>
+            <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">주거 공고</h1>
             <span className="text-text-sub flex flex-wrap items-center gap-x-[10px] text-[15px]">
               <span>
                 <PersonalizationSummary
@@ -169,7 +167,7 @@ export function MHomes() {
               <EditConditionsLink />
             </span>
           </div>
-          <div role="group" aria-label="보기 방식" className="bg-surface flex rounded-sm p-[3px]">
+          <div role="group" aria-label="보기 방식" className="bg-fill flex rounded-sm p-[3px]">
             {viewButton("list", "목록")}
             {viewButton("map", "지도")}
           </div>
@@ -178,17 +176,12 @@ export function MHomes() {
         <section aria-label="지역" className="px-[4px]">
           <RegionSelect filter={region} compact />
         </section>
-        <p className="text-text-sub m-0 px-[4px] text-[13px] leading-[1.6]">
-          예상 준비금은 대출 승인액·부대비용에 따라 달라져요. 접수 시간과 주택별 금액·조건은
-          상세에서 확인해 주세요.
-        </p>
-
         <div className="flex gap-[6px] overflow-x-auto px-[4px] pb-[2px]">
           <button
             type="button"
             aria-haspopup="dialog"
             onClick={() => setSheet(true)}
-            className="rounded-pill bg-text inline-flex min-h-[44px] flex-none cursor-pointer items-center gap-[6px] border-0 px-[14px] text-[14px] font-bold text-white"
+            className="rounded-pill bg-brand inline-flex min-h-[44px] flex-none cursor-pointer items-center gap-[6px] border-0 px-[14px] text-[14px] font-bold text-white"
           >
             <SlidersHorizontal size={16} aria-hidden />
             필터{filters.changedCount ? ` ${filters.changedCount}` : ""}
@@ -221,6 +214,12 @@ export function MHomes() {
           </Link>
         </div>
 
+        <div className="flex flex-wrap items-baseline justify-between gap-x-[14px] gap-y-[4px]">
+          <h2 className="tracking-title m-0 text-[17px] font-extrabold">공고 목록</h2>
+          <p className="text-text-sub text-[12px]">
+            예상 준비금은 대출 승인액과 부대비용에 따라 달라져요.
+          </p>
+        </div>
         {isMap && (
           <HomesMap
             regionCodes={region.codes}
@@ -246,49 +245,14 @@ export function MHomes() {
           </div>
         )}
 
-        {/* 공고 사진이 없어서 왼쪽 이미지 칸 없이 글자만 */}
-        {items.map((h) => {
-          return (
-            <article key={h.id} className="relative">
-              <Link
-                href={routes.notice(h.id)}
-                className="bg-surface text-text hover:text-text flex gap-[14px] rounded-[22px] p-[16px] no-underline"
-              >
-                <span className="flex min-w-0 flex-1 flex-col gap-[5px] pr-[36px]">
-                  <span className="flex items-center justify-between gap-[6px]">
-                    <span className="flex gap-[4px]">
-                      <VerdictBadge verdict={h.verdict} size="xs" />
-                      {h.rank && <RankChip rank={h.rank} size="xs" />}
-                    </span>
-                    <span className="text-[13px] font-extrabold">{h.dueLong ?? h.due}</span>
-                  </span>
-                  <span className="text-[16px] font-extrabold tracking-[-0.02em]">{h.title}</span>
-                  <span className="text-text-tertiary text-[12px]">
-                    {[h.org, region.regionLabelOf(h)].filter(Boolean).join(" · ")}
-                  </span>
-                  {h.price && <span className="text-[14px] font-semibold">{h.price}</span>}
-                  {(h.life || h.tags.length > 0) && (
-                    <span className="flex flex-wrap gap-[4px]">
-                      {h.life && <InfoTag>{h.life}</InfoTag>}
-                      {h.tags.slice(0, 2).map((t) => (
-                        <InfoTag key={t}>{t}</InfoTag>
-                      ))}
-                    </span>
-                  )}
-                  <span className="text-text-sub text-[13px]">
-                    {h.prepAmount ? `예상 준비금 ${h.prepAmount}` : h.prepNote}
-                  </span>
-                </span>
-              </Link>
-              <CardFavoriteHeart
-                type="NOTICE"
-                id={h.id}
-                onAdd={() => trackLike(h.id)}
-                className="absolute top-[44px] right-[10px] size-[44px]"
-              />
-            </article>
-          );
-        })}
+        {items.map((item) => (
+          <ListingCard
+            key={item.id}
+            item={item}
+            regionLabel={region.regionLabelOf(item)}
+            onLike={() => trackLike(item.id)}
+          />
+        ))}
         {isMap && visible.length > MAP_LIST_COUNT && (
           <button
             type="button"

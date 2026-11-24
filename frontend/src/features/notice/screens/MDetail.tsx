@@ -20,12 +20,10 @@ import {
   NoticeSections,
   NoticeToc,
 } from "@/features/notice/components/NoticeSections";
-import { NoticeTags } from "@/features/notice/components/NoticeTags";
+import { NoticeOverview } from "@/features/notice/components/NoticeOverview";
 import { NoticeVersions } from "@/features/notice/components/NoticeVersions";
 import { PdfViewer } from "@/features/notice/components/PdfViewer";
-import { RegulationNotice } from "@/features/notice/components/RegulationNotice";
 import { MRankCard } from "@/features/notice/components/RankCard";
-import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
 import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
 import {
@@ -303,40 +301,12 @@ export function MDetail({ id }: { id: string }) {
     <MPage>
       <MBackHeader title="공고 상세" backHref={routes.homes} />
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col gap-[12px] pb-[24px]">
-        <section className="bg-surface flex flex-col gap-[12px] px-[20px] pt-[20px] pb-[22px]">
-          <NoticeTags
-            verdict={j.judgment?.verdict ?? "check"}
-            rank={n.ranking?.myRank}
-            due={dueText(n)}
-            tags={n.tags}
-            size="md"
-          />
-          <h2 className="tracking-h1 m-0 text-[24px] font-extrabold">{n.title}</h2>
-          <span className="text-text-sub text-[14px] leading-[1.5]">{n.meta}</span>
-          {doc.summary && <p className="m-0 text-[15px] leading-[1.6]">{doc.summary}</p>}
-          <dl className="m-0 grid grid-cols-2 gap-[8px]">
-            {n.facts.map((f) => (
-              <div key={f.label} className="bg-bg rounded-control px-[14px] py-[12px]">
-                <dt className="text-text-sub text-[12px]">{f.label}</dt>
-                <dd className="mx-0 mt-[3px] mb-0 text-[15px] font-extrabold">{f.value}</dd>
-              </div>
-            ))}
-          </dl>
-          {doc.applyPeriod && (
-            <div className="bg-brand-soft rounded-control flex flex-col gap-[2px] px-[14px] py-[12px]">
-              <span className="text-brand-strong text-[12px] font-bold">
-                신청 기간 · {statusLabel[doc.status]}
-              </span>
-              <span className="text-[15px] font-extrabold">
-                {formatPeriod(doc.applyPeriod.start, doc.applyPeriod.end)}
-              </span>
-              {doc.applyPeriod.note && (
-                <span className="text-text-sub text-[13px]">{doc.applyPeriod.note}</span>
-              )}
-            </div>
-          )}
-          <RegulationNotice noticeId={n.id} variant="mobile" />
-        </section>
+        <NoticeOverview
+          notice={n}
+          verdict={j.judgment?.verdict}
+          variant="mobile"
+          onOpenPdf={original.hasPdf ? () => openOriginal() : undefined}
+        />
 
         {money && (
           <section

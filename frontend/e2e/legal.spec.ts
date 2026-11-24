@@ -34,7 +34,7 @@ for (const [path, title] of [
         "href",
         "/me?tab=privacy",
       );
-      await expect(help).toContainText("이메일 지우기 (동의 철회)");
+      await expect(help).toContainText("계정 안내 동의 철회");
       await expect(help).toContainText("재인증");
       await expect(help.getByRole("link", { name: "이메일로 권리 행사 요청하기" })).toHaveAttribute(
         "href",

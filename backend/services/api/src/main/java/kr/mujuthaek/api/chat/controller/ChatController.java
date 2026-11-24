@@ -13,6 +13,7 @@ import kr.mujuthaek.api.common.dto.response.CursorPageResponse;
 import kr.mujuthaek.api.common.exception.CustomException;
 import kr.mujuthaek.api.common.exception.ErrorCode;
 import kr.mujuthaek.api.user.service.LoginUser;
+import kr.mujuthaek.api.user.service.UserService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -38,9 +39,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 class ChatController implements ChatApiSpec {
 
   private final ChatService chats;
+  private final UserService users;
 
-  ChatController(ChatService chats) {
+  ChatController(ChatService chats, UserService users) {
     this.chats = chats;
+    this.users = users;
   }
 
   @Override
@@ -67,7 +70,7 @@ class ChatController implements ChatApiSpec {
       @AuthenticationPrincipal LoginUser user) {
     UUID userId = loggedIn(user);
     return ResponseEntity.status(HttpStatus.CREATED)
-        .body(chats.send(noticeId, userId, user.nickname(), request));
+        .body(chats.send(noticeId, userId, users.getNickname(userId), request));
   }
 
   @Override

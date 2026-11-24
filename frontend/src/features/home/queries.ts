@@ -115,7 +115,7 @@ export function toHomeSummary(s: ApiSummary, today: Date): HomeSummary {
 function useApiHomeSummary() {
   const stored = useConditions();
   const criteria = useCriteria();
-  const ready = stored.status === "ready" && !criteria.isPending;
+  const ready = stored.status === "ready" && (stored.device === null || !criteria.isPending);
   const device = stored.status === "ready" ? stored.device : null;
   const body = useMemo(() => {
     if (stored.status !== "ready") return null;
@@ -131,7 +131,7 @@ function useApiHomeSummary() {
     queryKey: [...homeKeys.summary, body] as const,
     queryFn: async () =>
       toHomeSummary(await api.post<ApiSummary>(endpoints.homeSummary, body), new Date()),
-    enabled: ready && body !== null && device !== null,
+    enabled: ready && body !== null,
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
   });
@@ -153,7 +153,37 @@ const emptySummary: HomeSummary = {
 };
 
 /** 홈 요약. 받기 전엔 빈 값 + loading, 못 받으면 error */
-export function useHomeSummary() {
+export function useHomeSummary(personalized: boolean) {
   const q = useSummaryQuery();
-  return { data: q.data ?? emptySummary, loading: q.isPending, error: q.isError };
+  const data = q.data ?? emptySummary;
+  const loading = q.isPending;
+  const error = q.isError;
+  const count = (value: number) => (loading ? "…" : `${value}곳`);
+  const homes = {
+    label: personalized ? "지원 가능한 청약·공공임대" : "청약·공공임대 공고",
+    value: personalized ? (error ? "–" : count(data.homes.count)) : "공고 둘러보기",
+    note: error
+      ? "공고를 불러오지 못했어요"
+      : `이번 주 새로 ${count(data.homes.newThisWeek)} · 마감 임박 ${count(data.homes.closingSoon)}`,
+  };
+  const benefits = {
+    label: personalized ? "받을 수 있는 혜택" : "주거 혜택",
+    value: personalized
+      ? error
+        ? "–"
+        : loading
+          ? "…"
+          : data.benefits
+            ? `연 ${data.benefits.yearlyAmount}`
+            : "–"
+      : "혜택 둘러보기",
+    note: !personalized
+      ? "월세 지원·대출 등 주거 지원 정책"
+      : error
+        ? "혜택을 불러오지 못했어요"
+        : data.benefits
+          ? `${data.benefits.count}개 · 확인 필요 ${data.benefits.needCheck}개`
+          : "받을 수 있는 혜택을 판정하고 있어요",
+  };
+  return { data, loading, error, homes, benefits };
 }

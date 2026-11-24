@@ -17,7 +17,21 @@ test("인증 링크를 열면 로그인 없이 이메일 주소를 인증한다"
   expect(calls).toBe(1);
 });
 
-test("이메일 인증번호를 요청하고 만료 후 다시 받아 인증한다", async ({ page }) => {
+test("개인정보 설정에서 이메일을 인증하고 알림 설정에서 수신 상태를 확인한다", async ({ page }) => {
+  let contactEmail: string | null = "account@example.com";
+  await page.route("**/api/users/me/email", async (route) => {
+    if (route.request().method() === "DELETE") {
+      contactEmail = null;
+    } else {
+      expect(route.request().method()).toBe("PUT");
+      expect(route.request().postDataJSON()).toEqual({
+        email: "member@example.com",
+        consentVersion: "email-v1",
+      });
+      contactEmail = "member@example.com";
+    }
+    await route.fulfill({ status: 204 });
+  });
   await page.route("**/api/users/me", (route) =>
     route.fulfill({
       json: {
@@ -25,7 +39,7 @@ test("이메일 인증번호를 요청하고 만료 후 다시 받아 인증한�
         nickname: "이메일 테스트",
         role: "USER",
         providers: ["GOOGLE"],
-        email: null,
+        email: contactEmail,
         termsAgreed: true,
       },
     }),
@@ -82,12 +96,28 @@ test("이메일 인증번호를 요청하고 만료 후 다시 받아 인증한�
           verification: null,
         };
       }
+      if (route.request().method() === "PUT") {
+        expect(route.request().postDataJSON()).toEqual({
+          enabled: true,
+          newNotice: false,
+          deadline: true,
+          reportAnswer: true,
+          consent: false,
+        });
+        status = { ...status, newNotice: false };
+      }
       if (pathname.endsWith("/edit")) status = empty;
       await route.fulfill({ json: status });
     },
   );
   await page.goto("/me/notifications");
-  const address = page.getByRole("textbox", { name: "알림 받을 이메일" });
+  await expect(page.getByRole("status").filter({ hasText: "미등록" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "이메일 주소" })).toHaveCount(0);
+  await page.getByRole("link", { name: "개인정보 설정에서 관리" }).click();
+  await expect(page).toHaveURL(/\/me\/privacy$/);
+  const address = page.getByRole("textbox", { name: "이메일 주소" });
+  await expect(page.locator('input[type="email"]')).toHaveCount(1);
+  await expect(address).toHaveValue("account@example.com");
   await address.fill("member@example.com");
   const editableBackground = await address.evaluate(
     (input) => getComputedStyle(input).backgroundColor,
@@ -106,6 +136,32 @@ test("이메일 인증번호를 요청하고 만료 후 다시 받아 인증한�
   await page.getByRole("button", { name: "인증하기" }).click();
   await expect(page.getByText("이메일을 인증했어요.", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "알림 설정 저장" })).toBeVisible();
+  const emailCard = page.getByRole("region", { name: "이메일", exact: true });
+  await emailCard.getByText("계정 안내에 이메일 사용", { exact: true }).click();
+  await expect(emailCard.getByText("account@example.com", { exact: true })).toBeVisible();
+  expect(contactEmail).toBe("account@example.com");
+  await expect(page.locator('input[type="email"]')).toHaveCount(1);
+  await emailCard.getByRole("checkbox", { name: "연락용 이메일 수집·이용 동의" }).check();
+  await emailCard.getByRole("button", { name: "이 주소를 계정 안내에 사용" }).click();
+  await expect(
+    emailCard.getByText("이 주소를 계정 안내에도 사용해요.", { exact: true }),
+  ).toBeVisible();
+  expect(contactEmail).toBe("member@example.com");
+  await emailCard.getByRole("button", { name: "계정 안내 동의 철회" }).click();
+  await expect(
+    emailCard.getByText("계정 안내 이메일 동의를 철회했어요.", { exact: true }),
+  ).toBeVisible();
+  expect(contactEmail).toBeNull();
+  await expect(address).toHaveValue("member@example.com");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/me\/notifications$/);
+  await expect(page.getByRole("status").filter({ hasText: "수신 중" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "이메일 주소" })).toHaveCount(0);
+  await page.getByRole("link", { name: "개인정보 설정에서 관리" }).click();
+  await expect(page.getByRole("checkbox", { name: "맞춤 신규 공고·지원 소식" })).toBeChecked();
+  await page.getByRole("checkbox", { name: "맞춤 신규 공고·지원 소식" }).uncheck();
+  await page.getByRole("button", { name: "알림 설정 저장" }).click();
+  await expect(page.getByText("이메일 알림 설정을 저장했어요.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "동의 철회", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -113,4 +169,6 @@ test("이메일 인증번호를 요청하고 만료 후 다시 받아 인증한�
   await page.getByRole("button", { name: "이메일 수정하기" }).click();
   await expect(address).toBeEditable();
   await expect(address).toHaveValue("");
+  await page.goBack();
+  await expect(page.getByRole("status").filter({ hasText: "미등록" })).toBeVisible();
 });

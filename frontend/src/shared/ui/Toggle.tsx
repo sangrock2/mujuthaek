@@ -4,22 +4,24 @@ import { cn } from "@/shared/lib/cn";
 
 type ToggleProps = {
   checked: boolean;
+  disabled?: boolean;
   onChange: (next: boolean) => void;
   label: string;
   className?: string;
 };
 
 /** 토글 스위치 52×32, 손잡이 26. 누르는 영역은 높이 44px */
-export function Toggle({ checked, onChange, label, className }: ToggleProps) {
+export function Toggle({ checked, onChange, label, className, disabled }: ToggleProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "flex min-h-[44px] w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0",
+        "flex min-h-[44px] w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0 disabled:cursor-default disabled:opacity-60",
         className,
       )}
     >

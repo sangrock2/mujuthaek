@@ -63,6 +63,9 @@ export function useNotificationSettings() {
     loading: !USE_MOCKS && loggedIn && q.isPending,
     loggedIn: USE_MOCKS || loggedIn,
     failed: save.isError,
+    readError: q.isError,
+    refresh: q.refetch,
+    saving: save.isPending,
     set: (patch: Partial<NotificationSettings>) => save.mutate({ ...value, ...patch }),
     /** 저장이 끝날 때까지 기다려요 (실패하면 throw, 화면 값은 되돌아가요) */
     setAsync: (patch: Partial<NotificationSettings>) => save.mutateAsync({ ...value, ...patch }),
@@ -120,6 +123,7 @@ export function useInterest(kind: InterestKind) {
     loading: !USE_MOCKS && loggedIn && q.isPending,
     save: save.mutateAsync,
     saving: save.isPending,
+    error: q.isError,
     saveFailed: save.isError,
     remove: remove.mutateAsync,
   };

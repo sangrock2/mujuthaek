@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ContactEmailPurpose } from "@/features/auth/components/ContactEmailParts";
 import { isMember, useSession } from "@/features/auth/session";
 import { api, ApiError } from "@/shared/lib/api/client";
 import { cn } from "@/shared/lib/cn";
+import { meTabHref } from "./MeNavigation";
 
 type Preferences = { newNotice: boolean; deadline: boolean; reportAnswer: boolean };
 type Verification = {
@@ -73,17 +76,64 @@ function clockLabel(seconds: number) {
     .join(":");
 }
 
-export function EmailNotifications() {
-  const session = useSession();
-  const client = useQueryClient();
-  const key = ["me", "email-notifications", session.data?.id];
+export function useEmailNotificationStatus() {
+  const { data: session } = useSession();
+  const member = isMember(session);
+  const key = ["me", "email-notifications", session?.id] as const;
   const query = useQuery({
     queryKey: key,
     queryFn: () => api.get<Status>(path),
-    enabled: isMember(session.data),
+    enabled: member,
     retry: false,
   });
-  const [address, setAddress] = useState("");
+  return { member, key, query, contactEmail: session?.email ?? null };
+}
+
+export function EmailNotificationChannel() {
+  const { member, query } = useEmailNotificationStatus();
+  if (!member) return null;
+  const data = query.data;
+  const active = !!(data?.verified && data.enabled);
+  const status = query.isPending
+    ? "확인 중"
+    : query.isError
+      ? "상태 확인 실패"
+      : active
+        ? "수신 중"
+        : data?.verified
+          ? "수신 설정 필요"
+          : data?.email
+            ? "인증 대기"
+            : "미등록";
+
+  return (
+    <div className="border-line-soft flex flex-wrap items-center justify-between gap-x-[12px] gap-y-[2px] border-t pt-[8px]">
+      <span className="flex min-h-[44px] items-center gap-[8px] text-[14px] font-bold">
+        이메일 알림
+        <span
+          role="status"
+          className={cn(
+            "rounded-badge px-[8px] py-[4px] text-[12px] font-semibold",
+            active ? "bg-brand-soft text-brand-strong" : "bg-fill text-text-sub",
+          )}
+        >
+          {status}
+        </span>
+      </span>
+      <Link
+        href={meTabHref("privacy", true)}
+        className="text-brand-strong inline-flex min-h-[44px] items-center text-[14px] font-bold underline-offset-4"
+      >
+        개인정보 설정에서 관리
+      </Link>
+    </div>
+  );
+}
+
+export function EmailNotifications() {
+  const client = useQueryClient();
+  const { member, key, query, contactEmail } = useEmailNotificationStatus();
+  const [draftAddress, setDraftAddress] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [draft, setDraft] = useState<Preferences | null>(null);
   const [message, setMessage] = useState("");
@@ -94,6 +144,7 @@ export function EmailNotifications() {
   const codeId = useId();
   const withdrawalTitleId = useId();
   const data = query.data;
+  const address = data?.email ?? draftAddress ?? contactEmail ?? "";
   const verification = data?.verification;
   const elapsed = Math.max(0, now - query.dataUpdatedAt);
   const seconds = verification
@@ -139,7 +190,7 @@ export function EmailNotifications() {
     onSuccess: (updated, action) => {
       client.setQueryData(key, updated);
       setDraft(null);
-      setAddress("");
+      setDraftAddress(action === "edit" ? "" : null);
       setCode("");
       if (action === "edit") addressField.current?.focus();
       if (action === "withdraw") dialog.current?.close();
@@ -173,14 +224,14 @@ export function EmailNotifications() {
     if (!busy && canVerify && code.length === 6) mutation.mutate("verify");
   }
 
-  if (!isMember(session.data)) return null;
+  if (!member) return null;
   return (
     <section
-      className="border-line bg-bg rounded-card flex flex-col gap-[14px] border p-[14px] sm:p-[18px]"
-      aria-label="이메일 알림"
+      className="border-line-soft bg-surface rounded-card flex flex-col gap-[14px] border p-[17px] sm:p-[22px]"
+      aria-label="이메일"
     >
       <div className="flex flex-wrap items-center justify-between gap-[8px]">
-        <h3 className="text-[18px] font-extrabold">이메일 알림</h3>
+        <h2 className="text-[18px] font-extrabold">이메일</h2>
         {data?.email && (
           <span
             className={cn(
@@ -206,7 +257,7 @@ export function EmailNotifications() {
         <>
           <form className="flex flex-col gap-[8px]" onSubmit={submitAddress}>
             <label htmlFor={addressId} className="text-[14px] font-bold">
-              알림 받을 이메일
+              이메일 주소
             </label>
             <div className="flex items-center gap-[8px]">
               <input
@@ -216,9 +267,9 @@ export function EmailNotifications() {
                 autoComplete="email"
                 maxLength={254}
                 required
-                value={data?.email ?? address}
+                value={address}
                 readOnly={!!data?.email || busy}
-                onChange={(event) => setAddress(event.target.value)}
+                onChange={(event) => setDraftAddress(event.target.value)}
                 className={cn(
                   input,
                   "flex-1",
@@ -240,8 +291,9 @@ export function EmailNotifications() {
             {!data?.email && (
               <>
                 <p className="text-text-sub text-[13px]">
-                  인증번호를 요청하면 알림 이메일의 수집·이용과 맞춤 공고·마감·문의 답변 알림 수신에
-                  동의해요. 인증 후 알림을 받을 수 있고, 언제든 동의를 철회할 수 있어요.{" "}
+                  이메일 알림을 받으려면 주소를 인증해 주세요. 인증번호를 요청하면 알림 이메일의
+                  수집·이용과 맞춤 공고·마감·문의 답변 알림 수신에 동의해요. 인증 후 알림을 받을 수
+                  있고, 언제든 동의를 철회할 수 있어요.{" "}
                   <a className="underline" href="/privacy">
                     개인정보처리방침
                   </a>
@@ -373,6 +425,12 @@ export function EmailNotifications() {
           )}
         </>
       )}
+      <ContactEmailPurpose
+        address={address}
+        current={contactEmail}
+        locked={busy || query.isPending || query.isError}
+        onSaved={() => setDraftAddress(null)}
+      />
       {message && (
         <p
           role={mutation.isError ? "alert" : "status"}
@@ -390,11 +448,11 @@ export function EmailNotifications() {
           if (busy) event.preventDefault();
         }}
       >
-        <h4 id={withdrawalTitleId} className="text-[18px] font-extrabold">
+        <h3 id={withdrawalTitleId} className="text-[18px] font-extrabold">
           이메일 알림 동의를 철회할까요?
-        </h4>
+        </h3>
         <p className="text-text-sub my-[12px] text-[14px]">
-          등록된 이메일이 삭제되고 이메일 알림이 중단돼요.
+          이메일 알림 동의가 철회되고 알림 발송이 중단돼요.
         </p>
         <div className="flex flex-wrap justify-end gap-[8px]">
           <button

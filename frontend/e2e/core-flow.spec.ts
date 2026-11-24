@@ -55,7 +55,24 @@ test("실제 API로 조건·판정·PDF·준비함·알림·정정을 연결한�
   await expect(
     page.getByText("근거 문장을 노란색으로 표시했어요", { exact: true }).first(),
   ).toBeAttached();
-  if (test.info().project.name === "mobile") {
+  const isMobile = test.info().project.name === "mobile";
+  const pdfDialog = page.getByRole("dialog", { name: isMobile ? "공고 원문" : "공고 원문 비교" });
+  const sections = pdfDialog.getByRole("navigation", { name: "원문 섹션" });
+  await expect(sections.locator('[aria-current="true"]')).toHaveCount(1);
+  if (!isMobile) {
+    await expect(pdfDialog.getByRole("button", { name: "쪽 맞춤" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const pageArea = pdfDialog.getByLabel("PDF 페이지 영역");
+    const canvas = pdfDialog.locator("canvas").first();
+    await expect
+      .poll(
+        async () => (await canvas.boundingBox())!.height - (await pageArea.boundingBox())!.height,
+      )
+      .toBeLessThanOrEqual(0);
+  }
+  if (isMobile) {
     await page.goBack();
     await expect(page.getByRole("dialog", { name: "공고 원문" })).toHaveCount(0);
   } else await page.getByRole("button", { name: "원문 닫기", exact: true }).last().click();

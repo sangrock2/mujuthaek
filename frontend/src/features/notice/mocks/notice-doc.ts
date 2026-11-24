@@ -105,7 +105,8 @@ export type NoticeDoc = {
   /** 오늘 기준 접수 상태 (백엔드가 계산) */
   status: "UPCOMING" | "OPEN" | "CLOSED";
   /** 신청 기간 */
-  applyPeriod: { start: string; end: string; note?: string } | null;
+  applyPeriod: { start: string; end: string; endTime?: string; note?: string } | null;
+  announcedOn?: string;
   summary: string;
   source: {
     fileName: string;

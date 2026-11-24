@@ -1,4 +1,10 @@
-import { pdfSections, sectionTitles } from "@/features/notice/format";
+import {
+  categoryLabel,
+  formatPeriod,
+  formatWon,
+  sectionTitles,
+  visibleSections,
+} from "@/features/notice/format";
 import { pdfReviewItems } from "@/features/notice/pdfReview";
 import type { NoticeJudgment } from "@/features/notice/judgment";
 import type { usePdfViewer } from "@/features/notice/usePdfViewer";
@@ -112,10 +118,32 @@ export function noticeOriginal(
   const keyOf = new Map(
     (Object.keys(sectionTitles) as NoticeSectionKey[]).map((k) => [sectionTitles[k].toc, k]),
   );
-  const sections = pdfSections(doc).filter((s) => {
-    if (!doc.anchors || !current) return true;
-    const key = keyOf.get(s.label);
-    return key !== undefined && doc.anchors[key]?.fileId === current.id;
+  const categories = new Set(doc.eligibility.map(({ category }) => categoryLabel[category]));
+  const type = doc.housing[0]?.types[0];
+  const period = doc.applyPeriod;
+  const documents = doc.apply.documents.flatMap((group) => group.items);
+  const extra = documents.length - 2;
+  const summaries: Partial<Record<NoticeSectionKey, string | undefined>> = {
+    eligibility: [...categories].join(" · "),
+    housing:
+      type && type.depositWon !== null && type.monthlyRentWon !== null
+        ? `${type.code}형 · 보증금 ${formatWon(type.depositWon)} · 월 ${formatWon(type.monthlyRentWon)}`
+        : undefined,
+    schedule: period
+      ? [formatPeriod(period.start, period.end), period.note].filter(Boolean).join(" · ")
+      : undefined,
+    apply: documents.length
+      ? `${documents
+          .slice(0, 2)
+          .map(({ name }) => name)
+          .join(" · ")}${extra > 0 ? ` 외 ${extra}건` : ""}`
+      : undefined,
+  };
+  const sections = visibleSections(doc).flatMap((key) => {
+    const page = doc.pages[key];
+    const anchor = doc.anchors?.[key];
+    if (!page || (doc.anchors && current && anchor?.fileId !== current.id)) return [];
+    return [{ page, label: sectionTitles[key].toc, summary: summaries[key] }];
   });
   const viewer = src
     ? {

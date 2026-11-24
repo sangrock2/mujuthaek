@@ -414,13 +414,14 @@ recent.rememberRecent("행복주택", at);
 assert.deepEqual(recent.readRecent(at + 1000), ["행복주택"]);
 assert.deepEqual(recent.readRecent(at + recent.RECENT_TTL_MS), []);
 assert.equal(local.getItem("mujuthaek.search.recent"), null, "만료된 검색어도 읽을 때 지움");
-let recentCleared = 0;
-const stopRecent = recent.subscribeRecent(() => recentCleared++);
+let recentChanges = 0;
+const stopRecent = recent.subscribeRecent(() => recentChanges++);
 recent.rememberRecent("행복주택", at);
+assert.equal(recentChanges, 1, "저장하면 개인정보 설정에 알림");
 recent.clearRecentSearches();
 stopRecent();
 assert.deepEqual(recent.readRecent(at), []);
-assert.equal(recentCleared, 1, "지우면 검색 화면에 알림");
+assert.equal(recentChanges, 2, "지우면 검색 화면에 알림");
 
 const device = require("../src/features/auth/deviceData.ts");
 const personalLocal = [

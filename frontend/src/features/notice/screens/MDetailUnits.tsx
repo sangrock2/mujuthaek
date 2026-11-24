@@ -1,4 +1,5 @@
 "use client";
+import { FileText } from "lucide-react";
 
 import { useDetailTitle } from "@/shared/lib/useDetailTitle";
 
@@ -58,7 +59,10 @@ export function MDetailUnits({ id }: { id: string }) {
     <MPage>
       <MBackHeader title="공고 상세" backHref={routes.homes} />
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col gap-[12px] pb-[24px]">
-        <section className="bg-surface flex flex-col gap-[10px] p-[20px]">
+        <section
+          aria-label="공고 요약"
+          className="rounded-card border-line-soft bg-surface mx-[12px] mt-[12px] flex flex-col gap-[10px] border p-[16px]"
+        >
           <NoticeTags
             verdict={n.verdict}
             rank={n.ranking?.myRank}
@@ -66,12 +70,31 @@ export function MDetailUnits({ id }: { id: string }) {
             tags={n.tags}
             size="md"
           />
-          <h2 className="tracking-h1 m-0 text-[23px] leading-[1.35] font-extrabold">{n.title}</h2>
+          <h2 className="tracking-h1 m-0 text-[23px] leading-[1.35] font-extrabold break-keep">
+            {n.title}
+          </h2>
           <span className="text-text-sub text-[14px] leading-[1.5]">{n.meta}</span>
+          <div className="flex flex-wrap gap-[6px]">
+            <a
+              href="#el-h"
+              className="rounded-control bg-brand hover:bg-brand-strong inline-flex min-h-[44px] items-center px-[13px] text-[14px] font-bold text-white no-underline hover:text-white"
+            >
+              내 자격 보기
+            </a>
+            {original.hasPdf && (
+              <button
+                type="button"
+                onClick={() => openOriginal()}
+                className="rounded-control bg-fill text-brand-strong inline-flex min-h-[44px] cursor-pointer items-center gap-[5px] px-[12px] text-[14px] font-bold"
+              >
+                <FileText size={16} aria-hidden /> 공고 PDF 열기
+              </button>
+            )}
+          </div>
         </section>
 
         <section aria-labelledby="el-h" className={cn(card, "px-[20px] pt-[16px] pb-[6px]")}>
-          <h3 id="el-h" className="mx-0 mt-0 mb-[6px] text-[17px] font-extrabold">
+          <h3 id="el-h" className="mx-0 mt-0 mb-[6px] scroll-mt-[75px] text-[17px] font-extrabold">
             내 자격
           </h3>
           {n.eligibility.map((e, i) => (

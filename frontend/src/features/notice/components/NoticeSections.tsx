@@ -66,14 +66,11 @@ function FoldGroups({
   const shown = groups.filter((g) => g.items.length);
   const sub = web ? "text-[15px]" : "text-[14px]";
   return (
-    <ul className="m-0 flex list-none flex-col p-0">
-      {shown.map((g, i) => (
-        <li
-          key={g.key}
-          className={cn(i < shown.length - 1 && "border-line-soft border-b border-solid")}
-        >
+    <ul className="m-0 flex list-none flex-col gap-[7px] p-0">
+      {shown.map((g) => (
+        <li key={g.key} className="rounded-control border-line-soft overflow-hidden border">
           <details className="group">
-            <summary className="flex min-h-[48px] cursor-pointer list-none items-center gap-[12px] py-[10px] [&::-webkit-details-marker]:hidden">
+            <summary className="group-open:bg-fill flex min-h-[48px] cursor-pointer list-none items-center gap-[9px] px-[10px] py-[9px] [&::-webkit-details-marker]:hidden">
               <span
                 className={cn(
                   "rounded-tag flex-none px-[8px] py-[3px] text-center text-[12px] font-bold",
@@ -83,7 +80,7 @@ function FoldGroups({
               >
                 {g.label}
               </span>
-              <span className={cn(sub, "min-w-0 flex-1 truncate group-open:invisible")}>
+              <span className={cn(sub, "min-w-0 flex-1 truncate font-semibold")}>
                 {g.items[0].text}
               </span>
               {g.items.some((e) => e.checking) && (
@@ -105,7 +102,7 @@ function FoldGroups({
                 className="text-text-sub flex-none transition-transform group-open:rotate-180"
               />
             </summary>
-            <ul className="m-0 flex list-none flex-col gap-[6px] p-0 pb-[12px]">
+            <ul className="m-0 flex list-none flex-col gap-[6px] p-[8px]">
               {g.items.map((e) => (
                 <li
                   key={e.id}
@@ -274,9 +271,11 @@ export function NoticeToc({ doc, variant }: { doc: NoticeDoc; variant: Variant }
     <nav
       aria-label="공고 목차"
       className={cn(
-        "bg-bg sticky z-[1] flex gap-[6px] overflow-x-auto",
+        "border-line-soft bg-surface sticky z-[1] flex gap-[5px] overflow-x-auto border",
         // 상단 바(웹 69px·모바일 56px) 바로 아래에 붙어요
-        web ? "top-[69px] -mx-[4px] px-[4px] py-[10px]" : "top-[56px] px-[16px] py-[8px]",
+        web
+          ? "rounded-card top-[69px] px-[7px] py-[5px]"
+          : "top-[56px] border-x-0 px-[13px] py-[5px]",
       )}
     >
       {keys.map((k) => (
@@ -286,7 +285,7 @@ export function NoticeToc({ doc, variant }: { doc: NoticeDoc; variant: Variant }
           aria-current={active === k ? "location" : undefined}
           className={cn(
             "rounded-pill bg-surface text-text-sub hover:text-text inline-flex flex-none items-center font-bold whitespace-nowrap no-underline",
-            active === k && "bg-brand-soft text-brand-strong ring-brand ring-2 ring-inset",
+            active === k && "bg-brand-soft text-brand-strong",
             web ? "min-h-[44px] px-[16px] text-[14px]" : "min-h-[44px] px-[14px] text-[13px]",
           )}
         >
@@ -308,8 +307,8 @@ export function NoticeSections({
   const web = variant === "web";
   const keys = visibleSections(doc);
   const card = web
-    ? "rounded-card-lg bg-surface flex flex-col gap-[16px] px-[30px] py-[28px]"
-    : "rounded-card bg-surface mx-[16px] flex flex-col gap-[12px] px-[20px] py-[18px]";
+    ? "rounded-card-lg border-line-soft bg-surface flex flex-col gap-[16px] border px-[26px] py-[24px]"
+    : "rounded-card border-line-soft bg-surface mx-3 flex flex-col gap-[12px] border px-[16px] py-[18px]";
   const sub = web ? "text-[15px]" : "text-[14px]";
 
   const heldKeys = new Set((doc.held ?? []).map((h) => h.key));
@@ -324,6 +323,11 @@ export function NoticeSections({
           >
             {heading}
           </h2>
+          {k === "eligibility" && doc.announcedOn && (
+            <span className="text-text-sub text-[12px] font-semibold">
+              모집공고일 {formatPeriod(doc.announcedOn, doc.announcedOn)}
+            </span>
+          )}
           {heldKeys.has(k) && (
             <span className="bg-check-bg text-check-text rounded-tag px-[8px] py-[3px] text-[12px] font-bold">
               일부 확인 중

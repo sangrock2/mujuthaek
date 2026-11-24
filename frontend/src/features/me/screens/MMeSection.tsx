@@ -10,30 +10,40 @@ import {
   NotificationSettingsPanel,
   ReportPanel,
 } from "@/features/me/components/MePanels";
-import { reportKindParam, reportScreenParam, reportCodeParam } from "@/features/me/tabs";
+import { meTitles } from "@/features/me/components/MeNavigation";
+import {
+  ConditionEditLink,
+  ConditionsPanel,
+  PrivacyPanel,
+} from "@/features/me/components/MeSettingsPanels";
+import {
+  reportKindParam,
+  reportScreenParam,
+  reportCodeParam,
+  type MeTab,
+} from "@/features/me/tabs";
+import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
-
-export type MeSection = "favorites" | "preparations" | "interests" | "notifications" | "reports";
-
-const titles: Record<MeSection, string> = {
-  favorites: "관심 공고",
-  preparations: "신청 준비함",
-  interests: "관심 조건",
-  notifications: "알림 설정",
-  reports: "제보하기",
-};
-
 /** 내 정보의 세부 화면 (모바일) */
-export function MMeSection({ section }: { section: MeSection }) {
+export function MMeSection({ section }: { section: MeTab }) {
   const params = useSearchParams();
   return (
     <MPage>
-      <MBackHeader title={titles[section]} backHref={routes.me} />
+      <MBackHeader
+        title={meTitles[section]}
+        backHref={routes.me}
+        actions={section === "conditions" ? <ConditionEditLink /> : undefined}
+      />
       <main
         id="main-content"
         tabIndex={-1}
-        className="bg-surface flex flex-1 flex-col gap-[16px] px-[16px] pt-[16px] pb-[32px]"
+        className={cn(
+          "flex flex-1 flex-col gap-[16px] px-[16px] pt-[16px] pb-[32px]",
+          (section === "preparations" || section === "reports") && "bg-surface",
+        )}
       >
+        {section === "conditions" && <ConditionsPanel />}
+        {section === "privacy" && <PrivacyPanel />}
         {section === "favorites" && <FavoriteList />}
         {section === "preparations" && <PreparationList />}
         {section === "interests" && <InterestsPanel />}
