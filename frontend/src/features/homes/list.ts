@@ -1,6 +1,7 @@
 "use client";
 
 import { USE_MOCKS } from "@/shared/lib/api/config";
+import { useCallback } from "react";
 import type { HomeListing } from "@/features/homes/mocks/homes";
 import { sortParam, tenureParam, type MoveInMode, type SortOption } from "./filters";
 import { useHomes } from "./queries";
@@ -24,15 +25,15 @@ export type HomeList = {
   listings: HomeListing[];
   /** "지원할 수 있는 곳 N곳" */
   eligibleCount: number;
+  resultCount: number;
   /** 확인 필요 · 지원 불가 개수 (API일 때만) */
   needsInputCount: number | null;
   ineligibleCount: number | null;
-  /** 더 보기 버튼 문구에 쓰는 남은 수. 모르면 null */
-  remaining: number | null;
   hasMore: boolean;
   loadMore: () => void;
   loading: boolean;
   loadingMore: boolean;
+  loadMoreError: boolean;
   error: boolean;
 };
 
@@ -44,17 +45,17 @@ function useMockList(s: HomeListState): HomeList {
   const { data } = useHomes();
   const visible = data.listings.filter(s.region.matches).filter(byVerdict(s));
   const count = s.region.isAll ? data.total : visible.length;
-  const remaining = s.region.isAll ? data.total - data.listings.length : 0;
   return {
     listings: visible,
     eligibleCount: count,
+    resultCount: visible.length,
     needsInputCount: null,
     ineligibleCount: null,
-    remaining,
-    hasMore: remaining > 0,
+    hasMore: false,
     loadMore: () => {},
     loading: false,
     loadingMore: false,
+    loadMoreError: false,
     error: false,
   };
 }
@@ -72,17 +73,27 @@ function useApiList(s: HomeListState): HomeList {
   const pages = q.data?.pages ?? [];
   const counts = pages[0]?.counts;
   const listings = pages.flatMap((p) => p.items.map(toListing)).filter(byVerdict(s));
+  const { fetchNextPage, hasNextPage, isFetching, isPlaceholderData } = q;
+  const hasMore = hasNextPage && !isPlaceholderData;
+  const loadMore = useCallback(() => {
+    if (hasMore && !isFetching) void fetchNextPage({ cancelRefetch: false });
+  }, [fetchNextPage, hasMore, isFetching]);
   return {
     listings,
     eligibleCount: counts?.eligible ?? 0,
+    resultCount: counts
+      ? (s.showOk ? counts.eligible : 0) +
+        (s.showCheck ? counts.needsInput : 0) +
+        (s.includeIneligible ? counts.ineligible : 0)
+      : 0,
     needsInputCount: counts?.needsInput ?? null,
     ineligibleCount: counts?.ineligible ?? null,
-    remaining: null,
-    hasMore: q.hasNextPage,
-    loadMore: () => void q.fetchNextPage(),
+    hasMore,
+    loadMore,
     loading: q.isPending,
     loadingMore: q.isFetchingNextPage,
-    error: q.isError,
+    loadMoreError: q.isFetchNextPageError,
+    error: q.isError && !q.data,
   };
 }
 

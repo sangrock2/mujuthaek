@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Bell } from "lucide-react";
+import { ScrollToTop } from "@/shared/ui/ScrollToTop";
 import { MBackHeader } from "@/shared/layout/MBackHeader";
 import { alertTabs, useAlerts } from "@/features/alerts/queries";
 import { usePush } from "@/features/alerts/usePush";
@@ -13,7 +14,7 @@ export function MAlerts() {
   const push = usePush();
 
   return (
-    <div className="bg-surface text-text flex min-h-screen w-full flex-col">
+    <div className="stitch-surface bg-bg text-text flex min-h-screen w-full flex-col">
       <MBackHeader title="알림" backHref={routes.home} />
       <main
         id="main-content"
@@ -27,30 +28,11 @@ export function MAlerts() {
           <button
             type="button"
             onClick={alerts.readAll}
-            className="text-brand-strong min-h-[44px] cursor-pointer border-0 bg-transparent px-[6px] py-[1px] text-[14px] font-bold"
+            disabled={alerts.unread === 0}
+            className="text-brand-strong min-h-[44px] cursor-pointer border-0 bg-transparent px-[6px] py-[1px] text-[14px] font-bold disabled:opacity-50"
           >
             모두 읽음
           </button>
-        </div>
-
-        <div role="group" aria-label="알림 종류" className="flex gap-[6px] px-[20px]">
-          {alertTabs.map((t) => {
-            const on = t === alerts.tab;
-            return (
-              <button
-                key={t}
-                type="button"
-                aria-pressed={on}
-                onClick={() => alerts.setTab(t)}
-                className={cn(
-                  "rounded-pill min-h-[38px] cursor-pointer border-0 px-[14px] text-[14px] font-bold",
-                  on ? "bg-text text-white" : "bg-fill text-text-sub",
-                )}
-              >
-                {t} {alerts.countOf(t)}
-              </button>
-            );
-          })}
         </div>
 
         {push.enabled && (
@@ -61,7 +43,7 @@ export function MAlerts() {
             </span>
           </div>
         )}
-        {!push.enabled && (
+        {alerts.loggedIn && push.checked && !push.enabled && (
           <div className="bg-brand-soft mx-[16px] my-[4px] flex flex-col gap-[10px] rounded-[20px] p-[16px]">
             <span className="text-brand-strong text-[15px] font-extrabold">
               마감 전에 놓치지 않게
@@ -91,9 +73,33 @@ export function MAlerts() {
           </div>
         )}
 
+        <div
+          role="group"
+          aria-label="알림 종류"
+          className="bg-bg sticky top-[56px] z-10 flex gap-[6px] overflow-x-auto px-4 py-2"
+        >
+          {alertTabs.map((t) => {
+            const on = t === alerts.tab;
+            return (
+              <button
+                key={t}
+                type="button"
+                aria-pressed={on}
+                onClick={() => alerts.setTab(t)}
+                className={cn(
+                  "rounded-pill min-h-[38px] flex-none cursor-pointer border-0 px-[14px] text-[14px] font-bold",
+                  on ? "bg-brand text-white" : "bg-surface text-text-sub",
+                )}
+              >
+                {t} {alerts.countOf(t)}
+              </button>
+            );
+          })}
+        </div>
+
         {alerts.grouped.map((g) => (
-          <section key={g.label} className="flex flex-col">
-            <h2 className="text-text-sub m-0 px-[20px] pt-[14px] pb-[6px] text-[14px] font-extrabold">
+          <section key={g.label} className="mx-4 flex flex-col gap-1">
+            <h2 className="text-text-sub m-0 px-1 pt-2 pb-1 text-[14px] font-extrabold">
               {g.label}
             </h2>
             {g.items.map((a) => (
@@ -103,7 +109,7 @@ export function MAlerts() {
                 onClick={() => alerts.open(a)}
                 aria-label={`${a.isRead ? "" : "읽지 않음, "}${a.kind}, ${a.short?.title ?? a.title}`}
                 className={cn(
-                  "text-text flex w-full cursor-pointer gap-[12px] border-0 px-[20px] py-[14px] text-left",
+                  "rounded-card text-text flex w-full cursor-pointer gap-[12px] border-0 px-4 py-[14px] text-left",
                   a.isRead ? "bg-surface" : "bg-row-selected",
                 )}
               >
@@ -155,33 +161,36 @@ export function MAlerts() {
           </section>
         ))}
 
-        <section
-          aria-label="받는 알림"
-          className="bg-surface mx-[16px] mt-[8px] flex flex-col rounded-[20px] px-[18px] py-[14px]"
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="m-0 text-[16px] font-extrabold">받는 알림</h2>
-            <Link
-              href={`${routes.me}?tab=notifications`}
-              className="text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] items-center text-[14px] font-bold no-underline"
-            >
-              설정
-            </Link>
-          </div>
-          {alerts.data.settings.map((s) => (
-            <div key={s.label} className="flex justify-between py-[6px] text-[14px]">
-              <span>{s.label}</span>
-              {s.on ? (
-                <span className="text-brand-strong font-bold">켜짐</span>
-              ) : (
-                <span className="text-text-tertiary">꺼짐</span>
-              )}
+        {alerts.data.settings.length > 0 && (
+          <section
+            aria-label="받는 알림"
+            className="bg-surface mx-[16px] mt-[8px] flex flex-col rounded-[20px] px-[18px] py-[14px]"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="m-0 text-[16px] font-extrabold">받는 알림</h2>
+              <Link
+                href={`${routes.me}?tab=notifications`}
+                className="text-brand-strong hover:text-brand-strong inline-flex min-h-[44px] items-center text-[14px] font-bold no-underline"
+              >
+                설정
+              </Link>
             </div>
-          ))}
-          <span className="border-line-soft text-text-sub mt-[6px] border-t border-solid pt-[10px] text-[13px]">
-            방해 금지 · {alerts.data.quietHours}
-          </span>
-        </section>
+            {alerts.data.settings.map((s) => (
+              <div key={s.label} className="flex justify-between py-[6px] text-[14px]">
+                <span>{s.label}</span>
+                {s.on ? (
+                  <span className="text-brand-strong font-bold">켜짐</span>
+                ) : (
+                  <span className="text-text-tertiary">꺼짐</span>
+                )}
+              </div>
+            ))}
+            <span className="border-line-soft text-text-sub mt-[6px] border-t border-solid pt-[10px] text-[13px]">
+              방해 금지 · {alerts.data.quietHours}
+            </span>
+          </section>
+        )}
+        <ScrollToTop />
       </main>
     </div>
   );

@@ -141,7 +141,8 @@ export function useNoticeSearch(filters: SearchFilters, enabled = true) {
         size: PAGE_SIZE,
       }),
     initialPageParam: null as string | null,
-    getNextPageParam: (last) => (last.hasNext ? last.nextCursor : null),
+    getNextPageParam: ({ hasNext, nextCursor }, _pages, _lastCursor, cursors) =>
+      hasNext && nextCursor && !cursors.includes(nextCursor) ? nextCursor : null,
     enabled: enabled && ready,
     // 조건으로 계산한 결과라 오래 두지 않아요 (지역·조건을 바꾸면 새로 받아요)
     staleTime: 60 * 1000,

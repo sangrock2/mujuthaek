@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { mockQuery } from "@/features/mock-query";
 import { USE_MOCKS } from "@/shared/lib/api/config";
 import { safeExternalUrl } from "@/shared/lib/safeUrl";
@@ -11,7 +11,7 @@ import {
   type Benefit,
   type BenefitCategory,
 } from "@/features/benefits/mocks/benefits";
-import { toBenefit, useBenefitDetailQuery, useBenefitSearch } from "./api";
+import { toBenefit, useBenefitDetailQuery, useBenefitSearch, type ApiBenefitSearch } from "./api";
 
 export const benefitKeys = {
   summary: ["benefits", "summary"] as const,
@@ -29,8 +29,9 @@ export type BenefitList = {
   loading: boolean;
   error: boolean;
   hasMore: boolean;
-  loadMore: () => void;
+  loadMore: () => Promise<Benefit[]>;
   loadingMore: boolean;
+  loadMoreError: boolean;
 };
 
 const countBy = (items: Benefit[]) => ({
@@ -39,10 +40,10 @@ const countBy = (items: Benefit[]) => ({
   교통: items.filter((b) => b.cat === "교통").length,
 });
 
-function useMockBenefits(): BenefitList {
+function useMockBenefits(category?: BenefitCategory): BenefitList {
   const { data } = useQuery(mockQuery(benefitKeys.summary, benefitsSummary));
   return {
-    items: data.items,
+    items: category ? data.items.filter((item) => item.cat === category) : data.items,
     counts: countBy(data.items),
     total: data.items.length,
     yearlyAmount: data.yearlyAmount,
@@ -50,17 +51,30 @@ function useMockBenefits(): BenefitList {
     loading: false,
     error: false,
     hasMore: false,
-    loadMore: () => {},
+    loadMore: async () => [],
     loadingMore: false,
+    loadMoreError: false,
   };
 }
 
+function uniqueBenefits(pages: ApiBenefitSearch[] = []) {
+  const byId = new Map(pages.flatMap((page) => page.items.map((item) => [item.id, item] as const)));
+  return [...byId.values()].map(toBenefit);
+}
+
 /** 실제 API: 찾아볼 지역의 혜택을 내 조건(구간 값)으로 판정해서 받아요 */
-function useApiBenefits(): BenefitList {
-  const q = useBenefitSearch();
+function useApiBenefits(category?: BenefitCategory): BenefitList {
+  const q = useBenefitSearch(category);
   const pages = q.data?.pages;
   const first = pages?.[0];
-  const items = useMemo(() => (pages ?? []).flatMap((p) => p.items.map(toBenefit)), [pages]);
+  const items = useMemo(() => uniqueBenefits(pages), [pages]);
+  const { fetchNextPage, hasNextPage, isPlaceholderData } = q;
+  const hasMore = hasNextPage && !isPlaceholderData;
+  const loadMore = useCallback(async () => {
+    if (!hasMore) return [];
+    const result = await fetchNextPage({ cancelRefetch: false });
+    return uniqueBenefits(result.data?.pages);
+  }, [fetchNextPage, hasMore]);
   const counts = {
     주거: first?.categoryCounts.HOUSING ?? 0,
     자산형성: first?.categoryCounts.ASSET ?? 0,
@@ -76,15 +90,16 @@ function useApiBenefits(): BenefitList {
     // 조회한 오늘을 정책 정보의 갱신 기준일처럼 표시하지 않아요.
     asOf: "",
     loading: q.isPending,
-    error: q.isError,
-    hasMore: q.hasNextPage,
-    loadMore: () => void q.fetchNextPage(),
+    error: q.isError && !q.data,
+    hasMore,
+    loadMore,
     loadingMore: q.isFetchingNextPage,
+    loadMoreError: q.isFetchNextPageError,
   };
 }
 
 // USE_MOCKS는 빌드 때 정해지는 값이라 훅 순서가 바뀌지 않아요
-export const useBenefits: () => BenefitList = USE_MOCKS ? useMockBenefits : useApiBenefits;
+export const useBenefits = USE_MOCKS ? useMockBenefits : useApiBenefits;
 
 type BenefitState = { data: Benefit | undefined; loading: boolean; error: boolean };
 

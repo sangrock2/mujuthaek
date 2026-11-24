@@ -218,12 +218,11 @@ try {
     });
   composeStarted = true;
   await wait(command("docker", [...compose, "up", "-d", "--wait", "--wait-timeout", "120"], root));
-  const notification = gradle("notification"),
-    api = gradle("api");
-  await Promise.all([
-    ready("http://127.0.0.1:18080/actuator/health", api),
-    ready("http://127.0.0.1:18081/actuator/health", notification),
-  ]);
+  // 두 Gradle 빌드가 같은 캐시를 초기화하지 않도록 첫 서비스가 준비된 뒤 다음 서비스를 시작한다.
+  const notification = gradle("notification");
+  await ready("http://127.0.0.1:18081/actuator/health", notification);
+  const api = gradle("api");
+  await ready("http://127.0.0.1:18080/actuator/health", api);
   await wait(
     command(process.execPath, [path.join(frontend, "node_modules/next/dist/bin/next"), "build"]),
   );

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChevronDown, Search } from "lucide-react";
-import { MBackHeader } from "@/shared/layout/MBackHeader";
+import { CustomerCenterHeader } from "@/features/content/components/WebContentShell";
 import { MPage } from "@/shared/layout/Responsive";
 import { FilterChip } from "@/shared/ui/Chip";
 import { useFaq } from "@/features/content/queries";
@@ -18,13 +18,14 @@ export function MFaq() {
   const f = useFaqFilter(data.web, data.initiallyOpen);
 
   return (
-    <MPage>
-      <MBackHeader title="자주 묻는 질문" backHref={routes.me} />
+    <MPage className="stitch-surface">
+      <CustomerCenterHeader current={routes.faq} />
       <main
         id="main-content"
         tabIndex={-1}
         className="flex flex-1 flex-col gap-[12px] px-[16px] pt-[16px] pb-[28px]"
       >
+        <h1 className="tracking-h1 m-0 text-[24px] font-extrabold">자주 묻는 질문</h1>
         <label className="relative flex">
           <span className="sr-only">질문 검색</span>
           <span className="text-text-tertiary absolute top-1/2 left-[16px] flex -translate-y-1/2">

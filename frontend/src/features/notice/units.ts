@@ -1,6 +1,7 @@
 "use client";
 
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { formatWon } from "@/features/notice/format";
 import type { NoticeJudgment } from "@/features/notice/judgment";
 import { api } from "@/shared/lib/api/client";
@@ -30,18 +31,32 @@ const PAGE_SIZE = 100;
 
 /** 주택목록 (호별). 공개 정보라 조금 길게 둬요 */
 export function useNoticeUnits(id: string, enabled: boolean) {
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: ["notice", "units", id] as const,
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam, signal }) => {
       const q = new URLSearchParams({ size: String(PAGE_SIZE) });
       if (pageParam) q.set("cursor", pageParam);
-      return api.get<ApiUnitPage>(`${endpoints.noticeUnits(id)}?${q}`);
+      return api.get<ApiUnitPage>(`${endpoints.noticeUnits(id)}?${q}`, { signal });
     },
     initialPageParam: null as string | null,
-    getNextPageParam: (last) => (last.hasNext ? last.nextCursor : null),
+    getNextPageParam: ({ hasNext, nextCursor }, _pages, _lastCursor, cursors) =>
+      hasNext && nextCursor && !cursors.includes(nextCursor) ? nextCursor : null,
     enabled,
     staleTime: 5 * 60 * 1000,
   });
+  const { fetchNextPage, hasNextPage, isFetching } = query;
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetching) void fetchNextPage({ cancelRefetch: false });
+  }, [fetchNextPage, hasNextPage, isFetching]);
+  return {
+    ...query,
+    pagination: {
+      hasMore: hasNextPage,
+      loadingMore: query.isFetchingNextPage,
+      loadMoreError: query.isFetchNextPageError,
+      loadMore,
+    },
+  };
 }
 
 /** 응답 한 줄 → 화면 집 하나. 신청 가능 · 준비할 돈은 내 판정의 주택형별 값으로 */

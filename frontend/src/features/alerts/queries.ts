@@ -54,16 +54,21 @@ const EMPTY: AlertsData = { items: [], settings: [], quietHours: "밤 10시 ~ �
 
 export function useAlertsData() {
   const session = useSession();
+  const loggedIn = USE_MOCKS || isMember(session.data);
   const mock = useQuery({ ...mockQuery(alertsKeys.list, alertsData), enabled: USE_MOCKS });
   const live = useQuery({
     queryKey: [...alertsKeys.list, "live"],
     queryFn: liveAlerts,
-    // 약관 동의 전 계정은 서버가 막아요(403). 동의 화면으로 가는 동안 다시 묻지 않아요
-    enabled: !USE_MOCKS && session.data?.termsAgreed !== false,
+    // 받은 알림은 가입을 마친 회원에게만 조회해요.
+    enabled: !USE_MOCKS && loggedIn,
     retry: false,
   });
-  if (USE_MOCKS) return { data: mock.data, isError: false };
-  return { data: live.data ?? EMPTY, isError: live.isError };
+  return {
+    data: USE_MOCKS ? mock.data : (loggedIn && live.data) || EMPTY,
+    loggedIn,
+    loading: !USE_MOCKS && (session.isPending || (loggedIn && live.isPending)),
+    isError: !USE_MOCKS && live.isError,
+  };
 }
 
 export type AlertTab = "전체" | AlertType;
@@ -74,7 +79,7 @@ export type AlertView = AlertItem & { isRead: boolean; urgent: boolean };
 
 /** 분류 탭 · 읽음 상태를 다뤄요 */
 export function useAlerts() {
-  const { data, isError } = useAlertsData();
+  const { data, loggedIn, loading, isError } = useAlertsData();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [tab, setTab] = useState<AlertTab>("전체");
@@ -115,13 +120,19 @@ export function useAlerts() {
     countOf: (t: AlertTab) =>
       t === "전체" ? data.items.length : data.items.filter((a) => a.type === t).length,
     grouped,
-    unreadText: isError
-      ? "로그인하면 알림을 볼 수 있어요"
-      : data.items.length === 0
-        ? "아직 받은 알림이 없어요"
-        : unread
-          ? `읽지 않은 알림 ${unread}개`
-          : "모두 읽었어요",
+    loggedIn,
+    unread,
+    unreadText: loading
+      ? "알림을 불러오고 있어요"
+      : !loggedIn
+        ? "로그인하면 알림을 볼 수 있어요"
+        : isError
+          ? "알림을 불러오지 못했어요"
+          : unread
+            ? `읽지 않은 알림 ${unread}개`
+            : data.items.length
+              ? "모두 읽었어요"
+              : "아직 받은 알림이 없어요",
     markRead,
     /** 알림을 누르면 읽음으로 바꾸고 그 화면으로 가요 (앱 안 경로만, 「/\다른곳」도 막아요) */
     open: (a: AlertItem) => {

@@ -2,11 +2,12 @@
 
 import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useLogout, useSession } from "@/features/auth/session";
+import { useSession } from "@/features/auth/session";
 import { useFavorites } from "@/features/favorites/queries";
 import { useMyReports } from "@/features/me/api";
 import { MeNavigation } from "@/features/me/components/MeNavigation";
 import { MeOverview } from "@/features/me/components/MeOverview";
+import { MeLogout } from "@/features/me/components/MeLogout";
 import { meTabs, type MeTab } from "@/features/me/tabs";
 import { MTabBar } from "@/shared/layout/MTabBar";
 import { MTopBar } from "@/shared/layout/MTopBar";
@@ -14,7 +15,6 @@ import { MPage } from "@/shared/layout/Responsive";
 import { routes } from "@/shared/lib/routes";
 
 export function MMe() {
-  const { logout, logoutError } = useLogout();
   const router = useRouter();
   const params = useSearchParams();
   const { data: session } = useSession();
@@ -32,34 +32,24 @@ export function MMe() {
   }, [tab, params, router]);
 
   return (
-    <MPage>
+    <MPage className="stitch-surface h-dvh min-h-0 overflow-hidden [&>header]:shrink-0 [&>nav]:shrink-0">
       <MTopBar mode="home" />
-      <main
-        id="main-content"
-        tabIndex={-1}
-        className="flex flex-1 flex-col gap-[12px] px-[16px] pt-[20px] pb-[28px]"
-      >
-        <h1 className="tracking-h1 m-0 mb-[2px] text-[24px] font-extrabold">마이페이지</h1>
-        <MeOverview mobile />
-        <MeNavigation mobile favorites={favoriteCount} replies={replies} />
+      <main id="main-content" tabIndex={-1} className="flex min-h-0 flex-1 flex-col">
+        <h1 className="tracking-h1 m-0 shrink-0 px-4 pt-4 pb-3 text-[18px] font-bold">
+          마이페이지
+        </h1>
+        <div
+          role="region"
+          aria-label="마이페이지 내용"
+          tabIndex={0}
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-4 focus-visible:outline-offset-[-3px]"
+        >
+          <MeOverview mobile />
+          <MeNavigation mobile favorites={favoriteCount} replies={replies} />
+        </div>
         {session && (
-          <div className="flex flex-col items-start px-[8px]">
-            <button
-              type="button"
-              onClick={() =>
-                void logout().then((ok) => {
-                  if (ok) router.push(routes.main);
-                })
-              }
-              className="text-text-sub min-h-[44px] cursor-pointer text-[14px] font-bold"
-            >
-              로그아웃
-            </button>
-            {logoutError && (
-              <p role="alert" className="text-danger text-[13px]">
-                {logoutError}
-              </p>
-            )}
+          <div className="border-line-soft bg-surface shrink-0 border-t px-4 py-1.5">
+            <MeLogout />
           </div>
         )}
       </main>

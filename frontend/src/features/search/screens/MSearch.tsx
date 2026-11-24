@@ -15,6 +15,7 @@ import {
 } from "@/features/search/queries";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
+import { ScrollToTop } from "@/shared/ui/ScrollToTop";
 import { ResultBadge } from "./ResultBadge";
 
 export function MSearch() {
@@ -36,7 +37,7 @@ export function MSearch() {
   const tabs: SearchTab[] = ["전체", ...searchTypes];
 
   return (
-    <div className="bg-surface text-text flex min-h-screen w-full flex-col">
+    <div className="stitch-surface bg-surface text-text flex min-h-screen w-full flex-col">
       <header className="border-line-soft bg-surface sticky top-0 z-[2] flex items-center gap-[4px] border-b border-solid py-[8px] pr-[12px] pl-[6px]">
         <button
           type="button"
@@ -58,7 +59,6 @@ export function MSearch() {
           <label className="flex flex-1">
             <span className="sr-only">검색어</span>
             <input
-              autoFocus
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -92,7 +92,11 @@ export function MSearch() {
           </div>
         )}
 
-        <div role="group" aria-label="결과 종류" className="flex gap-[6px] px-[16px]">
+        <div
+          role="group"
+          aria-label="결과 종류"
+          className="bg-surface sticky top-[61px] z-[1] flex gap-[6px] overflow-x-auto px-4 py-2"
+        >
           {tabs.map((t) => {
             const on = t === tab;
             const count = t === "전체" ? searchTypes.reduce((n, k) => n + totals[k], 0) : totals[t];
@@ -103,8 +107,8 @@ export function MSearch() {
                 aria-pressed={on}
                 onClick={() => setTab(t)}
                 className={cn(
-                  "rounded-pill min-h-[38px] cursor-pointer border-0 px-[14px] text-[14px] font-bold",
-                  on ? "bg-text text-white" : "bg-fill text-text-sub",
+                  "rounded-pill min-h-[38px] flex-none cursor-pointer border-0 px-[14px] text-[14px] font-bold",
+                  on ? "bg-brand text-white" : "bg-fill text-text-sub",
                 )}
               >
                 {t} {count}
@@ -137,7 +141,14 @@ export function MSearch() {
             .map((sec) => (
               <section key={sec.type} className="flex flex-col pt-[8px]">
                 <h2 className="text-text-sub m-0 px-[20px] py-[8px] text-[14px] font-extrabold">
-                  {sec.type} {sec.count}
+                  {sec.type === "공고"
+                    ? "주거 공고 · 사업공간"
+                    : sec.type === "혜택"
+                      ? "혜택 · 지원금"
+                      : sec.type}{" "}
+                  <span className="rounded-pill bg-brand-soft text-brand-strong px-2 py-0.5 text-[12px] tabular-nums">
+                    {sec.count}
+                  </span>
                 </h2>
                 {sec.rows.map((r) => (
                   <Link
@@ -182,6 +193,7 @@ export function MSearch() {
             빠진 공고·정책 알려주기
           </Link>
         </div>
+        <ScrollToTop />
       </main>
     </div>
   );

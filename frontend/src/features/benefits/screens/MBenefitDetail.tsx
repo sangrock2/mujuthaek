@@ -23,7 +23,7 @@ export function MBenefitDetail({ id }: { id: string }) {
   useDetailTitle(b?.title);
   if (!b) {
     return (
-      <MPage>
+      <MPage className="stitch-surface">
         <MBackHeader title="혜택" backHref={routes.benefits} />
         {(loading || error) && <QueryFeedback error={error} label="혜택" queryKey={["benefits"]} />}
       </MPage>
@@ -31,7 +31,7 @@ export function MBenefitDetail({ id }: { id: string }) {
   }
 
   return (
-    <MPage>
+    <MPage className="stitch-surface">
       <MBackHeader title={b.title} backHref={routes.benefits} />
       <main
         id="main-content"

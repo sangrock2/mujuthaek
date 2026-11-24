@@ -8,6 +8,7 @@ import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import { ReportButton } from "@/features/report/components/ReportButton";
 import { MFavoriteHeart } from "@/features/favorites/components/FavoriteButtons";
 import { useMemo, useState } from "react";
+import { InfiniteScroll } from "@/shared/ui/InfiniteScroll";
 import Link from "next/link";
 import { ArrowRight, MapPin } from "lucide-react";
 import { MBackHeader, MBottomActions } from "@/shared/layout/MBackHeader";
@@ -64,7 +65,7 @@ function MApiUnits({
   onShowLife: (siteId: string) => void;
 }) {
   const q = useNoticeUnits(notice.id, true);
-  const [all, setAll] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(MOBILE_UNIT_COUNT);
   const sites = useMemo(() => notice.sites ?? [], [notice.sites]);
   const units = useMemo(
     () => (q.data?.pages ?? []).flatMap((p) => p.items.map((u) => toUnit(u, sites, judgment))),
@@ -80,14 +81,15 @@ function MApiUnits({
     countOk,
   } = useUnitPicker(units);
   if (q.isPending || units.length === 0) return <NoticeLocationSection sites={sites} mobile />;
-  const shown = all ? filtered : filtered.slice(0, MOBILE_UNIT_COUNT);
+  const shown = filtered.slice(0, visibleCount);
+  const hasHiddenUnits = filtered.length > shown.length;
   const located = sites.some((s) => s.lat !== null && s.lng !== null);
   const site = sites.find((s) => s.id === selected?.siteId);
   const directions = directionsUrl(site);
   // 필터를 바꾸면 처음 몇 집부터 다시 보여요
   const filter = (ok: boolean) => {
     setOnlyOk(ok);
-    setAll(false);
+    setVisibleCount(MOBILE_UNIT_COUNT);
   };
   const chip = (on: boolean) =>
     cn(
@@ -182,16 +184,19 @@ function MApiUnits({
           </ul>
         </div>
       ))}
-      {(filtered.length > shown.length || q.hasNextPage) && (
-        <button
-          type="button"
-          onClick={() => (filtered.length > shown.length ? setAll(true) : void q.fetchNextPage())}
-          disabled={q.isFetchingNextPage}
-          className="bg-fill text-text min-h-[44px] cursor-pointer rounded-sm border-0 text-[14px] font-bold disabled:opacity-60"
-        >
-          {q.isFetchingNextPage ? "불러오는 중" : "더 보기"}
-        </button>
-      )}
+      <InfiniteScroll
+        label="주택"
+        data={
+          hasHiddenUnits
+            ? {
+                hasMore: true,
+                loadingMore: false,
+                loadMoreError: false,
+                loadMore: () => setVisibleCount((count) => count + MOBILE_UNIT_COUNT),
+              }
+            : q.pagination
+        }
+      />
       {selected && (
         <div
           aria-live="polite"

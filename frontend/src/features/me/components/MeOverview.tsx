@@ -32,7 +32,7 @@ function MeAccountCard({
     <section
       aria-label="계정"
       className={cn(
-        "rounded-card border-line-soft bg-surface flex flex-wrap items-center justify-between gap-[12px] border p-[16px]",
+        "rounded-card bg-surface flex flex-wrap items-center justify-between gap-3 p-5",
         className,
       )}
     >
@@ -64,7 +64,7 @@ function MeAccountCard({
   );
 }
 
-const surface = "rounded-card border-line-soft bg-surface min-w-0 border p-[15px] sm:p-[19px]";
+const surface = "rounded-card bg-surface min-w-0 p-[15px] sm:p-[19px]";
 const more =
   "text-brand-strong inline-flex min-h-[44px] shrink-0 items-center gap-[3px] text-[13px] font-bold no-underline";
 
@@ -159,9 +159,9 @@ export function MeOverview({ mobile = false }: { mobile?: boolean }) {
           </Link>
         </div>
         {highlights.length > 0 ? (
-          <dl className="m-0 grid grid-cols-2 gap-[6px] sm:grid-cols-4">
+          <dl className="m-0 grid grid-cols-2 gap-3">
             {highlights.map(({ k, v }) => (
-              <div key={k} className="rounded-control bg-fill p-[10px]">
+              <div key={k} className="rounded-control bg-fill px-4 py-3">
                 <dt className="text-text-sub text-[12px]">{k}</dt>
                 <dd className="m-0 mt-[4px] text-[14px] font-bold break-words">{v}</dd>
               </div>

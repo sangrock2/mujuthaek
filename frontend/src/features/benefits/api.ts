@@ -1,6 +1,6 @@
 "use client";
 
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { toApplicant } from "@/features/conditions/applicant";
 import { inputHrefOf } from "@/features/conditions/needs";
@@ -245,23 +245,29 @@ export function useJudgeInput() {
 const PAGE_SIZE = 20;
 
 /** 혜택 맞춤 목록 (찾아볼 지역, 구간 값). 조건이 든 결과라 짧게만 둬요 */
-export function useBenefitSearch() {
+export function useBenefitSearch(category?: BenefitCategory) {
   const { ready, applicant, regionCodes } = useJudgeInput();
   return useInfiniteQuery({
-    queryKey: ["benefits", "search", regionCodes, applicant] as const,
-    queryFn: ({ pageParam }) =>
-      api.post<ApiBenefitSearch>(endpoints.benefitsSearch, {
-        filters: { regionCodes },
-        applicant,
-        cursor: pageParam,
-        size: PAGE_SIZE,
-      }),
+    queryKey: ["benefits", "search", regionCodes, applicant, category] as const,
+    queryFn: ({ pageParam, signal }) =>
+      api.post<ApiBenefitSearch>(
+        endpoints.benefitsSearch,
+        {
+          filters: { regionCodes, categories: category ? [categoryCode[category]] : undefined },
+          applicant,
+          cursor: pageParam,
+          size: PAGE_SIZE,
+        },
+        { signal },
+      ),
     initialPageParam: null as string | null,
-    getNextPageParam: (last) => (last.hasNext ? last.nextCursor : null),
+    getNextPageParam: ({ hasNext, nextCursor }, _pages, _lastCursor, cursors) =>
+      hasNext && nextCursor && !cursors.includes(nextCursor) ? nextCursor : null,
     enabled: ready,
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[4] === category ? previousData : undefined,
   });
 }
 

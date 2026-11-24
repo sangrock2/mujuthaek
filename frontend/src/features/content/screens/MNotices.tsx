@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { MBackHeader } from "@/shared/layout/MBackHeader";
+import { CustomerCenterHeader } from "@/features/content/components/WebContentShell";
 import { FilterChip } from "@/shared/ui/Chip";
 import { useAnnouncements } from "@/features/content/queries";
 import { routes } from "@/shared/lib/routes";
@@ -26,9 +26,10 @@ export function MNotices() {
   };
 
   return (
-    <div className="bg-surface text-text flex min-h-screen w-full flex-col">
-      <MBackHeader title="공지사항" backHref={routes.me} />
+    <div className="stitch-surface bg-surface text-text flex min-h-screen w-full flex-col">
+      <CustomerCenterHeader current={routes.announcements} />
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col pt-[12px] pb-[24px]">
+        <h1 className="tracking-h1 m-0 px-4 pt-4 text-[24px] font-extrabold">공지사항</h1>
         {current ? (
           <article className="flex flex-col gap-[16px] px-[20px] py-[8px]">
             <button

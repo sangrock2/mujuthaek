@@ -11,11 +11,12 @@ import {
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import { ReportButton } from "@/features/report/components/ReportButton";
 import { WebFavoriteButton } from "@/features/favorites/components/FavoriteButtons";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, ChevronRight, FileText, MapPin } from "lucide-react";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
+import { InfiniteScroll, type InfiniteScrollState } from "@/shared/ui/InfiniteScroll";
 import { EligibilityCard } from "@/features/notice/components/EligibilityCard";
 import { LifeCard } from "@/features/notice/components/LifeCard";
 import { NoticeBenefitRow } from "@/features/notice/components/NoticeBenefitRow";
@@ -59,7 +60,7 @@ type BlockUnitsProps = {
   /** 실제 API: 그림 지도 대신 넣을 지도 (고른 집 · 고르기) */
   map?: (selected: NoticeUnit | null, select: (id: string) => void) => React.ReactNode;
   /** 백엔드에 더 있으면 */
-  more?: { onClick: () => void; loading: boolean };
+  more?: InfiniteScrollState;
   /** 원본 엑셀 버튼 (목업만) */
   excel?: boolean;
   /** 고른 집 단지의 생활권 카드로 (실제 API) */
@@ -71,6 +72,12 @@ type BlockUnitsProps = {
 function BlockUnits({ units, map, more, excel = true, onShowLife, sites }: BlockUnitsProps) {
   const { onlyOk, setOnlyOk, shown, selected, select, countAll, countOk } = useUnitPicker(units);
   const directions = directionsUrl(sites?.find((s) => s.id === selected?.siteId));
+  const list = useRef<HTMLDivElement>(null);
+  const preview = useRef<HTMLElement>(null);
+  const selectedId = selected?.id;
+  useEffect(() => {
+    preview.current?.scrollTo(0, 0);
+  }, [selectedId]);
 
   return (
     <section
@@ -107,235 +114,239 @@ function BlockUnits({ units, map, more, excel = true, onShowLife, sites }: Block
         </div>
       </div>
 
-      <div className="flex flex-wrap items-stretch gap-[14px]">
+      <div className="grid h-[400px] grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-[14px]">
         <div
-          role="group"
+          ref={list}
+          role="region"
           aria-label="주택 목록"
-          className="box-content flex max-h-[400px] min-w-0 flex-col gap-[8px] overflow-y-auto pr-[2px]"
-          style={{ flex: "1 1 270px" }}
+          tabIndex={0}
+          className="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-0.5 pr-2"
         >
-          {bySite(shown).map((g) => (
-            <div key={g.key} role="group" aria-label={g.name} className="flex flex-col gap-[8px]">
-              {g.name && (
-                <h3 className="text-text-sub bg-surface sticky top-0 z-[1] m-0 py-[4px] text-[14px] font-extrabold">
-                  {g.name} <span className="text-brand">{g.count}호</span>
-                  {g.lifeScore !== undefined && (
-                    <span className="text-text-tertiary font-bold"> · 생활권 {g.lifeScore}점</span>
-                  )}
-                </h3>
-              )}
-              {g.units.map((u) => {
-                const on = u.id === selected?.id;
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => select(u.id)}
-                    className={cn(
-                      "text-text rounded-tile flex cursor-pointer flex-col gap-[4px] border-2 border-solid px-[14px] py-[12px] text-left",
-                      on ? "bg-row-selected border-brand" : "bg-surface border-line-soft",
+          <div className="flex flex-col gap-[8px]">
+            {bySite(shown).map((g) => (
+              <div key={g.key} role="group" aria-label={g.name} className="flex flex-col gap-[8px]">
+                {g.name && (
+                  <h3 className="text-text-sub bg-surface sticky top-0 z-[1] m-0 py-[4px] text-[14px] font-extrabold">
+                    {g.name} <span className="text-brand">{g.count}호</span>
+                    {g.lifeScore !== undefined && (
+                      <span className="text-text-tertiary font-bold">
+                        {" "}
+                        · 생활권 {g.lifeScore}점
+                      </span>
                     )}
-                  >
-                    <span className="flex w-full items-center justify-between gap-[8px]">
-                      <span className="text-[15px] font-bold">
-                        {g.name ? (u.label ?? u.name) : u.name}
+                  </h3>
+                )}
+                {g.units.map((u) => {
+                  const on = u.id === selected?.id;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => select(u.id)}
+                      className={cn(
+                        "text-text rounded-tile flex cursor-pointer flex-col gap-[4px] border-2 border-solid px-[14px] py-[12px] text-left",
+                        on ? "bg-row-selected border-brand" : "bg-surface border-line-soft",
+                      )}
+                    >
+                      <span className="flex w-full items-center justify-between gap-[8px]">
+                        <span className="text-[15px] font-bold">
+                          {g.name ? (u.label ?? u.name) : u.name}
+                        </span>
+                        <span
+                          className={cn(
+                            "rounded-badge flex-none px-[8px] py-[3px] text-[12px] font-bold",
+                            u.ok ? "bg-ok-bg text-ok-text" : "bg-fill text-text-sub",
+                          )}
+                        >
+                          {unitStatus(u)}
+                        </span>
                       </span>
-                      <span
-                        className={cn(
-                          "rounded-badge flex-none px-[8px] py-[3px] text-[12px] font-bold",
-                          u.ok ? "bg-ok-bg text-ok-text" : "bg-fill text-text-sub",
-                        )}
-                      >
-                        {unitStatus(u)}
+                      <span className="text-text-sub text-[13px]">
+                        {u.type} · {u.area} · {u.floor}
                       </span>
-                    </span>
-                    <span className="text-text-sub text-[13px]">
-                      {u.type} · {u.area} · {u.floor}
-                    </span>
-                    <UnitPrices unit={u} />
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-          {more && (
-            <button
-              type="button"
-              onClick={more.onClick}
-              disabled={more.loading}
-              className="bg-fill text-text min-h-[44px] flex-none cursor-pointer rounded-sm border-0 text-[14px] font-bold disabled:opacity-60"
-            >
-              {more.loading ? "불러오는 중" : "더 보기"}
-            </button>
-          )}
+                      <UnitPrices unit={u} />
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {more && <InfiniteScroll data={more} label="주택" scrollRoot={list} />}
+          </div>
         </div>
 
-        {map ? (
-          <div className="flex min-w-0" style={{ flex: "999 1 360px" }}>
-            {map(selected, select)}
-          </div>
-        ) : (
-          <div
-            aria-label="주택 위치 지도"
-            role="group"
-            className="bg-map-road relative h-[400px] min-w-0 overflow-hidden rounded-[20px]"
-            style={{ flex: "999 1 360px" }}
-          >
-            {mapBlocks.map((b) => (
-              <span
-                key={b.label}
-                aria-hidden
-                className={cn("bg-map-road-2 absolute rounded-[18px]", b.box)}
-              />
-            ))}
-            <span
-              aria-hidden
-              className="bg-map-park absolute top-[56%] left-[70%] h-[26%] w-[22%] rounded-[45%_55%_50%_50%]"
-            />
-            <span aria-hidden className="absolute top-1/2 right-0 left-0 h-[10px] bg-white" />
-            <span aria-hidden className="absolute top-0 bottom-0 left-[49%] w-[9px] bg-white" />
-            {mapBlocks.map((b) => (
-              <span
-                key={b.label}
-                aria-hidden
-                className={cn("text-text-tertiary absolute text-[12px] font-bold", b.text)}
-              >
-                {b.label}
-              </span>
-            ))}
-            <span
-              aria-hidden
-              className="text-brand-strong absolute top-[66%] left-[73%] text-[12px]"
-            >
-              근린공원
-            </span>
-            <span
-              aria-hidden
-              className="rounded-tag text-text-sub absolute top-[52%] left-[51%] bg-white px-[6px] py-[2px] text-[12px] font-bold"
-            >
-              ○○역
-            </span>
-
-            {shown
-              .filter((u) => u.id !== selected?.id)
-              .map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  aria-label={`${u.name}, ${unitStatus(u)} 위치 보기`}
-                  onClick={() => select(u.id)}
-                  className="absolute mt-[-15px] ml-[-15px] flex size-[30px] cursor-pointer items-center justify-center border-0 bg-transparent p-0"
-                  style={{ left: `${u.x}%`, top: `${u.y}%` }}
-                >
-                  <span
-                    className={cn(
-                      "rounded-pill box-content size-[16px] border-[3px] border-solid border-white shadow-[0_2px_6px_rgba(25,31,40,0.25)]",
-                      u.ok ? "bg-brand" : "bg-placeholder-icon",
-                    )}
-                  />
-                </button>
-              ))}
-
-            {selected && (
-              <div
-                className="pointer-events-none absolute flex -translate-x-1/2 -translate-y-full flex-col items-center"
-                style={{ left: `${selected.x}%`, top: `${selected.y}%` }}
-              >
-                <span className="flex flex-col gap-[2px] rounded-sm bg-white px-[11px] py-[7px] whitespace-nowrap shadow-[0_6px_18px_rgba(25,31,40,0.18)]">
-                  <span className="text-[13px] font-extrabold">{selected.name}</span>
-                  <span className="text-text-sub text-[12px]">
-                    {selected.deposit} · {selected.rent}
-                  </span>
-                </span>
-                <MapPin
-                  size={36}
-                  strokeWidth={1.5}
-                  aria-hidden
-                  className="fill-brand mt-[2px] text-white drop-shadow-[0_3px_4px_rgba(25,31,40,0.3)]"
-                />
-              </div>
-            )}
-
-            <div className="text-text-sub absolute bottom-[12px] left-[12px] flex gap-[10px] rounded-[10px] bg-white px-[10px] py-[6px] text-[12px]">
-              <span className="inline-flex items-center gap-[5px]">
-                <span className="rounded-pill bg-brand size-[10px]" />
-                신청 가능
-              </span>
-              <span className="inline-flex items-center gap-[5px]">
-                <span className="rounded-pill bg-placeholder-icon size-[10px]" />
-                다른 대상
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {selected && (
-        <div
-          aria-live="polite"
-          className="bg-bg flex flex-wrap items-center justify-between gap-[14px] rounded-[20px] px-[20px] py-[18px]"
+        <section
+          ref={preview}
+          aria-label="선택한 주택 상세"
+          tabIndex={0}
+          className="min-h-0 min-w-0 overflow-y-auto overscroll-contain pr-2"
         >
-          <div className="flex min-w-0 flex-col gap-[5px]">
-            <span className="flex flex-wrap items-center gap-[8px]">
-              <span className="tracking-title text-[18px] font-extrabold">{selected.name}</span>
-              <span
-                className={cn(
-                  "rounded-badge px-[8px] py-[3px] text-[12px] font-bold",
-                  selected.ok ? "bg-ok-bg text-ok-text" : "bg-surface text-text-sub",
-                )}
+          <div className="flex min-w-0 flex-col gap-[12px]">
+            {map ? (
+              <div className="flex min-w-0">{map(selected, select)}</div>
+            ) : (
+              <div
+                aria-label="주택 위치 지도"
+                role="group"
+                className="bg-map-road relative h-[230px] min-w-0 overflow-hidden rounded-[20px]"
               >
-                {unitStatus(selected)}
-              </span>
-            </span>
-            <span className="text-text-sub text-[14px]">
-              {[`${selected.type} ${selected.area}`, selected.floor, selected.station]
-                .filter(Boolean)
-                .join(" · ")}
-            </span>
-            {selected.prices ? (
-              <>
-                {selected.prices.map((p) => (
-                  <span key={p.target} className="text-[15px]">
-                    <span className="text-text-sub mr-[6px] text-[14px]">{p.target}</span>
-                    보증금 <strong>{p.deposit}</strong> · <strong>{p.rent}</strong>
+                {mapBlocks.map((b) => (
+                  <span
+                    key={b.label}
+                    aria-hidden
+                    className={cn("bg-map-road-2 absolute rounded-[18px]", b.box)}
+                  />
+                ))}
+                <span
+                  aria-hidden
+                  className="bg-map-park absolute top-[56%] left-[70%] h-[26%] w-[22%] rounded-[45%_55%_50%_50%]"
+                />
+                <span aria-hidden className="absolute top-1/2 right-0 left-0 h-[10px] bg-white" />
+                <span aria-hidden className="absolute top-0 bottom-0 left-[49%] w-[9px] bg-white" />
+                {mapBlocks.map((b) => (
+                  <span
+                    key={b.label}
+                    aria-hidden
+                    className={cn("text-text-tertiary absolute text-[12px] font-bold", b.text)}
+                  >
+                    {b.label}
                   </span>
                 ))}
-                <span className="text-[15px]">
-                  준비할 돈 <UnitPrepValue unit={selected} />
+                <span
+                  aria-hidden
+                  className="text-brand-strong absolute top-[66%] left-[73%] text-[12px]"
+                >
+                  근린공원
                 </span>
-              </>
-            ) : (
-              <span className="text-[15px]">
-                보증금 <strong>{selected.deposit}</strong> · <strong>{selected.rent}</strong> ·
-                준비할 돈 <UnitPrepValue unit={selected} />
-              </span>
+                <span
+                  aria-hidden
+                  className="rounded-tag text-text-sub absolute top-[52%] left-[51%] bg-white px-[6px] py-[2px] text-[12px] font-bold"
+                >
+                  ○○역
+                </span>
+
+                {shown
+                  .filter((u) => u.id !== selected?.id)
+                  .map((u) => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      aria-label={`${u.name}, ${unitStatus(u)} 위치 보기`}
+                      onClick={() => select(u.id)}
+                      className="absolute mt-[-15px] ml-[-15px] flex size-[30px] cursor-pointer items-center justify-center border-0 bg-transparent p-0"
+                      style={{ left: `${u.x}%`, top: `${u.y}%` }}
+                    >
+                      <span
+                        className={cn(
+                          "rounded-pill box-content size-[16px] border-[3px] border-solid border-white shadow-[0_2px_6px_rgba(25,31,40,0.25)]",
+                          u.ok ? "bg-brand" : "bg-placeholder-icon",
+                        )}
+                      />
+                    </button>
+                  ))}
+
+                {selected && (
+                  <div
+                    className="pointer-events-none absolute flex -translate-x-1/2 -translate-y-full flex-col items-center"
+                    style={{ left: `${selected.x}%`, top: `${selected.y}%` }}
+                  >
+                    <span className="flex flex-col gap-[2px] rounded-sm bg-white px-[11px] py-[7px] whitespace-nowrap shadow-[0_6px_18px_rgba(25,31,40,0.18)]">
+                      <span className="text-[13px] font-extrabold">{selected.name}</span>
+                      <span className="text-text-sub text-[12px]">
+                        {selected.deposit} · {selected.rent}
+                      </span>
+                    </span>
+                    <MapPin
+                      size={36}
+                      strokeWidth={1.5}
+                      aria-hidden
+                      className="fill-brand mt-[2px] text-white drop-shadow-[0_3px_4px_rgba(25,31,40,0.3)]"
+                    />
+                  </div>
+                )}
+
+                <div className="text-text-sub absolute bottom-[12px] left-[12px] flex gap-[10px] rounded-[10px] bg-white px-[10px] py-[6px] text-[12px]">
+                  <span className="inline-flex items-center gap-[5px]">
+                    <span className="rounded-pill bg-brand size-[10px]" />
+                    신청 가능
+                  </span>
+                  <span className="inline-flex items-center gap-[5px]">
+                    <span className="rounded-pill bg-placeholder-icon size-[10px]" />
+                    다른 대상
+                  </span>
+                </div>
+              </div>
+            )}
+            {selected && (
+              <div
+                aria-live="polite"
+                className="bg-bg flex flex-wrap items-center justify-between gap-[14px] rounded-[20px] px-[20px] py-[18px]"
+              >
+                <div className="flex min-w-0 flex-col gap-[5px]">
+                  <span className="flex flex-wrap items-center gap-[8px]">
+                    <span className="tracking-title text-[18px] font-extrabold">
+                      {selected.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-badge px-[8px] py-[3px] text-[12px] font-bold",
+                        selected.ok ? "bg-ok-bg text-ok-text" : "bg-surface text-text-sub",
+                      )}
+                    >
+                      {unitStatus(selected)}
+                    </span>
+                  </span>
+                  <span className="text-text-sub text-[14px]">
+                    {[`${selected.type} ${selected.area}`, selected.floor, selected.station]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  {selected.prices ? (
+                    <>
+                      {selected.prices.map((p) => (
+                        <span key={p.target} className="text-[15px]">
+                          <span className="text-text-sub mr-[6px] text-[14px]">{p.target}</span>
+                          보증금 <strong>{p.deposit}</strong> · <strong>{p.rent}</strong>
+                        </span>
+                      ))}
+                      <span className="text-[15px]">
+                        준비할 돈 <UnitPrepValue unit={selected} />
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-[15px]">
+                      보증금 <strong>{selected.deposit}</strong> · <strong>{selected.rent}</strong>{" "}
+                      · 준비할 돈 <UnitPrepValue unit={selected} />
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-[8px]">
+                  {onShowLife && selected.siteId && selected.lifeScore !== undefined && (
+                    <button
+                      type="button"
+                      onClick={() => onShowLife(selected.siteId!)}
+                      className="text-text inline-flex min-h-[46px] cursor-pointer items-center gap-[6px] rounded-sm border-0 bg-white px-[14px] text-[14px] font-bold"
+                    >
+                      <MapPin size={17} aria-hidden />이 집 생활권 {selected.lifeScore}점
+                    </button>
+                  )}
+                  {directions && (
+                    <a
+                      href={directions}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-brand inline-flex min-h-[46px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold text-white no-underline hover:text-white"
+                    >
+                      <ArrowRight size={17} strokeWidth={2.2} aria-hidden />
+                      길찾기
+                    </a>
+                  )}
+                </div>
+              </div>
             )}
           </div>
-          <div className="flex gap-[8px]">
-            {onShowLife && selected.siteId && selected.lifeScore !== undefined && (
-              <button
-                type="button"
-                onClick={() => onShowLife(selected.siteId!)}
-                className="text-text inline-flex min-h-[46px] cursor-pointer items-center gap-[6px] rounded-sm border-0 bg-white px-[14px] text-[14px] font-bold"
-              >
-                <MapPin size={17} aria-hidden />이 집 생활권 {selected.lifeScore}점
-              </button>
-            )}
-            {directions && (
-              <a
-                href={directions}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-brand inline-flex min-h-[46px] items-center gap-[6px] rounded-sm px-[14px] text-[14px] font-bold text-white no-underline hover:text-white"
-              >
-                <ArrowRight size={17} strokeWidth={2.2} aria-hidden />
-                길찾기
-              </a>
-            )}
-          </div>
-        </div>
-      )}
+        </section>
+      </div>
     </section>
   );
 }
@@ -363,11 +374,7 @@ function ApiBlockUnits({
       excel={false}
       onShowLife={onShowLife}
       sites={sites}
-      more={
-        q.hasNextPage
-          ? { onClick: () => void q.fetchNextPage(), loading: q.isFetchingNextPage }
-          : undefined
-      }
+      more={q.pagination}
       map={(selected, select) => (
         <SitesMap
           sites={sites}
@@ -376,7 +383,7 @@ function ApiBlockUnits({
             const first = units.find((u) => u.siteId === siteId);
             if (first) select(first.id);
           }}
-          className="h-[400px] w-full"
+          className="h-[230px] w-full"
         />
       )}
     />
