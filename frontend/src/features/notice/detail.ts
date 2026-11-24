@@ -58,6 +58,7 @@ export type ApiNoticeDetail = {
     dday: number | null;
     regionName: string | null;
     detailUrl: string | null;
+    postedOn?: string | null;
   };
   summary: {
     summaryText: string | null;
@@ -252,8 +253,16 @@ function soleFileIdOf(d: ApiNoticeDetail, files: NoticePdfFile[]): string | null
   return read.length === 1 && files.some((f) => f.id === read[0].id) ? read[0].id! : null;
 }
 
+const seoulTimeOf = (value: string | null) =>
+  value?.match(/^\d{4}-\d\d-\d\dT(\d\d:\d\d):\d\d\+09:00$/)?.[1];
+
 const hoursText = (s: ApiSchedule) => {
-  const hours = s.dailyHours.map((h) => `${h.start}~${h.end}`).join(", ");
+  const start = seoulTimeOf(s.startsAt);
+  const end = seoulTimeOf(s.endsAt);
+  const exactDay = start && end && dayOf(s.startsAt) === dayOf(s.endsAt);
+  const hours =
+    s.dailyHours.map((h) => `${h.start}~${h.end}`).join(", ") ||
+    (exactDay ? `${start}~${end}` : "");
   const off = s.excludedDays.map((d) => dayText[d] ?? d).join("·");
   return [hours, off && `${off} 제외`].filter(Boolean).join(" · ") || undefined;
 };
@@ -475,13 +484,16 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
   }
   const start = h.applyStart ?? h.applyEnd;
   const end = h.applyEnd ?? h.applyStart;
+  const lastApplication = d.schedules.find(
+    (s) => s.kinds.includes("APPLICATION") && dayOf(s.endsAt) === end,
+  );
   const sites = d.sites.filter((s) => s.name || s.address);
   const pdfFiles = pdfFilesOf(d);
   const anchors: NoticeDoc["anchors"] = {};
   const sectionItems = {
     eligibility: d.conditions,
     housing: d.unitTypes,
-    schedule: d.schedules,
+    schedule: application?.evidence.length ? [application] : d.schedules,
     apply: d.requiredDocuments,
   } as const;
   for (const [key, items] of Object.entries(sectionItems)) {
@@ -491,7 +503,16 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
 
   return {
     status: statusOf[h.status],
-    applyPeriod: start && end ? { start, end, note: application && hoursText(application) } : null,
+    applyPeriod:
+      start && end
+        ? {
+            start,
+            end,
+            endTime: seoulTimeOf(lastApplication?.endsAt ?? null),
+            note: application && hoursText(application),
+          }
+        : null,
+    announcedOn: h.postedOn ?? undefined,
     summary: d.summary.summaryText ?? "",
     source: {
       fileName: pdfFiles[0]?.name ?? d.files[0]?.name ?? "",
@@ -509,7 +530,7 @@ function docOf(d: ApiNoticeDetail, today: string): NoticeDoc {
     pages: {
       eligibility: firstPage(d.conditions),
       housing: firstPage(d.unitTypes),
-      schedule: firstPage(d.schedules),
+      schedule: firstPage(sectionItems.schedule),
       apply: firstPage(d.requiredDocuments),
     },
     eligibility: d.conditions.map((c) => ({

@@ -7,8 +7,9 @@ export function LegalHelp({ privacy }: { privacy: boolean }) {
   const requestHref = `mailto:${LEGAL_CONTACT}?subject=${encodeURIComponent(privacy ? "[개인정보 권리 행사 요청]" : "[이용 제한 이의 신청·서비스 문의]")}`;
   return (
     <section
+      id={privacy ? "privacy-rights" : undefined}
       aria-label={privacy ? "개인정보 권리 행사 안내" : "서비스 문의와 이의 신청 안내"}
-      className="rounded-card border-line bg-surface mb-[24px] border border-solid p-[20px] text-[14px] leading-[1.9] sm:p-[28px]"
+      className="rounded-card border-line bg-surface mb-[24px] scroll-mt-[85px] border border-solid p-[20px] text-[14px] leading-[1.9] sm:p-[28px]"
     >
       <h2 className="m-0 mb-[12px] text-[18px] font-bold">
         {privacy ? "내 정보를 관리하려면" : "문의하거나 이의를 신청하려면"}
@@ -21,24 +22,22 @@ export function LegalHelp({ privacy }: { privacy: boolean }) {
               <Link href="/me?tab=privacy" className={linkClass}>
                 개인정보 설정 열기
               </Link>
-              에서 ‘저장한 조건 모두 지우기’를 선택하세요. 모바일에서는 ‘내 정보’의 ‘저장한 조건
-              지우기’를 이용하세요. 다른 기기·브라우저에 저장한 데이터는 각각 삭제해야 하며,
-              브라우저 설정의 사이트 데이터 삭제도 사용할 수 있습니다.
+              에서 ‘저장한 조건 모두 지우기’를 선택하세요. 다른 기기·브라우저에 저장한 데이터는 각각
+              삭제해야 하며, 브라우저 설정의 사이트 데이터 삭제도 사용할 수 있습니다.
             </p>
           </li>
           <li>
             <strong>연락용 이메일 삭제·동의 철회</strong>
             <p className="m-0">
-              로그인 후 ‘내 정보’의 ‘연락용 이메일’에서 ‘이메일 지우기 (동의 철회)’를 선택하세요.
-              연락용 이메일 삭제와 회원 탈퇴는 별도입니다.
+              로그인 후 ‘개인정보 설정’의 ‘이메일’에서 ‘계정 안내에 이메일 사용’을 열고 ‘계정 안내
+              동의 철회’를 선택하세요.
             </p>
           </li>
           <li>
             <strong>회원 탈퇴</strong>
             <p className="m-0">
-              로그인 후 ‘내 정보’에서 ‘회원 탈퇴’ → ‘확인하고 탈퇴하기’를 선택하고 연결된 소셜
-              계정으로 재인증하세요. PC에서는 개인정보 설정에서, 모바일에서는 내 정보 하단에서
-              시작할 수 있습니다. 기기에 저장한 조건과 소셜 제공자 계정은 별도로 확인해 주세요.
+              로그인 후 ‘개인정보 설정’에서 ‘회원 탈퇴’ → ‘확인하고 탈퇴하기’를 선택하고 연결된 소셜
+              계정으로 재인증하세요. 기기에 저장한 조건과 소셜 제공자 계정은 별도로 확인해 주세요.
             </p>
           </li>
           <li>

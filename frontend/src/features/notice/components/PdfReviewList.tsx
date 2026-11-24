@@ -26,15 +26,19 @@ export function PdfReviewList({
   selected,
   highlighted,
   missed,
+  comparison = false,
   onPick,
 }: {
   items: PdfReviewItem[];
   selected?: string;
   highlighted: boolean;
   missed: boolean;
+  comparison?: boolean;
   onPick: (id: string) => void;
 }) {
-  const [expandedFor, setExpandedFor] = useState<string | null>();
+  const [expandedFor, setExpandedFor] = useState<string | null | undefined>(
+    comparison ? (selected ?? null) : undefined,
+  );
   const [pickedGroup, setPickedGroup] = useState<string>();
   const toggle = useRef<HTMLButtonElement>(null);
   const current = items.find((item) => item.id === selected);
@@ -52,16 +56,19 @@ export function PdfReviewList({
   }, [selected]);
 
   return (
-    <section aria-label="원문에서 확인할 항목" className="border-line-soft border-b px-3 py-2">
+    <section
+      aria-label="원문에서 확인할 항목"
+      className={cn("border-line-soft border-b px-3 py-2", comparison && "px-4 py-3")}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2
             id={current ? reviewAnchorId(current.id) : undefined}
             className="text-text line-clamp-2 text-[14px] font-extrabold"
           >
-            {current?.label ?? "원문에서 확인할 항목"}
+            {comparison ? "원문에서 확인할 항목" : (current?.label ?? "원문에서 확인할 항목")}
           </h2>
-          {current && (
+          {!comparison && current && (
             <p className="text-text-sub mt-0.5 text-[12px]" role="status">
               {current.location
                 ? [
@@ -105,20 +112,22 @@ export function PdfReviewList({
               ))}
             </select>
           )}
-          <ul className="max-h-[28dvh] list-none space-y-1 overflow-y-auto">
+          <ul className={cn("list-none space-y-1", !comparison && "max-h-[28dvh] overflow-y-auto")}>
             {shown.map((item) => (
               <li key={item.id} id={item.id !== selected ? reviewAnchorId(item.id) : undefined}>
                 <button
                   type="button"
                   aria-current={item.id === selected ? "true" : undefined}
                   onClick={() => {
-                    setExpandedFor(undefined);
+                    setExpandedFor(comparison ? item.id : undefined);
                     onPick(item.id);
                     toggle.current?.focus({ preventScroll: true });
                   }}
                   className={cn(
                     "flex min-h-[40px] w-full cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-[13px]",
                     item.id === selected ? "bg-brand-soft text-brand-strong" : "hover:bg-fill",
+                    comparison && "min-h-[48px] px-3",
+                    comparison && item.id !== selected && "bg-bg",
                   )}
                 >
                   <span className="line-clamp-2 flex-1">{item.label}</span>

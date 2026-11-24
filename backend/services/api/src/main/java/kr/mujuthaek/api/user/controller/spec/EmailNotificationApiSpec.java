@@ -4,12 +4,13 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import kr.mujuthaek.api.user.controller.EmailNotificationController.Address;
+import kr.mujuthaek.api.user.controller.EmailNotificationController.Code;
 import kr.mujuthaek.api.user.controller.EmailNotificationController.Token;
 import kr.mujuthaek.api.user.service.EmailNotificationService.Settings;
 import kr.mujuthaek.api.user.service.EmailNotificationService.Status;
 import kr.mujuthaek.api.user.service.LoginUser;
 
-@Tag(name = "이메일 알림 설정", description = "직접 등록한 주소를 인증하고 별도 수신 동의 후 알림을 받습니다.")
+@Tag(name = "이메일 알림 설정", description = "등록 시 동의하고 주소를 인증하면 이메일 알림을 받습니다.")
 public interface EmailNotificationApiSpec {
   @Operation(summary = "내 이메일 알림 상태")
   Status get(@Parameter(hidden = true) LoginUser user);
@@ -20,10 +21,16 @@ public interface EmailNotificationApiSpec {
   @Operation(summary = "이메일 주소 인증", description = "요청한 계정에서 15분·1회용 링크를 확인합니다. 수신 동의는 별도입니다.")
   Status verify(@Parameter(hidden = true) LoginUser user, Token body);
 
+  @Operation(summary = "6자리 이메일 인증번호 요청", description = "이메일 수집·이용과 알림 수신에 동의해야 합니다.")
+  Status requestCode(@Parameter(hidden = true) LoginUser user, Address body);
+
+  @Operation(summary = "이메일 인증번호 확인", description = "요청한 계정에서 5분 동안 사용할 수 있습니다.")
+  Status verifyCode(@Parameter(hidden = true) LoginUser user, Code body);
+
   @Operation(summary = "이메일 알림 수신 설정 저장")
   Status save(@Parameter(hidden = true) LoginUser user, Settings body);
 
-  @Operation(summary = "알림 이메일 수정 시작", description = "기존 주소의 인증 링크와 알림 수신 동의를 해제합니다.")
+  @Operation(summary = "알림 이메일 수정 시작", description = "기존 주소의 인증과 알림 수신 동의를 해제합니다.")
   Status edit(@Parameter(hidden = true) LoginUser user);
 
   @Operation(summary = "알림 이메일 수신 동의 철회")

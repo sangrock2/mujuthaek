@@ -4,7 +4,6 @@ import { PreparationButton } from "@/features/preparations/PreparationButton";
 import { useDetailTitle } from "@/shared/lib/useDetailTitle";
 
 import {
-  DETAIL_MAIN_BASIS_WITH_CHAT,
   NoticeChat,
   WebNoticeChatButton,
   useNoticeChatOpen,
@@ -14,13 +13,13 @@ import { ReportButton } from "@/features/report/components/ReportButton";
 import { WebFavoriteButton } from "@/features/favorites/components/FavoriteButtons";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronRight, FileText, MapPin, X } from "lucide-react";
+import { ArrowRight, ChevronRight, FileText, MapPin } from "lucide-react";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
 import { EligibilityCard } from "@/features/notice/components/EligibilityCard";
 import { LifeCard } from "@/features/notice/components/LifeCard";
 import { NoticeBenefitRow } from "@/features/notice/components/NoticeBenefitRow";
-import { NoticeTags } from "@/features/notice/components/NoticeTags";
+import { NoticeOverview } from "@/features/notice/components/NoticeOverview";
 import { WebUnitFilter } from "@/features/notice/components/UnitFilter";
 import {
   NoticeHeldBanner,
@@ -28,10 +27,8 @@ import {
   NoticeToc,
 } from "@/features/notice/components/NoticeSections";
 import { NoticeVersions } from "@/features/notice/components/NoticeVersions";
-import { NOTICE_PDF_PANEL_WIDTH, PdfViewer } from "@/features/notice/components/PdfViewer";
-import { RegulationNotice } from "@/features/notice/components/RegulationNotice";
+import { PdfViewer } from "@/features/notice/components/PdfViewer";
 import { WebRankCard } from "@/features/notice/components/RankCard";
-import { dueText, formatPeriod, statusLabel } from "@/features/notice/format";
 import { noticeOriginal } from "@/features/notice/original";
 import { useNoticeJudgment, withMine, type NoticeJudgment } from "@/features/notice/judgment";
 import { bySite, directionsUrl, toUnit, useNoticeUnits } from "@/features/notice/units";
@@ -421,7 +418,6 @@ export function WebDetail({ id }: { id: string }) {
   );
   const openOriginal = original.openOriginal;
   const pdfUrl = original.viewer?.src;
-  const pdfSpace = pdf.open && pdfUrl ? NOTICE_PDF_PANEL_WIDTH : undefined;
   /** 주택목록에서 고른 집 단지의 생활권으로 */
   const showLife = (siteId: string) => {
     setLifeSite(siteId);
@@ -434,151 +430,41 @@ export function WebDetail({ id }: { id: string }) {
 
   return (
     <WebPage>
-      <div
-        className="flex flex-1 flex-col [overflow-anchor:none]"
-        style={{ paddingRight: pdfSpace }}
-      >
-        {pdfSpace ? (
-          <div className="bg-surface border-line-soft sticky top-0 z-[20] flex items-start justify-between gap-3 border-b px-4 py-3 lg:px-6">
-            <div className="min-w-0">
-              <span className="text-text-sub block truncate text-[12px] font-semibold">
-                {original.selectedReview?.group?.label ?? "공고 원문 비교"}
-              </span>
-              <p className="text-text line-clamp-2 text-[16px] font-extrabold">
-                {original.selectedReview?.label ?? n.title}
-              </p>
-              {original.selectedReview?.reason && (
-                <p className="text-text-sub mt-0.5 line-clamp-2 text-[13px]">
-                  {original.selectedReview.reason}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={pdf.close}
-              className="bg-fill text-text inline-flex min-h-[40px] shrink-0 cursor-pointer items-center gap-1 rounded-sm px-2.5 text-[13px] font-bold"
-            >
-              <X size={15} aria-hidden />
-              비교 닫기
-            </button>
-          </div>
-        ) : (
-          <WebHeader mode="home" current={routes.homes} />
-        )}
-        <WebMain
-          className={cn("gap-[20px] pt-[24px] pb-[80px]", pdfSpace && "max-w-[760px] px-6 pt-4")}
-        >
+      <div className="flex flex-1 flex-col">
+        <WebHeader mode="home" current={routes.homes} />
+        <WebMain className="gap-[16px] pt-[22px] pb-[64px]">
           <nav
             aria-label="위치"
-            className="text-text-tertiary flex items-center gap-[4px] text-[14px]"
+            className="text-text-tertiary flex min-w-0 items-center gap-[6px] text-[14px]"
           >
             <Link
               href={routes.homes}
-              className="text-text-sub hover:text-text-sub inline-flex min-h-[36px] items-center font-semibold no-underline"
+              className="text-text-sub hover:text-text-sub inline-flex min-h-[36px] shrink-0 items-center font-semibold no-underline"
             >
-              내 집
+              주거 공고
             </Link>
-            <ChevronRight size={16} aria-hidden />
-            <span aria-current="page">{n.title}</span>
+            <ChevronRight size={16} className="shrink-0" aria-hidden />
+            <span aria-current="page" className="truncate">
+              {n.title}
+            </span>
           </nav>
+
+          <NoticeOverview
+            notice={n}
+            verdict={j.judgment?.verdict}
+            variant="web"
+            onOpenPdf={original.hasPdf ? () => openOriginal() : undefined}
+          />
 
           <div
             className={cn(
               "grid items-start gap-[24px]",
-              pdf.open || chatOpen ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_320px]",
+              chatOpen ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_320px]",
             )}
           >
-            <div
-              className="flex min-w-0 flex-col gap-[16px]"
-              style={{ flex: `999 1 ${chatOpen ? DETAIL_MAIN_BASIS_WITH_CHAT : 600}px` }}
-            >
-              <section
-                aria-label="공고 요약"
-                className="rounded-card-lg bg-surface overflow-hidden"
-              >
-                <div
-                  className={cn(
-                    "flex flex-col",
-                    pdfSpace ? "gap-4 px-5 py-5" : "gap-[20px] px-[30px] pt-[28px] pb-[30px]",
-                  )}
-                >
-                  <div className="flex flex-col gap-[10px]">
-                    <NoticeTags
-                      verdict={j.judgment?.verdict ?? "check"}
-                      rank={n.ranking?.myRank}
-                      due={dueText(n)}
-                      tags={n.tags}
-                      size="lg"
-                    />
-                    <h1
-                      className={cn(
-                        "tracking-h1 m-0 font-extrabold",
-                        pdfSpace ? "text-[26px]" : "text-[34px]",
-                      )}
-                    >
-                      {n.title}
-                    </h1>
-                    <span className="text-text-sub text-[16px]">{n.meta}</span>
-                    {doc.summary && <p className="m-0 text-[16px] leading-[1.6]">{doc.summary}</p>}
-                  </div>
-                  <dl
-                    className="m-0 grid gap-[10px]"
-                    style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
-                  >
-                    {n.facts.map((f) => (
-                      <div
-                        key={f.label}
-                        className={cn(
-                          "bg-bg rounded-tile",
-                          pdfSpace ? "px-3 py-2.5" : "px-[18px] py-[16px]",
-                        )}
-                      >
-                        <dt className="text-text-sub text-[13px]">{f.label}</dt>
-                        <dd className="mx-0 mt-[4px] mb-0 text-[17px] font-bold">{f.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  {doc.applyPeriod && (
-                    <div className="border-line-soft flex flex-wrap items-baseline gap-x-[14px] gap-y-[4px] border-t border-solid pt-[18px]">
-                      <span className="text-text-sub text-[14px]">신청 기간</span>
-                      <span className="text-[18px] font-extrabold">
-                        {formatPeriod(doc.applyPeriod.start, doc.applyPeriod.end)}
-                      </span>
-                      <span className="text-brand-strong text-[14px] font-bold">
-                        {statusLabel[doc.status]}
-                      </span>
-                      {doc.applyPeriod.note && (
-                        <span className="text-text-sub text-[14px]">{doc.applyPeriod.note}</span>
-                      )}
-                    </div>
-                  )}
-                  <RegulationNotice noticeId={n.id} variant="web" />
-                  {!pdfSpace && (
-                    <div className="flex flex-wrap gap-2">
-                      <a
-                        href="#eligibility-h"
-                        className="bg-brand hover:bg-brand-strong inline-flex min-h-[44px] items-center gap-1.5 rounded-sm px-4 text-[14px] font-bold text-white no-underline"
-                      >
-                        내 자격 보기
-                        <ArrowRight size={16} aria-hidden />
-                      </a>
-                      {original.hasPdf && (
-                        <button
-                          type="button"
-                          onClick={() => openOriginal()}
-                          className="bg-fill text-brand-strong inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-sm px-4 text-[14px] font-bold"
-                        >
-                          <FileText size={16} aria-hidden />
-                          공고 PDF 열기
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </section>
-
+            <div className="flex min-w-0 flex-col gap-[16px]">
               {/* 이 공고 이야기 창 (여는 곳은 오른쪽 「이야기」 단추) */}
-              <NoticeChat noticeId={n.id} variant="web" rightOffset={pdfSpace} />
+              <NoticeChat noticeId={n.id} variant="web" />
 
               <NoticeHeldBanner doc={doc} variant="web" onOpenReview={original.openReview} />
               <NoticeVersions noticeId={n.id} variant="web" />
@@ -679,7 +565,7 @@ export function WebDetail({ id }: { id: string }) {
               )}
 
               {/* 행동과 안내도 같은 스크롤 흐름에 두어 준비할 돈을 가리지 않아요. */}
-              <div className="bg-bg flex flex-col gap-[16px]">
+              <div className="rounded-card-lg border-line-soft bg-surface flex flex-col gap-2.5 border p-4">
                 <PreparationButton noticeId={n.id} />
                 <WebFavoriteButton
                   type="NOTICE"
@@ -690,14 +576,14 @@ export function WebDetail({ id }: { id: string }) {
                   type="button"
                   aria-pressed={pdfUrl ? pdf.open : undefined}
                   onClick={() => (pdf.open ? pdf.close() : openOriginal())}
-                  className="rounded-tile bg-surface text-text flex min-h-[56px] cursor-pointer items-center justify-center gap-[6px] border-0 text-[16px] font-bold"
+                  className="rounded-control bg-fill text-text flex min-h-[48px] cursor-pointer items-center justify-center gap-[6px] border-0 text-[16px] font-bold"
                 >
                   <FileText size={18} aria-hidden />
                   {pdf.open ? "원문 닫기" : `${n.agency} 공고 원문 보기`}
                 </button>
                 <WebNoticeChatButton
                   noticeId={n.id}
-                  className="rounded-tile bg-surface text-text min-h-[56px]"
+                  className="rounded-control bg-fill text-text min-h-[48px]"
                 />
                 <div className="flex flex-col items-center gap-[2px] pt-[4px]">
                   <span className="text-text-sub text-[13px]">
@@ -715,7 +601,13 @@ export function WebDetail({ id }: { id: string }) {
           </div>
         </WebMain>
       </div>
-      {original.viewer && <PdfViewer {...original.viewer} variant="web" />}
+      {original.viewer && (
+        <PdfViewer
+          {...original.viewer}
+          notice={{ title: n.title, summary: doc.summary }}
+          variant="web"
+        />
+      )}
     </WebPage>
   );
 }

@@ -10,7 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * api가 생성한 인증 토큰만 전송해요. log 모드에서는 인증 링크를 기록하지 않아요. 받는 주소별·전체 상한을 넘으면 보내지 않아요(429, {@link
+ * api가 생성한 인증 정보만 전송해요. log 모드에서는 인증번호나 링크를 기록하지 않아요. 받는 주소별·전체 상한을 넘으면 보내지 않아요(429, {@link
  * VerificationMailLimiter}).
  */
 @RestController
@@ -63,20 +63,26 @@ class EmailVerificationController {
         || body.email().length() > 254
         || !EMAIL.matcher(body.email()).matches()
         || body.token() == null
-        || !body.token().matches("[a-f0-9]{64}")) return ResponseEntity.badRequest().build();
+        || !body.token().matches("[0-9]{6}|[a-f0-9]{64}"))
+      return ResponseEntity.badRequest().build();
     if (!limiter.tryAcquire(body.email())) {
       return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
     }
-    String link = properties.webBaseUrl() + "/email/verify#token=" + body.token();
+    boolean code = body.token().length() == 6;
+    String instructions =
+        code
+            ? "알림 설정에 아래 인증번호를 입력해 주세요.\n\n" + body.token() + "\n\n인증번호는 발급 후 5분 동안 한 번만 사용할 수 있어요."
+            : "이메일 알림을 신청하셨다면 아래 링크에서 주소 인증을 완료해 주세요.\n\n"
+                + properties.webBaseUrl()
+                + "/email/verify#token="
+                + body.token()
+                + "\n\n링크는 15분 동안 한 번만 사용할 수 있어요. 인증 후 수신 동의를 해야 알림이 켜져요.";
     try {
       sender.send(
           new EmailMessage(
               body.email(),
-              "[무주택자들] 알림 이메일 주소 인증",
-              "이메일 알림을 신청하셨다면 아래 링크에서 주소 인증을 완료해 주세요.\n\n"
-                  + link
-                  + "\n\n링크는 15분 동안 한 번만 사용할 수 있어요. 인증 후 수신 동의를 해야 알림이 켜져요."
-                  + "\n직접 요청하지 않았다면 이 메일을 무시해 주세요.\n문의: contact@mujuthaek.store"));
+              code ? "[무주택자들] 알림 이메일 인증번호" : "[무주택자들] 알림 이메일 주소 인증",
+              instructions + "\n직접 요청하지 않았다면 이 메일을 무시해 주세요.\n문의: contact@mujuthaek.store"));
       return ResponseEntity.noContent().build();
     } catch (DeliveryException e) {
       return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();

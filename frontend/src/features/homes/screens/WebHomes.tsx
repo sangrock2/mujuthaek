@@ -1,82 +1,23 @@
 "use client";
 
-import { CardFavoriteHeart } from "@/features/favorites/components/FavoriteButtons";
 import { PersonalizationSummary } from "@/features/conditions/components/PersonalizationSummary";
 import { useCallback, useMemo, useState } from "react";
 import { QueryFeedback } from "@/shared/states/QueryFeedback";
 import Link from "next/link";
 import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
-import { RankChip, VerdictBadge } from "@/shared/ui/Badge";
-import { InfoTag } from "@/shared/ui/Chip";
 import { sortOptions, tenureParam, type SortOption } from "@/features/homes/filters";
 import { HomesFilterPanel } from "@/features/homes/components/HomesFilterPanel";
 import { useHomesFilters } from "@/features/homes/useHomesFilters";
 import { HomesMap } from "@/features/homes/components/HomesMap";
 import { EditConditionsLink } from "@/features/homes/components/EditConditionsLink";
 import { RegionSelect } from "@/features/homes/components/RegionSelect";
+import { ListingCard } from "@/features/homes/components/ListingCard";
 import { useHomeList } from "@/features/homes/list";
 import { useRegionFilter } from "@/features/homes/region";
 import { track } from "@/shared/lib/analytics";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
-import type { HomeListing } from "@/features/homes/mocks/homes";
-
-function ListingCard({
-  item,
-  regionLabel,
-  onLike,
-}: {
-  item: HomeListing;
-  regionLabel: string;
-  /** 관심 등록할 때 (GA 기록) */
-  onLike: () => void;
-}) {
-  // 공고 사진이 없어서 이미지 칸 없이 글자만: 판정 · 순위를 첫 줄에, 관심 하트는 오른쪽 위에.
-  // 링크가 카드를 채워서 카드를 자르지 않아요 (overflow-hidden이면 키보드 초점 테두리가 잘려요)
-  return (
-    <article className="rounded-card bg-surface relative flex flex-col">
-      <CardFavoriteHeart
-        type="NOTICE"
-        id={item.id}
-        onAdd={onLike}
-        className="absolute top-[10px] right-[10px]"
-      />
-      <Link
-        href={routes.notice(item.id)}
-        className="rounded-card text-text hover:text-text flex flex-1 flex-col gap-[8px] px-[20px] pt-[18px] pb-[20px] no-underline"
-      >
-        <span className="flex min-h-[28px] flex-wrap items-center gap-[4px] pr-[40px]">
-          <VerdictBadge verdict={item.verdict} />
-          {item.rank && <RankChip rank={item.rank} />}
-        </span>
-        <span className="text-text-tertiary text-[13px]">
-          {item.org} · {regionLabel}
-        </span>
-        <span className="tracking-title text-[18px] font-extrabold">{item.title}</span>
-        {item.price && <span className="text-[15px] font-semibold">{item.price}</span>}
-        <span className="flex flex-wrap gap-[4px]">
-          {item.life && <InfoTag>{item.life}</InfoTag>}
-          {item.tags.map((t) => (
-            <InfoTag key={t}>{t}</InfoTag>
-          ))}
-        </span>
-        <span className="border-line-soft mt-[4px] flex items-center justify-between border-t border-solid pt-[12px]">
-          <span className="text-text-sub text-[13px]">
-            {item.prepAmount ? (
-              <>
-                예상 준비금 <strong className="text-text">{item.prepAmount}</strong>
-              </>
-            ) : (
-              item.prepNote
-            )}
-          </span>
-          <span className="text-[14px] font-extrabold">{item.dueLong ?? item.due}</span>
-        </span>
-      </Link>
-    </article>
-  );
-}
 
 export function WebHomes() {
   const filters = useHomesFilters();
@@ -101,10 +42,10 @@ export function WebHomes() {
   return (
     <WebPage>
       <WebHeader mode="home" current={routes.homes} />
-      <WebMain>
-        <div className="flex flex-wrap items-end justify-between gap-[16px]">
+      <WebMain className="gap-[16px] pt-[28px]">
+        <div className="rounded-card border-line-soft bg-surface flex flex-wrap items-end justify-between gap-[12px] border p-[22px]">
           <div className="flex flex-col gap-[6px]">
-            <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">내 집</h1>
+            <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">주거 공고</h1>
             <span className="text-text-sub flex flex-wrap items-center gap-x-[12px] text-[16px]">
               <span>
                 <PersonalizationSummary
@@ -141,7 +82,7 @@ export function WebHomes() {
                   className={cn(
                     "min-h-[36px] cursor-pointer rounded-[9px] border-0 px-[14px] text-[14px]",
                     view === v
-                      ? "bg-text font-bold text-white"
+                      ? "bg-brand font-bold text-white"
                       : "text-text-sub bg-transparent font-semibold",
                   )}
                 >
@@ -164,15 +105,10 @@ export function WebHomes() {
           </div>
         </div>
 
-        <p className="text-text-sub m-0 text-[14px] leading-[1.6]">
-          예상 준비금은 대출 승인액·부대비용에 따라 달라져요. 접수 시간과 주택별 금액·조건은 상세와
-          기관 원문에서 확인해 주세요.
-        </p>
-        <div className="flex flex-wrap items-start gap-[24px]">
+        <div className="grid grid-cols-[248px_minmax(0,1fr)] items-start gap-[16px]">
           <aside
             aria-label="필터"
-            className="rounded-card bg-surface box-content flex min-w-0 flex-col gap-[22px] p-[22px]"
-            style={{ flex: "1 1 250px" }}
+            className="rounded-card border-line-soft bg-surface flex min-w-0 flex-col gap-[17px] border p-[16px]"
           >
             <fieldset className="m-0 flex flex-col border-0 p-0">
               <legend className="mb-[8px] p-0 text-[15px] font-extrabold">지역</legend>
@@ -181,11 +117,13 @@ export function WebHomes() {
             <HomesFilterPanel filters={filters} onReset={resetFilters} />
           </aside>
 
-          <section
-            aria-label="공고 목록"
-            className="flex min-w-0 flex-col gap-[20px]"
-            style={{ flex: "999 1 560px" }}
-          >
+          <section aria-label="공고 목록" className="flex min-w-0 flex-col gap-[20px]">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-[14px] gap-y-[4px]">
+              <h2 className="tracking-title m-0 text-[17px] font-extrabold">공고 목록</h2>
+              <p className="text-text-sub text-[12px]">
+                예상 준비금은 대출 승인액과 부대비용에 따라 달라져요.
+              </p>
+            </div>
             {view === "map" && (
               <HomesMap
                 regionCodes={region.codes}
@@ -194,10 +132,7 @@ export function WebHomes() {
                 className="h-[520px]"
               />
             )}
-            <div
-              className="grid gap-[16px]"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(262px, 1fr))" }}
-            >
+            <div className="grid gap-[12px] xl:grid-cols-2">
               {(list.loading || list.error) && (
                 <QueryFeedback error={list.error} label="공고" queryKey={["notices"]} />
               )}

@@ -2,7 +2,7 @@
 
 // 관심 조건: 새 공고·새 지원 정책 알림을 받을 지역·종류. 저장해야 새 공고 알림이 가요 (백엔드 saved)
 import { useState } from "react";
-import { X } from "lucide-react";
+import { BriefcaseBusiness, HandCoins, House, X } from "lucide-react";
 import { LoginPrompt, outlineChip } from "@/features/me/components/MePanels";
 import { Toggle } from "@/shared/ui/Toggle";
 import { useSession } from "@/features/auth/session";
@@ -73,6 +73,8 @@ type Section = {
   }[];
 };
 
+const sectionIcons = { housing: House, support: HandCoins, business: BriefcaseBusiness };
+
 const sections: Section[] = [
   {
     kind: "housing",
@@ -98,7 +100,7 @@ const sections: Section[] = [
 ];
 
 const control =
-  "border-line bg-surface text-text min-h-[44px] rounded-sm border border-solid px-[12px] text-[15px]";
+  "border-line bg-surface text-text min-h-[44px] min-w-0 w-full rounded-sm border border-solid px-[12px] text-[15px]";
 
 function InterestEditor({ section, defaultRegion }: { section: Section; defaultRegion: string }) {
   const interest = useInterest(section.kind);
@@ -145,25 +147,31 @@ function InterestEditor({ section, defaultRegion }: { section: Section; defaultR
     setDraft(null);
     setDone("저장했어요");
   };
+  const Icon = sectionIcons[section.kind];
   const sigungus = sido ? (regions.sido(sido)?.sigungus ?? []) : [];
 
   return (
     <section
       aria-label={section.title}
-      className="border-line-soft flex flex-col gap-[14px] border-b border-solid pb-[22px]"
+      className="rounded-card border-line-soft bg-surface flex flex-col gap-[16px] border p-[15px] sm:p-[22px]"
     >
-      <div className="flex flex-wrap items-center justify-between gap-[8px]">
-        <span className="flex flex-col gap-[2px]">
-          <span className="text-[18px] font-extrabold">{section.title}</span>
-          <span className="text-text-sub text-[14px]">{section.desc}</span>
-        </span>
+      <div className="border-line-soft flex flex-wrap items-center justify-between gap-[8px] border-b pb-[13px]">
+        <div className="flex items-center gap-[9px]">
+          <span className="rounded-control bg-brand-soft text-brand-strong flex size-[39px] shrink-0 items-center justify-center">
+            <Icon size={20} aria-hidden />
+          </span>
+          <div className="flex min-w-0 flex-col gap-[2px]">
+            <h2 className="m-0 text-[17px] font-extrabold">{section.title}</h2>
+            <p className="text-text-sub text-[13px]">{section.desc}</p>
+          </div>
+        </div>
         <span
           className={cn(
             "rounded-badge px-[10px] py-[5px] text-[13px] font-extrabold",
             loaded.saved ? "bg-brand-soft text-brand-strong" : "bg-fill text-text-sub",
           )}
         >
-          {loaded.saved ? "알림 받는 중" : "저장 전 · 새 공고 알림 없음"}
+          {loaded.saved ? "알림 받는 중" : "저장 전"}
         </span>
       </div>
 
@@ -192,7 +200,7 @@ function InterestEditor({ section, defaultRegion }: { section: Section; defaultR
           ))}
           {codes.length === 0 && <span className="text-text-sub text-[14px]">전체 지역</span>}
         </div>
-        <div className="flex flex-wrap items-center gap-[8px]">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-[6px] sm:max-w-[520px] sm:gap-[8px]">
           <select
             aria-label="시·도"
             value={sido}
@@ -232,7 +240,7 @@ function InterestEditor({ section, defaultRegion }: { section: Section; defaultR
             추가
           </button>
         </div>
-        <div className="flex items-center gap-[10px]">
+        <div className="rounded-control bg-surface flex flex-row-reverse items-center justify-between gap-[10px] px-[11px] py-[6px]">
           <Toggle
             checked={value.includeNationwide}
             onChange={(v) => edit({ includeNationwide: v })}
@@ -264,7 +272,7 @@ function InterestEditor({ section, defaultRegion }: { section: Section; defaultR
         </div>
       ))}
 
-      <div className="flex flex-wrap items-center gap-[10px]">
+      <div className="border-line-soft flex flex-wrap items-center gap-[10px] border-t pt-[13px]">
         <button
           type="button"
           disabled={interest.saving}
@@ -308,9 +316,9 @@ export function InterestsPanel() {
   if (!USE_MOCKS && !session) return <LoginPrompt what="관심 조건" />;
   const defaultRegion = conditions.status === "ready" ? (conditions.device?.regionCode ?? "") : "";
   return (
-    <div className="flex flex-col gap-[22px]">
+    <div className="flex flex-col gap-[13px] sm:gap-[16px]">
       <span className="text-text-sub text-[15px] leading-[1.6]">
-        고른 지역·종류의 새 공고와 지원 정책이 나오면 알림으로 알려 드려요. 지역을 비우면 전체예요.
+        고른 지역과 종류의 새 공고·지원 정책을 받아보세요.
       </span>
       {sections.map((s) => (
         <InterestEditor key={s.kind} section={s} defaultRegion={defaultRegion} />

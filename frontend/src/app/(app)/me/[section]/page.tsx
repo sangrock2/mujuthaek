@@ -2,21 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Responsive } from "@/shared/layout/Responsive";
-import { MMeSection, type MeSection } from "@/features/me/screens/MMeSection";
+import { MMeSection } from "@/features/me/screens/MMeSection";
 import { WebMe } from "@/features/me/screens/WebMe";
+
+import { meTabs, type MeTab } from "@/features/me/tabs";
 
 export const metadata: Metadata = { title: "내 정보 | 무주택자들" };
 
-const sections: MeSection[] = [
-  "favorites",
-  "preparations",
-  "interests",
-  "notifications",
-  "reports",
-];
-
 export function generateStaticParams() {
-  return sections.map((section) => ({ section }));
+  return meTabs.map((section) => ({ section }));
 }
 
 type Params = Promise<{ section: string }>;
@@ -32,7 +26,7 @@ export default function MeSectionPage({ params }: { params: Params }) {
 
 async function Section({ params }: { params: Params }) {
   const { section } = await params;
-  if (!sections.includes(section as MeSection)) notFound();
-  const s = section as MeSection;
+  if (!meTabs.includes(section as MeTab)) notFound();
+  const s = section as MeTab;
   return <Responsive web={<WebMe initialTab={s} />} mobile={<MMeSection section={s} />} />;
 }

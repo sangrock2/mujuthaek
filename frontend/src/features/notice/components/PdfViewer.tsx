@@ -1,7 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Minus, Plus, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FileText,
+  Maximize,
+  Minus,
+  Plus,
+  X,
+} from "lucide-react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { PdfReviewList } from "@/features/notice/components/PdfReviewList";
 import { type QuoteBox, quoteBoxes } from "@/features/notice/pdfQuote";
@@ -17,7 +27,6 @@ const ZOOM_STEP = 0.2;
 const PAGE_GAP = 12;
 /** 강조한 문장 위로 남길 여백 */
 const QUOTE_MARGIN = 96;
-export const NOTICE_PDF_PANEL_WIDTH = "min(46vw, 680px)";
 
 /** 강조 결과: 찾았으면 그 쪽 안 위치(px), 못 찾았으면 missed */
 type QuoteResult = { nonce: number; top?: number; missed?: boolean };
@@ -27,18 +36,19 @@ type PdfViewerProps = {
   onClose: () => void;
   src: string;
   fileName: string;
+  notice?: { title: string; summary?: string | null };
   /** 불러오지 못하면 보내는 기관 공고 페이지 (없으면 안내만) */
   detailUrl?: string;
   /** 로그인이 필요한 주소(관리자)처럼 직접 받아야 하면: PDF 바이트를 돌려줘요. 이때는 내려받기·새 창 단추를 숨겨요 */
   fetchData?: (src: string) => Promise<ArrayBuffer>;
   target: PdfTarget | null;
   /** 뷰어 위 섹션 목차 (쪽 순서) */
-  sections?: { label: string; page: number }[];
+  sections?: { label: string; page: number; summary?: string }[];
   /** 섹션을 누르면 그 쪽으로 이동해요 */
   onJump?: (page: number, label: string) => void;
   reviewItems?: PdfReviewItem[];
   onReviewPick?: (id: string) => void;
-  /** web: 오른쪽 패널 · mobile: 아래 시트 · dialog: 가운데 창(관리자) */
+  /** web: 요약과 PDF 비교 화면 · mobile: 아래 시트 · dialog: 가운데 창(관리자) */
   variant: "web" | "mobile" | "dialog";
 };
 
@@ -53,6 +63,7 @@ function PdfViewerPanel({
   onClose,
   src,
   fileName,
+  notice,
   detailUrl,
   fetchData,
   target,
@@ -68,13 +79,23 @@ function PdfViewerPanel({
   const [ratio, setRatio] = useState(1.414);
   const [zoom, setZoom] = useState(1);
   const [current, setCurrent] = useState(1);
-  const [width, setWidth] = useState(0);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [fitPage, setFitPage] = useState(variant === "web");
+  const comparison = useRef<HTMLDialogElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const jumpedTo = useRef<number>(undefined);
   const pageEls = useRef(new Map<number, HTMLDivElement>());
   const [quote, setQuote] = useState<QuoteResult | null>(null);
   const fetcher = useRef(fetchData);
   // 기관 공고 페이지는 http·https 주소일 때만 링크로 보여요 (2026-11-16 보안 감사 L-4)
   const siteUrl = safeExternalUrl(detailUrl);
+
+  useEffect(() => {
+    const dialog = comparison.current;
+    if (!dialog) return;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
 
   // PDF 불러오기 (pdf.js는 브라우저에서만 불러와요)
   useEffect(() => {
@@ -110,12 +131,17 @@ function PdfViewerPanel({
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setWidth(Math.floor(e.contentRect.width)));
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setViewport({ width: Math.floor(width), height: Math.floor(height) });
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  const pageWidth = Math.max(0, Math.floor(width * zoom));
+  const usableHeight = Math.max(0, viewport.height - 2 * PAGE_GAP);
+  const fittedWidth = fitPage ? Math.min(viewport.width, usableHeight / ratio) : viewport.width;
+  const pageWidth = Math.floor(fittedWidth * zoom);
 
   const goTo = useCallback((page: number, smooth = true) => {
     const el = pageEls.current.get(page);
@@ -133,9 +159,10 @@ function PdfViewerPanel({
 
   // 목차에서 누른 쪽으로 이동해요.
   useEffect(() => {
-    if (!doc || !target || width === 0) return;
+    if (!doc || !target || pageWidth === 0 || jumpedTo.current === target.nonce) return;
+    jumpedTo.current = target.nonce;
     goTo(Math.min(Math.max(1, target.page), doc.numPages), false);
-  }, [doc, target, width, goTo]);
+  }, [doc, target, pageWidth, goTo]);
   const invalidReviewPage = Boolean(doc && target?.reviewId && target.page > doc.numPages);
   const missed = invalidReviewPage || (quote?.missed === true && quote.nonce === target?.nonce);
   const highlighted = quote?.nonce === target?.nonce && quote?.top !== undefined;
@@ -174,25 +201,34 @@ function PdfViewerPanel({
   };
 
   useEffect(() => {
+    if (variant === "web") return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, variant]);
 
   const numPages = doc?.numPages ?? 0;
   /** 지금 쪽이 속한 섹션 쪽 (그 쪽 이전에서 가장 가까운 섹션) */
-  const activePage = sections.reduce((acc, sec) => (sec.page <= current ? sec.page : acc), 0);
+  const activePage = sections.reduce(
+    (page, section) => (section.page <= current ? Math.max(page, section.page) : page),
+    0,
+  );
+  const sectionsAtPage = sections.filter((section) => section.page === activePage);
+  const selectedSection =
+    sectionsAtPage.find(
+      (section) => target?.page === section.page && target.label === section.label,
+    ) ?? (sectionsAtPage.length === 1 ? sectionsAtPage[0] : undefined);
 
   const sectionBar = sections.length > 0 && onJump && (
     <nav
       aria-label="원문 섹션"
-      className="border-line-soft flex gap-[6px] overflow-x-auto border-b border-solid px-[12px] py-[8px]"
+      className={cn(
+        "border-line-soft flex gap-[6px] overflow-x-auto border-b border-solid px-[12px] py-[8px]",
+        variant === "web" && "bg-bg px-4",
+      )}
     >
       {sections.map((sec) => {
-        // 같은 쪽에 섹션이 여럿이면 누른 섹션만 표시해요
-        const picked =
-          target?.page === activePage && sections.some((x) => x.label === target.label);
-        const on = sec.page === activePage && (!picked || sec.label === target?.label);
+        const on = sec === selectedSection;
         return (
           <button
             key={sec.label}
@@ -202,7 +238,9 @@ function PdfViewerPanel({
               if (on && el?.parentElement) {
                 // 목차 가로 스크롤만 옮겨요. scrollIntoView는 바깥 공고 본문까지 맨 위로 옮겨요.
                 const bar = el.parentElement;
-                bar.scrollLeft = el.offsetLeft - bar.clientWidth / 2 + el.clientWidth / 2;
+                const delta = el.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+                if (delta < 0 || delta + el.clientWidth > bar.clientWidth)
+                  bar.scrollLeft += delta - (bar.clientWidth - el.clientWidth) / 2;
               }
             }}
             onClick={() => onJump(sec.page, sec.label)}
@@ -221,10 +259,14 @@ function PdfViewerPanel({
     </nav>
   );
   const iconBtn =
-    "text-text-sub inline-flex size-[44px] flex-none cursor-pointer items-center justify-center rounded-[10px] border-0 bg-transparent disabled:cursor-default disabled:opacity-40";
+    "text-text-sub hover:bg-fill focus-visible:outline-brand inline-flex size-[44px] flex-none cursor-pointer items-center justify-center rounded-[10px] border-0 bg-transparent disabled:cursor-default disabled:opacity-40";
 
   const toolbar = (
-    <div className="border-line-soft flex items-center gap-[2px] border-b border-solid px-[8px] py-[6px]">
+    <div
+      role="group"
+      aria-label="PDF 보기 도구"
+      className="border-line-soft bg-surface flex items-center border-b border-solid px-[5px] py-[3px] sm:gap-[2px] sm:px-[8px]"
+    >
       <button
         type="button"
         aria-label="이전 쪽"
@@ -234,7 +276,10 @@ function PdfViewerPanel({
       >
         <ChevronLeft size={20} aria-hidden />
       </button>
-      <span aria-live="polite" className="min-w-[56px] text-center text-[14px] font-bold">
+      <span
+        aria-live="polite"
+        className="min-w-[40px] text-center text-[14px] font-bold sm:min-w-[56px]"
+      >
         {numPages ? `${current} / ${numPages}` : "–"}
       </span>
       <button
@@ -247,6 +292,24 @@ function PdfViewerPanel({
         <ChevronRight size={20} aria-hidden />
       </button>
       <span className="flex-1" />
+      {variant === "web" && (
+        <button
+          type="button"
+          className={cn(
+            iconBtn,
+            "w-auto gap-[5px] px-[8px] text-[13px] font-bold",
+            fitPage && "bg-fill",
+          )}
+          aria-pressed={fitPage}
+          onClick={() => {
+            setFitPage((value) => !value);
+            setZoom(1);
+            requestAnimationFrame(() => goTo(current, false));
+          }}
+        >
+          <Maximize size={16} aria-hidden /> 쪽 맞춤
+        </button>
+      )}
       <button
         type="button"
         aria-label="축소"
@@ -256,7 +319,7 @@ function PdfViewerPanel({
       >
         <Minus size={18} aria-hidden />
       </button>
-      <span className="text-text-sub min-w-[44px] text-center text-[13px] font-semibold">
+      <span className="text-text-sub min-w-[36px] text-center text-[13px] font-semibold sm:min-w-[44px]">
         {Math.round(zoom * 100)}%
       </span>
       <button
@@ -287,32 +350,45 @@ function PdfViewerPanel({
     </div>
   );
 
-  const body = (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {toolbar}
+  const evidenceControls = (
+    <>
       {reviewItems.length > 0 && onReviewPick && (
         <PdfReviewList
           items={reviewItems}
           selected={target?.reviewId}
           highlighted={highlighted}
           missed={missed}
+          comparison={variant === "web"}
           onPick={onReviewPick}
         />
       )}
-      {target?.reviewId && sectionBar ? (
-        <details key={target.reviewId} className="border-line-soft border-b">
-          <summary className="text-text-sub cursor-pointer px-3 py-1.5 text-[12px] font-bold">
-            원문 목차
-          </summary>
-          {sectionBar}
-        </details>
-      ) : (
-        sectionBar
-      )}
+      {variant !== "web" &&
+        (target?.reviewId && sectionBar ? (
+          <details key={target.reviewId} className="border-line-soft border-b">
+            <summary className="text-text-sub cursor-pointer px-3 py-1.5 text-[12px] font-bold">
+              원문 목차
+            </summary>
+            {sectionBar}
+          </details>
+        ) : (
+          sectionBar
+        ))}
+    </>
+  );
+
+  const body = (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {toolbar}
+      {variant === "web" ? sectionBar : evidenceControls}
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="bg-fill relative min-h-0 flex-1 overflow-auto overscroll-contain px-[12px]"
+        aria-label="PDF 페이지 영역"
+        tabIndex={0}
+        className={cn(
+          "bg-fill relative min-h-0 flex-1 overflow-auto overscroll-contain px-[12px]",
+          variant === "web" && "bg-line-soft",
+        )}
       >
         {error ? (
           <div className="flex h-full flex-col items-center justify-center gap-[12px] px-[24px] text-center">
@@ -396,12 +472,17 @@ function PdfViewerPanel({
           {!dialog && (
             <span aria-hidden className="bg-line mx-auto mt-[8px] h-[4px] w-[40px] rounded-[2px]" />
           )}
-          <div className="flex items-start justify-between gap-[12px] px-[20px] pt-[10px] pb-[8px]">
-            <div className="flex min-w-0 flex-col gap-[2px]">
-              <span className="truncate text-[18px] font-extrabold">
-                {dialog ? fileName : "PDF 원문"}
+          <div className="border-line-soft flex items-center justify-between gap-2 border-b px-4 pt-2 pb-1">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="bg-brand-soft text-brand-strong flex size-9 shrink-0 items-center justify-center rounded-sm">
+                <FileText size={18} aria-hidden />
               </span>
-              {!dialog && <span className="text-text-sub truncate text-[12px]">{fileName}</span>}
+              <div className="flex min-w-0 flex-col">
+                <span className="text-text-sub text-[11px] font-bold">공고 원문 PDF</span>
+                <h2 className="m-0 truncate text-[15px] font-extrabold" title={fileName}>
+                  {fileName}
+                </h2>
+              </div>
             </div>
             <button type="button" aria-label="원문 닫기" onClick={onClose} className={iconBtn}>
               <X size={22} aria-hidden />
@@ -413,23 +494,130 @@ function PdfViewerPanel({
     );
   }
 
+  const currentReview = reviewItems.find((item) => item.id === target?.reviewId);
   return (
-    <section
-      aria-label="공고 원문"
-      className="bg-surface border-line shadow-float fixed top-0 right-0 bottom-0 z-[30] flex flex-col border-l border-solid"
-      style={{ width: NOTICE_PDF_PANEL_WIDTH }}
+    <dialog
+      ref={comparison}
+      aria-label="공고 원문 비교"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      className="bg-bg text-text fixed inset-0 m-0 h-[100dvh] max-h-none w-screen max-w-none overflow-hidden border-0 p-0 open:flex open:flex-col"
     >
-      <div className="flex items-start justify-between gap-[12px] px-[20px] pt-[16px] pb-[10px]">
-        <div className="flex min-w-0 flex-col gap-[2px]">
-          <span className="text-text-tertiary text-[12px] font-semibold">원문 근거</span>
-          <span className="truncate text-[17px] font-extrabold">{fileName}</span>
-        </div>
-        <button type="button" aria-label="원문 닫기" onClick={onClose} className={iconBtn}>
-          <X size={22} aria-hidden />
+      <header className="border-line bg-surface flex min-w-0 shrink-0 items-center gap-4 border-b px-5 py-2.5 xl:px-6">
+        <button
+          type="button"
+          aria-label="원문 닫기"
+          onClick={onClose}
+          className="rounded-control border-line text-text hover:bg-fill flex min-h-[44px] shrink-0 cursor-pointer items-center gap-1.5 border px-3 text-[13px] font-bold"
+        >
+          <X size={17} aria-hidden /> 비교 닫기
         </button>
+        <div className="border-line-soft flex min-w-0 flex-col gap-0.5 border-l pl-4">
+          <h2 className="m-0 text-[13px] font-bold">공고 원문 비교</h2>
+          {notice && <p className="text-text-sub truncate text-[14px]">{notice.title}</p>}
+        </div>
+      </header>
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <section
+          aria-label="공고 요약과 근거"
+          className="border-line bg-surface flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain border-r p-5 xl:p-6"
+        >
+          <div className="flex flex-col gap-2">
+            <h3 className="tracking-title m-0 text-[21px] font-extrabold">요약 및 자격 근거</h3>
+            {notice?.summary && (
+              <p className="text-text-sub text-[14px] leading-relaxed">{notice.summary}</p>
+            )}
+          </div>
+          {sections.length > 0 && onJump && (
+            <ul
+              role="list"
+              aria-label="공고 요약 근거"
+              className="m-0 flex list-none flex-col gap-2 p-0"
+            >
+              {sections.map((section) => {
+                const selected = section === selectedSection && !target?.reviewId;
+                return (
+                  <li key={section.label}>
+                    <button
+                      type="button"
+                      aria-current={selected || undefined}
+                      onClick={() => onJump(section.page, section.label)}
+                      className={cn(
+                        "rounded-control flex min-h-[52px] w-full cursor-pointer flex-col gap-1.5 border px-3.5 py-3 text-left",
+                        selected
+                          ? "border-brand bg-brand-soft"
+                          : "border-line-soft bg-surface hover:bg-bg",
+                      )}
+                    >
+                      <span className="flex w-full items-center justify-between gap-3">
+                        <span className="text-[14px] font-extrabold">{section.label}</span>
+                        <span className="text-brand-strong flex shrink-0 items-center gap-1 text-[12px] font-bold">
+                          p.{section.page} <ChevronRight size={15} aria-hidden />
+                        </span>
+                      </span>
+                      {section.summary && (
+                        <span className="text-text-sub line-clamp-2 text-[13px] leading-relaxed">
+                          {section.summary}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {currentReview && (
+            <div className="rounded-card bg-brand-soft flex flex-col gap-[5px] p-[15px]">
+              <p className="text-brand-strong text-[13px] font-bold">선택한 근거</p>
+              <p className="text-[15px] font-extrabold">{currentReview.label}</p>
+              {currentReview.reason && (
+                <p className="text-text-sub text-[13px] leading-relaxed">{currentReview.reason}</p>
+              )}
+              <p role="status" className="text-text-sub text-[12px]">
+                {currentReview.location
+                  ? [
+                      `${currentReview.location.page}쪽`,
+                      highlighted
+                        ? "근거 문장 강조됨"
+                        : missed
+                          ? "원문 문장을 찾지 못했어요"
+                          : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "정확한 위치 미확인"}
+              </p>
+              {highlighted && currentReview.location?.quote && (
+                <blockquote className="text-text-sub border-brand mt-[3px] border-l-2 pl-[10px] text-[13px] leading-relaxed">
+                  {currentReview.location.quote}
+                </blockquote>
+              )}
+            </div>
+          )}
+          {reviewItems.length > 0 && onReviewPick && (
+            <div className="rounded-control border-line-soft bg-bg overflow-hidden border [&_section:last-child]:border-b-0">
+              {evidenceControls}
+            </div>
+          )}
+        </section>
+        <section aria-label="공고 원문" className="bg-surface flex min-h-0 min-w-0 flex-col">
+          <div className="border-line-soft bg-bg flex shrink-0 items-center gap-2.5 border-b px-4 py-2.5">
+            <span className="bg-brand-soft text-brand-strong flex size-9 shrink-0 items-center justify-center rounded-sm">
+              <FileText size={18} aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-text-sub text-[11px] font-bold">공고 원문 PDF</p>
+              <h3 className="m-0 truncate text-[14px] font-extrabold" title={fileName}>
+                {fileName}
+              </h3>
+            </div>
+          </div>
+          {body}
+        </section>
       </div>
-      {body}
-    </section>
+    </dialog>
   );
 }
 

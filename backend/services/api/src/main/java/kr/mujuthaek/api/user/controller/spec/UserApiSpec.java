@@ -5,9 +5,11 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import kr.mujuthaek.api.user.dto.request.ContactEmailRequest;
+import kr.mujuthaek.api.user.dto.request.NicknameRequest;
 import kr.mujuthaek.api.user.dto.request.TermsAgreementRequest;
 import kr.mujuthaek.api.user.dto.response.MeResponse;
 import kr.mujuthaek.api.user.dto.response.MyReportsResponse;
+import kr.mujuthaek.api.user.dto.response.NicknameResponse;
 import kr.mujuthaek.api.user.dto.response.WithdrawalResponse;
 import kr.mujuthaek.api.user.service.LoginUser;
 import org.springframework.http.ResponseEntity;
@@ -59,6 +61,14 @@ public interface UserApiSpec {
           "닉네임·권한·연결한 소셜·가입 시각·연락용 이메일(없으면 null)을 줘요. "
               + "로그인하지 않았거나 탈퇴한 회원의 남은 access token이면 401이에요(프론트는 이걸로 로그인 여부를 확인해요).")
   MeResponse me(@Parameter(hidden = true) LoginUser user);
+
+  @Operation(summary = "내 닉네임 변경", description = "직접 설정한 닉네임은 다시 소셜 로그인해도 유지돼요.")
+  @ApiResponse(responseCode = "200", description = "저장한 닉네임")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED — 닉네임이 2~24자가 아니거나 제어 문자가 포함됐어요")
+  NicknameResponse changeNickname(
+      @Parameter(hidden = true) LoginUser user, NicknameRequest request);
 
   @Operation(
       summary = "내 제보",

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useId, useState } from "react";
 import { CheckBox } from "@/features/auth/components/parts";
-import { useSession } from "@/features/auth/session";
+import { ChevronDown } from "lucide-react";
 import {
   CONTACT_EMAIL_CONSENT,
   contactEmailError,
@@ -89,7 +89,13 @@ export function ContactEmailFields({
 }
 
 /** 동의 내용. 중요한 항목은 굵게 */
-export function ConsentDetails({ className }: { className?: string }) {
+export function ConsentDetails({
+  className,
+  sharedAddress = false,
+}: {
+  className?: string;
+  sharedAddress?: boolean;
+}) {
   return (
     <div
       className={cn(
@@ -105,7 +111,11 @@ export function ConsentDetails({ className }: { className?: string }) {
           </div>
         ))}
       </dl>
-      <span>{CONTACT_EMAIL_CONSENT.refuse}</span>
+      <span>
+        {sharedAddress
+          ? "동의하지 않아도 서비스를 이용할 수 있어요. 이 동의는 계정 안내에만 적용돼요."
+          : CONTACT_EMAIL_CONSENT.refuse}
+      </span>
       <Link
         href={routes.privacy}
         className="text-text hover:text-text self-start text-[14px] font-bold"
@@ -116,93 +126,119 @@ export function ConsentDetails({ className }: { className?: string }) {
   );
 }
 
-/** 내 정보: 연락용 이메일 보기 · 등록 · 바꾸기 · 지우기 */
-export function ContactEmailCard({ className }: { className?: string }) {
-  const { data: session } = useSession();
+/** 공동 이메일 입력란의 주소를 계정 안내에도 쓸지 관리해요. */
+export function ContactEmailPurpose({
+  address,
+  current,
+  locked,
+  onSaved,
+}: {
+  address: string;
+  current: string | null;
+  locked: boolean;
+  onSaved: () => void;
+}) {
   const save = useSaveContactEmail();
   const remove = useRemoveContactEmail();
-  const [editing, setEditing] = useState(false);
-  const [email, setEmail] = useState("");
-  const [consent, setConsent] = useState(false);
-
-  const current = session?.email ?? null;
-  const canSave = isEmail(email) && consent && !save.isPending;
-  const startEdit = () => {
-    setEmail(current ?? "");
-    setConsent(false);
-    save.reset();
-    setEditing(true);
-  };
+  const [consentFor, setConsentFor] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const value = address.trim();
+  const separator = value.lastIndexOf("@") + 1;
+  const normalized = value.slice(0, separator) + value.slice(separator).toLowerCase();
+  const same = current !== null && current === normalized;
+  const consenting = consentFor === normalized;
+  const busy = locked || save.isPending || remove.isPending;
 
   return (
-    <section aria-label="연락용 이메일" className={cn("flex flex-col gap-[12px]", className)}>
-      <div className="flex items-center justify-between gap-[12px]">
-        <span className="flex min-w-0 flex-col gap-[2px]">
-          <span className="text-[16px] font-extrabold">연락용 이메일</span>
-          <span className="text-text-sub truncate text-[14px]">
-            {session === undefined ? "불러오는 중" : (current ?? "등록하지 않았어요 (선택)")}
-          </span>
-        </span>
-        {!editing && session && (
-          <button
-            type="button"
-            onClick={startEdit}
-            className="bg-fill text-text min-h-[44px] flex-none cursor-pointer rounded-sm border-0 px-[14px] text-[14px] font-bold"
-          >
-            {current ? "바꾸기" : "등록하기"}
-          </button>
+    <details className="group border-line-soft border-t pt-[6px]">
+      <summary className="text-text flex min-h-[44px] cursor-pointer list-none items-center gap-[8px] text-[14px] [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1 font-bold">계정 안내에 이메일 사용</span>
+        <span className="text-text-sub shrink-0 text-[13px]">{current ? "사용 중" : "선택"}</span>
+        <ChevronDown
+          size={16}
+          aria-hidden
+          className="text-text-sub shrink-0 group-open:rotate-180"
+        />
+      </summary>
+      <div className="flex flex-col gap-[9px] pb-[7px]">
+        {current && !same && (
+          <p className="text-text-sub text-[13px] break-all">
+            현재 계정 안내 주소 <strong>{current}</strong>
+          </p>
         )}
-      </div>
-
-      {editing && (
-        <form
-          className="flex flex-col gap-[12px]"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (canSave) save.mutate(email, { onSuccess: () => setEditing(false) });
-          }}
-        >
-          <ContactEmailFields
-            email={email}
-            onEmail={setEmail}
-            consent={consent}
-            onConsent={setConsent}
-            error={save.isError ? contactEmailError(save.error) : undefined}
-          />
-          <div className="flex gap-[8px]">
-            <button
-              type="submit"
-              disabled={!canSave}
-              className="bg-brand disabled:bg-line disabled:text-text-sub min-h-[48px] flex-1 cursor-pointer rounded-sm border-0 text-[15px] font-bold text-white disabled:cursor-default"
-            >
-              {save.isPending ? "저장하는 중" : "동의하고 저장"}
-            </button>
+        {!same && (
+          <>
+            <ConsentDetails sharedAddress />
+            <label className="flex min-h-[36px] items-center gap-[8px] text-[14px]">
+              <input
+                type="checkbox"
+                className="accent-brand size-[16px] shrink-0"
+                checked={consenting}
+                disabled={busy || !isEmail(value)}
+                onChange={(event) => setConsentFor(event.target.checked ? normalized : null)}
+              />
+              {CONTACT_EMAIL_CONSENT.label}
+            </label>
+            {!isEmail(value) && (
+              <p className="text-text-sub text-[13px]">위 입력란에 이메일 주소를 입력해 주세요.</p>
+            )}
+          </>
+        )}
+        <div className="flex flex-wrap items-center gap-[10px]">
+          {!same && (
             <button
               type="button"
-              onClick={() => setEditing(false)}
-              className="bg-fill text-text min-h-[48px] cursor-pointer rounded-sm border-0 px-[16px] text-[15px] font-bold"
+              className="border-line bg-surface rounded-control min-h-[44px] border px-[12px] text-[14px] font-bold disabled:opacity-50"
+              disabled={busy || !consenting || !isEmail(value)}
+              onClick={() => {
+                setNotice("");
+                remove.reset();
+                save.mutate(value, {
+                  onSuccess: () => {
+                    setConsentFor(null);
+                    setNotice("이 주소를 계정 안내에도 사용해요.");
+                    onSaved();
+                  },
+                });
+              }}
             >
-              취소
+              {save.isPending ? "저장하는 중" : "이 주소를 계정 안내에 사용"}
             </button>
-          </div>
-        </form>
-      )}
-
-      {!editing && current && (
-        <button
-          type="button"
-          disabled={remove.isPending}
-          onClick={() => remove.mutate()}
-          className="text-text-sub inline-flex min-h-[44px] cursor-pointer items-center self-start border-0 bg-transparent p-0 text-[14px] font-semibold"
-        >
-          이메일 지우기 (동의 철회)
-        </button>
-      )}
-      {remove.isError && (
-        <span role="alert" className="text-danger-link text-[14px] font-semibold">
-          지우지 못했어요. 잠시 뒤 다시 시도해 주세요
-        </span>
-      )}
-    </section>
+          )}
+          {current && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setNotice("");
+                setConsentFor(null);
+                save.reset();
+                remove.mutate(undefined, {
+                  onSuccess: () => setNotice("계정 안내 이메일 동의를 철회했어요."),
+                });
+              }}
+              className="text-text-sub min-h-[44px] text-[14px] font-semibold underline-offset-4 hover:underline"
+            >
+              계정 안내 동의 철회
+            </button>
+          )}
+        </div>
+        {save.isError && (
+          <p role="alert" className="text-danger-link text-[13px]">
+            {contactEmailError(save.error)}
+          </p>
+        )}
+        {remove.isError && (
+          <p role="alert" className="text-danger-link text-[13px]">
+            계정 안내 동의를 철회하지 못했어요. 잠시 뒤 다시 시도해 주세요.
+          </p>
+        )}
+        {notice && (
+          <p role="status" className="text-brand-strong text-[13px]">
+            {notice}
+          </p>
+        )}
+      </div>
+    </details>
   );
 }

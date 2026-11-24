@@ -2,6 +2,7 @@
 
 // 최근 검색어: 이 기기에만 30일, 최대 8개까지 둬요. 로그아웃·탈퇴하면 지워요 (2026-11-16 보안 감사 L-3)
 
+export const RECENT_PREFERENCE_KEY = "mujuthaek:save-recent-searches";
 const RECENT_KEY = "mujuthaek.search.recent";
 /** 같은 탭에서 지웠다고 검색 화면에 알리는 이벤트 (다른 탭은 storage 이벤트로 알아요) */
 const RECENT_EVENT = "mujuthaek:search-recent";
@@ -16,6 +17,7 @@ export type RecentEntry = { q: string; at: number };
 
 // 저장소를 못 쓰는 브라우저면 이번 화면 동안만 메모리에 둬요
 let memory: string | null = null;
+let memoryPreference: boolean | undefined;
 
 function readRaw(): string | null {
   try {
@@ -77,15 +79,42 @@ function readEntries(now: number): RecentEntry[] {
   return entries;
 }
 
+export function recentSearchSaving(): boolean {
+  if (memoryPreference !== undefined) return memoryPreference;
+  try {
+    return window.localStorage.getItem(RECENT_PREFERENCE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function setRecentSearchSaving(enabled: boolean) {
+  try {
+    if (enabled) window.localStorage.removeItem(RECENT_PREFERENCE_KEY);
+    else window.localStorage.setItem(RECENT_PREFERENCE_KEY, "false");
+    memoryPreference = undefined;
+  } catch {
+    memoryPreference = enabled;
+  }
+  if (!enabled) clearRecentSearches();
+  else window.dispatchEvent(new Event(RECENT_EVENT));
+}
+
+export function recentSearchCount(): number {
+  return recentSearchSaving() ? parseRecent(readRaw(), Date.now()).length : 0;
+}
+
 /** 이 기기의 최근 검색어 (최근 것부터) */
 export function readRecent(now = Date.now()): string[] {
-  return readEntries(now).map((e) => e.q);
+  return recentSearchSaving() ? readEntries(now).map((e) => e.q) : [];
 }
 
 /** 검색어를 기억하고 바뀐 목록을 돌려줘요 */
 export function rememberRecent(query: string, now = Date.now()): string[] {
+  if (!recentSearchSaving()) return [];
   const next = addRecent(readEntries(now), query, now);
   writeRaw(next.length ? JSON.stringify(next) : null);
+  window.dispatchEvent(new Event(RECENT_EVENT));
   return next.map((e) => e.q);
 }
 
@@ -99,7 +128,7 @@ export function clearRecentSearches() {
 /** 이 탭이나 다른 탭에서 최근 검색어가 지워지거나 바뀌면 알려 줘요 */
 export function subscribeRecent(listener: () => void) {
   const onStorage = (e: StorageEvent) => {
-    if (e.key === null || e.key === RECENT_KEY) listener();
+    if (e.key === null || e.key === RECENT_KEY || e.key === RECENT_PREFERENCE_KEY) listener();
   };
   window.addEventListener("storage", onStorage);
   window.addEventListener(RECENT_EVENT, listener);

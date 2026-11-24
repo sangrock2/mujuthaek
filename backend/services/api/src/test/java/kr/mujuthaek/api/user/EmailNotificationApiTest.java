@@ -231,6 +231,90 @@ class EmailNotificationApiTest {
         .andExpect(jsonPath("$.verified").value(true));
   }
 
+  @Test
+  void numericCodeExpiresInFiveMinutesAndEnablesAlertsOnlyAfterCheck() throws Exception {
+    LoginUser user = login();
+    var response =
+        mvc.perform(
+                as(user, post(PATH + "/request-code"))
+                    .content("{\"email\":\"verified@example.com\",\"consent\":true}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.verified").value(false))
+            .andExpect(jsonPath("$.enabled").value(false))
+            .andExpect(jsonPath("$.verification.attemptsRemaining").value(5))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    var payload = tools.jackson.databind.json.JsonMapper.builder().build().readTree(response);
+    assertThat(java.time.Instant.parse(payload.at("/verification/expiresAt").asText()))
+        .isEqualTo(
+            java.time.Instant.parse(payload.at("/verification/resendAt").asText())
+                .plusSeconds(240));
+
+    var capture = ArgumentCaptor.forClass(String.class);
+    verify(mail).sendEmailVerification(anyString(), capture.capture());
+    String code = capture.getValue();
+    assertThat(code).matches("[0-9]{6}");
+    mvc.perform(verifyLink(code)).andExpect(status().isBadRequest());
+    mvc.perform(
+            post(PATH + "/verify-code")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(codeBody(code)))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(as(login(), post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(status().isBadRequest());
+    mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.verified").value(true))
+        .andExpect(jsonPath("$.enabled").value(true))
+        .andExpect(jsonPath("$.deadline").value(true))
+        .andExpect(jsonPath("$.verification").doesNotExist());
+    assertThat(
+            jdbc.sql("select consent_version from account.notification_emails where user_id=:id")
+                .param("id", user.userId())
+                .query(String.class)
+                .single())
+        .isEqualTo("email-notifications-v2");
+    mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void failedCodeChecksConsumeAttemptsAndEditingInvalidatesTheChallenge() throws Exception {
+    LoginUser user = login();
+    mvc.perform(
+            as(user, post(PATH + "/request-code"))
+                .content("{\"email\":\"verified@example.com\",\"consent\":true}"))
+        .andExpect(status().isOk());
+    var capture = ArgumentCaptor.forClass(String.class);
+    verify(mail).sendEmailVerification(anyString(), capture.capture());
+    String code = capture.getValue();
+    String wrong = code.equals("000000") ? "000001" : "000000";
+    for (int remaining = 4; remaining >= 0; remaining--) {
+      mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(wrong)))
+          .andExpect(status().isBadRequest());
+      mvc.perform(as(user, get(PATH)))
+          .andExpect(jsonPath("$.verification.attemptsRemaining").value(remaining));
+    }
+    mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(jsonPath("$.code").value("EMAIL_CODE_EXHAUSTED"));
+    jdbc.sql(
+            "update account.notification_emails set expires_at=now()-interval '1 second' where user_id=:id")
+        .param("id", user.userId())
+        .update();
+    mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(jsonPath("$.code").value("EMAIL_CODE_EXPIRED"));
+    mvc.perform(as(user, post(PATH + "/edit")))
+        .andExpect(jsonPath("$.email").doesNotExist())
+        .andExpect(jsonPath("$.verification").doesNotExist());
+    mvc.perform(as(user, post(PATH + "/verify-code")).content(codeBody(code)))
+        .andExpect(status().isBadRequest());
+  }
+
+  private static String codeBody(String code) {
+    return "{\"code\":\"" + code + "\"}";
+  }
+
   private MockHttpServletRequestBuilder verifyLink(String value) {
     return post(VERIFY_LINK).contentType(MediaType.APPLICATION_JSON).content(token(value));
   }

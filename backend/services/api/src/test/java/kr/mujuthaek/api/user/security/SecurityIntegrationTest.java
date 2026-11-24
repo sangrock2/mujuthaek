@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -99,6 +100,49 @@ class SecurityIntegrationTest {
         .andExpect(jsonPath("$.nickname").value("회원2001"))
         .andExpect(jsonPath("$.role").value("USER"))
         .andExpect(jsonPath("$.providers[0]").value("KAKAO"));
+  }
+
+  @Test
+  void nicknameEndpointValidatesAndUpdatesOnlyTheSignedInMember() throws Exception {
+    String path = "/api/users/me/nickname";
+    String token = bearer(login("nickname-api"));
+    String otherToken = bearer(login("nickname-other"));
+
+    mvc.perform(
+            put(path)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+        {"nickname":"새 별칭"}
+        """))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            put(path)
+                .header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+        {"nickname":"짧"}
+        """))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    mvc.perform(
+            put(path)
+                .header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+        {"nickname":" 새 별칭 "}
+        """))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nickname").value("새 별칭"));
+
+    mvc.perform(get("/api/users/me").header("Authorization", token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nickname").value("새 별칭"));
+    mvc.perform(get("/api/users/me").header("Authorization", otherToken))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nickname").value("회원nickname-other"));
   }
 
   @Test

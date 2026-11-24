@@ -9,8 +9,8 @@ import { MTabBar } from "@/shared/layout/MTabBar";
 import { MTopBar } from "@/shared/layout/MTopBar";
 import { MPage } from "@/shared/layout/Responsive";
 import { VerdictBadge } from "@/shared/ui/Badge";
-import { MNoConditionsState } from "@/shared/states/NoConditionsState";
 import { useConditionSummary } from "@/features/conditions/useConditionSummary";
+import { HomeConditionPrompt } from "@/features/home/HomeConditionPrompt";
 import { useHomeSummary } from "@/features/home/queries";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
@@ -22,9 +22,9 @@ const newsHref = (item: HomeNewsItem) =>
 const MOBILE_NEWS_COUNT = 3;
 
 export function MHome() {
-  const { data, loading, error } = useHomeSummary();
-  const n = (v: number, unit: string) => (loading ? "…" : `${v}${unit}`);
   const conditions = useConditionSummary();
+  const personalized = conditions.status === "ready" && conditions.hasConditions;
+  const { data, loading, error, homes, benefits } = useHomeSummary(personalized);
 
   return (
     <MPage>
@@ -36,33 +36,33 @@ export function MHome() {
       >
         {conditions.status === "loading" ? (
           <QueryFeedback label="저장한 조건" />
-        ) : !conditions.hasConditions ? (
-          <MNoConditionsState />
-        ) : loading || error ? (
-          <QueryFeedback error={error} label="맞춤 결과" queryKey={["home"]} />
         ) : (
           <>
             <div className="flex flex-col gap-[10px] px-[4px]">
               <h1 className="tracking-h1 m-0 text-[24px] font-extrabold">
-                내 조건으로 찾은 결과예요
+                {personalized ? "내 조건으로 찾은 결과예요" : "내 홈"}
               </h1>
-              <div className="flex gap-[6px] overflow-x-auto pb-[2px]">
-                {conditions.chips.map((c) => (
-                  <span
-                    key={c}
-                    className="rounded-pill bg-surface text-text-sub flex-none px-[12px] py-[6px] text-[13px] font-semibold"
+              {personalized && (
+                <div className="flex gap-[6px] overflow-x-auto pb-[2px]">
+                  {conditions.chips.map((c) => (
+                    <span
+                      key={c}
+                      className="rounded-pill bg-surface text-text-sub flex-none px-[12px] py-[6px] text-[13px] font-semibold"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                  <Link
+                    href={routes.profile}
+                    className="rounded-pill bg-brand-soft text-brand-strong flex-none px-[12px] py-[6px] text-[13px] font-bold no-underline"
                   >
-                    {c}
-                  </span>
-                ))}
-                <Link
-                  href={routes.profile}
-                  className="rounded-pill bg-brand-soft text-brand-strong flex-none px-[12px] py-[6px] text-[13px] font-bold no-underline"
-                >
-                  조건 수정
-                </Link>
-              </div>
+                    조건 수정
+                  </Link>
+                </div>
+              )}
             </div>
+
+            {!personalized && <HomeConditionPrompt />}
 
             <Link
               href={routes.homes}
@@ -70,16 +70,10 @@ export function MHome() {
             >
               <span className="flex flex-col gap-[6px]">
                 <span className="text-brand-deep-text text-[14px] font-semibold">
-                  지원 가능한 청약·공공임대
+                  {homes.label}
                 </span>
-                <span className="tracking-h1 text-[36px] font-extrabold">
-                  {error ? "–" : n(data.homes.count, "곳")}
-                </span>
-                <span className="text-brand-deep-text text-[13px]">
-                  {error
-                    ? "공고를 불러오지 못했어요"
-                    : `이번 주 새로 ${n(data.homes.newThisWeek, "곳")} · 마감 임박 ${n(data.homes.closingSoon, "곳")}`}
-                </span>
+                <span className="tracking-h1 text-[29px] font-extrabold">{homes.value}</span>
+                <span className="text-brand-deep-text text-[13px]">{homes.note}</span>
               </span>
               <span className="rounded-pill flex size-[40px] flex-none items-center justify-center bg-white/12">
                 <ArrowRight size={18} strokeWidth={2.2} aria-hidden />
@@ -90,24 +84,14 @@ export function MHome() {
               href={routes.benefits}
               className="bg-surface text-text hover:text-text flex flex-col gap-[6px] rounded-[22px] p-[18px] no-underline"
             >
-              <span className="text-text-sub text-[13px] font-semibold">받을 수 있는 혜택</span>
-              <span className="tracking-title text-[22px] font-extrabold">
-                {error
-                  ? "–"
-                  : data.benefits
-                    ? `연 ${data.benefits.yearlyAmount}`
-                    : loading
-                      ? "…"
-                      : "–"}
-              </span>
-              <span className="text-text-sub text-[13px]">
-                {error
-                  ? "혜택을 불러오지 못했어요"
-                  : data.benefits
-                    ? `${data.benefits.count}개 · 확인 필요 ${data.benefits.needCheck}개`
-                    : "받을 수 있는 혜택을 판정하고 있어요"}
-              </span>
+              <span className="text-text-sub text-[13px] font-semibold">{benefits.label}</span>
+              <span className="tracking-title text-[22px] font-extrabold">{benefits.value}</span>
+              <span className="text-text-sub text-[13px]">{benefits.note}</span>
             </Link>
+
+            {(loading || error) && (
+              <QueryFeedback error={error} label="공고·혜택 소식" queryKey={["home"]} />
+            )}
 
             <section
               aria-labelledby="due-h"
@@ -124,7 +108,7 @@ export function MHome() {
                   전체
                 </Link>
               </div>
-              {!loading && data.deadlines.length === 0 && (
+              {!loading && !error && data.deadlines.length === 0 && (
                 <span className="text-text-sub py-[12px] text-[14px]">
                   2주 안에 마감하는 공고가 없어요
                 </span>
@@ -170,7 +154,7 @@ export function MHome() {
                   전체
                 </Link>
               </div>
-              {!loading && data.news.length === 0 && (
+              {!loading && !error && data.news.length === 0 && (
                 <span className="text-text-sub py-[12px] text-[14px]">
                   이번 주에 새로 올라온 공고가 없어요
                 </span>
@@ -186,7 +170,7 @@ export function MHome() {
                 >
                   <span className="flex justify-between">
                     <span className="text-text-sub text-[12px]">{item.meta}</span>
-                    <VerdictBadge verdict={item.verdict} size="xs" />
+                    {personalized && <VerdictBadge verdict={item.verdict} size="xs" />}
                   </span>
                   <span className="flex items-baseline justify-between gap-[8px]">
                     <span className="text-[15px] font-bold">{item.title}</span>
@@ -198,9 +182,9 @@ export function MHome() {
               ))}
             </section>
 
-            <DeadlineAlertPrompt variant="mobile" />
+            {personalized && <DeadlineAlertPrompt variant="mobile" />}
 
-            {data.suggestedBenefit && (
+            {personalized && data.suggestedBenefit && (
               <Link
                 href={routes.benefit(data.suggestedBenefit.id)}
                 className="bg-brand-soft text-text hover:text-text flex items-center gap-[12px] rounded-[22px] p-[18px] no-underline"

@@ -69,6 +69,20 @@ class EmailVerificationTest {
     verifyNoInteractions(sender);
   }
 
+  @Test
+  void aSixDigitCodeIsDeliveredAsTextWithoutAVerificationLink() throws Exception {
+    var body = new EmailVerificationController.Request("a@example.com", "012345");
+    assertThat(controller("ses").send("Bearer " + secret, body).getStatusCode().value())
+        .isEqualTo(204);
+    verify(sender)
+        .send(
+            argThat(
+                message ->
+                    message.text().contains("012345")
+                        && message.text().contains("5분")
+                        && !message.text().contains("/email/verify")));
+  }
+
   /** 보안 감사 M-3: 계정을 여러 개 만들어도 한 주소로 인증 메일을 계속 보내지 못해요. */
   @Test
   void oneAddressReceivesAtMostThreeVerificationMailsAnHour() throws Exception {

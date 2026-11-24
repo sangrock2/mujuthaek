@@ -2,10 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { ArrowRight, CircleCheck, Lock } from "lucide-react";
 import { Logo } from "@/shared/brand/Logo";
 import { cn } from "@/shared/lib/cn";
 import { useSession } from "@/features/auth/session";
+import { LandingIntro } from "@/features/main/LandingIntro";
 import { useStartLinks } from "@/features/main/start";
 import { faqs, howSteps, trust } from "@/features/main/landing";
 import { reportHref } from "@/features/me/tabs";
@@ -38,15 +38,9 @@ const judgeSteps = [
 ];
 
 export function MMain() {
-  // 로그인했으면 로그인 대신 이름 · 내 홈 (불러오는 동안은 숨겨요)
   const { data: session } = useSession();
   const links = useStartLinks();
-  // 「어떻게 판정하나요?」(#judge): PC 화면도 숨긴 채 같이 그려져(Responsive) 문서에서 먼저 나오는 id="judge"가 PC 쪽이라,
-  // 브라우저 기본 이동은 모바일에서 숨은 칸을 찾아 움직이지 않아요. 모바일은 이 화면의 칸으로 직접 옮겨요
   const judgeRef = useRef<HTMLElement>(null);
-  const showJudge = (behavior: ScrollBehavior) =>
-    judgeRef.current?.scrollIntoView({ behavior, block: "start" });
-  // 주소가 /#judge로 열렸을 때도 (PC 폭이면 PC 화면의 칸으로 브라우저가 이미 옮겨요)
   useEffect(() => {
     if (window.location.hash === "#judge" && !window.matchMedia("(min-width: 1024px)").matches) {
       judgeRef.current?.scrollIntoView({ block: "start" });
@@ -91,79 +85,7 @@ export function MMain() {
       </header>
 
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">
-        <section
-          aria-label="소개"
-          className="flex flex-col gap-[18px] px-[20px] pt-[36px] pb-[32px]"
-        >
-          <span className="rounded-pill bg-brand-soft text-brand-strong self-start px-[12px] py-[6px] text-[13px] font-bold">
-            무주택자를 위한 집 · 혜택 찾기
-          </span>
-          <h1 className="tracking-logo m-0 text-[32px] leading-[1.3] font-extrabold">
-            내 조건으로 받을 수 있는
-            <br />
-            집과 혜택을 한 번에
-          </h1>
-          <p className="text-text-sub m-0 text-[17px] leading-[1.65]">
-            청약·공공임대 공고와 정부·지자체 주거 정책을 모아, 내가 지원할 수 있는지까지
-            판정해드려요
-          </p>
-          <Link
-            href={links.start.href}
-            className="bg-brand mt-[6px] flex min-h-[58px] items-center justify-center gap-[8px] rounded-[16px] text-[18px] font-extrabold text-white no-underline hover:text-white"
-          >
-            {links.start.label}
-            <ArrowRight size={20} strokeWidth={2.2} aria-hidden />
-          </Link>
-          <a
-            href="#judge"
-            onClick={(e) => {
-              e.preventDefault();
-              if (window.location.hash !== "#judge") window.history.pushState(null, "", "#judge");
-              showJudge("smooth");
-            }}
-            className="bg-fill text-text hover:text-text flex min-h-[52px] items-center justify-center rounded-[16px] text-[16px] font-bold no-underline"
-          >
-            어떻게 판정하나요?
-          </a>
-          <div className="text-text-sub flex flex-wrap justify-center gap-x-[16px] gap-y-[6px] text-[14px]">
-            {!session && (
-              <span className="inline-flex items-center gap-[5px]">
-                <CircleCheck size={16} className="text-brand" aria-hidden />
-                가입 없이 바로
-              </span>
-            )}
-            <span className="inline-flex items-center gap-[5px]">
-              <Lock size={16} className="text-brand" aria-hidden />
-              금융 정보는 판정할 때만 사용해요
-            </span>
-          </div>
-        </section>
-
-        <section
-          aria-label="찾는 공간 고르기"
-          className="flex flex-col gap-[10px] px-[20px] pt-[28px] pb-[8px]"
-        >
-          <Link
-            href={links.homes}
-            className="rounded-card bg-brand-soft text-text hover:text-text flex items-center gap-[14px] p-[20px] no-underline"
-          >
-            <span className="flex flex-1 flex-col gap-[3px]">
-              <span className="tracking-title text-[19px] font-extrabold">살 곳을 찾아요</span>
-              <span className="text-text-sub text-[14px]">청약 · 공공임대 · 정부 혜택</span>
-            </span>
-            <ArrowRight size={22} strokeWidth={2.2} className="text-brand" aria-hidden />
-          </Link>
-          <Link
-            href={routes.business}
-            className="rounded-card bg-bg text-text hover:text-text flex items-center gap-[14px] p-[20px] no-underline"
-          >
-            <span className="flex flex-1 flex-col gap-[3px]">
-              <span className="tracking-title text-[19px] font-extrabold">일할 곳을 찾아요</span>
-              <span className="text-text-sub text-[14px]">창업 공간 · 회의실 · 사업 지원</span>
-            </span>
-            <ArrowRight size={22} strokeWidth={2.2} className="text-text" aria-hidden />
-          </Link>
-        </section>
+        <LandingIntro start={links.start} signedIn={Boolean(session)} />
 
         <section
           id="features"

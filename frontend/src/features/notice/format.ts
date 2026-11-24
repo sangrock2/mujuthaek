@@ -136,11 +136,3 @@ export const statusLabel: Record<NoticeDoc["status"], string> = {
   OPEN: "접수 중",
   CLOSED: "마감",
 };
-
-/** 원문 뷰어 위 섹션 목차: 원문 쪽이 있는 섹션만 쪽 순서로 */
-export function pdfSections(doc: NoticeDoc): { label: string; page: number }[] {
-  return visibleSections(doc)
-    .filter((k) => doc.pages[k])
-    .map((k) => ({ label: sectionTitles[k].toc, page: doc.pages[k]! }))
-    .sort((a, b) => a.page - b.page);
-}

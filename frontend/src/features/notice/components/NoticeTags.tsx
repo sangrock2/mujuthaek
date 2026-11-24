@@ -2,7 +2,7 @@ import { RankChip, VerdictBadge, type ListingVerdict } from "@/shared/ui/Badge";
 import { cn } from "@/shared/lib/cn";
 
 type NoticeTagsProps = {
-  verdict: ListingVerdict;
+  verdict?: ListingVerdict;
   rank?: number;
   /** "마감 D-12" · "상시 모집" · "접수 예정" */
   due: string;
@@ -16,7 +16,7 @@ export function NoticeTags({ verdict, rank, due, tags, size }: NoticeTagsProps) 
   const pad = size === "lg" ? "px-[10px] py-[5px]" : "px-[9px] py-[4px]";
   return (
     <div className="flex flex-wrap gap-[6px]">
-      <VerdictBadge verdict={verdict} size={size} />
+      {verdict && <VerdictBadge verdict={verdict} size={size} />}
       {rank !== undefined && <RankChip rank={rank} size={size} />}
       <span className={cn("rounded-badge bg-text text-[13px] font-bold text-white", pad)}>
         {due}

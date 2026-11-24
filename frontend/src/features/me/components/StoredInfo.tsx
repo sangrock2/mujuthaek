@@ -1,6 +1,7 @@
 "use client";
 
-import { useSession } from "@/features/auth/session";
+import { useSyncExternalStore } from "react";
+import { recentSearchCount, recentSearchSaving, subscribeRecent } from "@/features/search/recent";
 import { daysLeft } from "@/features/conditions/format";
 import { DEVICE_TTL_MS } from "@/features/conditions/store";
 import { useConditionSummary } from "@/features/conditions/useConditionSummary";
@@ -23,15 +24,15 @@ export const saveOnDeviceNote = (on: boolean) =>
 
 /** 「저장된 정보」: 어떤 정보가 어디에 저장되는지 (웹·모바일 내 정보 공통) */
 export function StoredInfoList({ compact }: { compact?: boolean }) {
-  const { data: session } = useSession();
   const device = useDeviceStatus();
+  const searchSaving = useSyncExternalStore(subscribeRecent, recentSearchSaving, () => true);
+  const searches = useSyncExternalStore(subscribeRecent, recentSearchCount, () => 0);
   const rows: [string, string, boolean?][] = [
     ["나이 · 지역 · 가족 · 주택 조건", device],
     ["소득 · 자산 · 순위 세부 조건", "저장 안 함", true],
-    ["최근 검색어 (최대 8개)", "이 기기 · 30일"],
+    ["최근 검색어", !searchSaving ? "저장 꺼짐" : searches ? `이 기기 · ${searches}개` : "없음"],
     ["관심 공고 · 관심 조건 · 알림 설정", "계정에 저장"],
     ["신청 준비 상태 · 내 할 일 · 서류 체크 · 제출 표시", "계정에 저장"],
-    ["연락용 이메일 (선택)", session?.email ? "계정에 저장" : "없음"],
   ];
   return (
     <div className="flex flex-col">

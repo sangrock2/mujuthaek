@@ -3,9 +3,9 @@ import { PreparationButton } from "@/features/preparations/PreparationButton";
 
 // 내 정보(웹 탭 · 모바일 화면)가 같이 쓰는 칸: 관심 공고 · 알림 설정 · 제보하기
 import { useState } from "react";
-import { EmailNotifications } from "./EmailNotifications";
+import { EmailNotificationChannel } from "./EmailNotifications";
 import Link from "next/link";
-import { Heart } from "lucide-react";
+import { Bell, CalendarDays, Heart, Moon, Smartphone } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Toggle } from "@/shared/ui/Toggle";
 import { usePush } from "@/features/alerts/usePush";
@@ -89,57 +89,57 @@ function FavoriteRow({ f }: { f: Favorite }) {
   const fav = useFavoriteToggle(f.targetType, f.targetId);
   const deadline = deadlineOf(f);
   const gone = !f.title || f.status === "HIDDEN";
-  // 서버가 준 화면 경로는 앱 안 경로일 때만 링크로 써요 (「//다른곳」이면 다른 사이트로 가요, 2026-11-16 보안 감사 L-4)
   const href = safeAppPath(f.linkPath);
   return (
-    <div className="border-line-soft flex flex-wrap items-center gap-[14px] border-b border-solid py-[16px]">
-      {gone ? (
-        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <span className="text-text-sub text-[17px] font-bold">내려간 공고예요</span>
-          <span className="text-text-sub text-[14px]">{typeLabel[f.targetType]}</span>
-        </span>
-      ) : href ? (
-        <Link
-          href={href}
-          className="text-text hover:text-text flex min-w-0 flex-1 flex-col gap-[3px] no-underline"
-        >
-          <span className="text-[17px] font-bold">{f.title}</span>
-          <span className="text-text-sub text-[14px]">
-            {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
+    <li className="rounded-card border-line-soft bg-surface flex min-w-0 flex-col gap-[10px] border p-[14px] lg:flex-row lg:items-center lg:gap-[14px] lg:px-[18px] lg:py-[13px]">
+      <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
+        <p className="text-text-sub flex flex-wrap items-center gap-x-[7px] gap-y-[3px] text-[13px]">
+          <span className="rounded-badge bg-brand-soft text-brand-strong shrink-0 px-[7px] py-[3px] font-bold">
+            {typeLabel[f.targetType]}
           </span>
-        </Link>
-      ) : (
-        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <span className="text-[17px] font-bold">{f.title}</span>
-          <span className="text-text-sub text-[14px]">
-            {[typeLabel[f.targetType], f.organization].filter(Boolean).join(" · ")}
-          </span>
-        </span>
-      )}
-      {deadline.label && (
-        <span
-          className={cn(
-            "rounded-badge flex-none px-[10px] py-[5px] text-[13px] font-extrabold",
-            deadline.urgent ? "bg-text text-white" : "bg-fill text-text-sub",
+          {!gone && f.organization}
+        </p>
+        <h2 className="m-0 text-[17px] leading-[1.45] font-extrabold break-words sm:text-[19px]">
+          {gone ? (
+            <span className="text-text-sub">내려간 공고예요</span>
+          ) : href ? (
+            <Link
+              href={href}
+              className="text-text hover:text-brand-strong no-underline focus-visible:underline"
+            >
+              {f.title}
+            </Link>
+          ) : (
+            f.title
           )}
+        </h2>
+      </div>
+      <div className="border-line-soft flex flex-wrap items-center justify-end gap-[7px] border-t pt-[9px] lg:shrink-0 lg:border-0 lg:pt-0">
+        {deadline.label && (
+          <span
+            className={cn(
+              "rounded-badge shrink-0 px-[9px] py-[5px] text-[13px] font-extrabold tabular-nums",
+              deadline.urgent ? "bg-check-bg text-check-text" : "bg-fill text-text-sub",
+            )}
+          >
+            {deadline.label}
+          </span>
+        )}
+        {!gone && f.targetType === "NOTICE" && href?.startsWith("/notices/") && (
+          <div className="min-w-0 flex-1 lg:flex-none">
+            <PreparationButton noticeId={f.targetId} />
+          </div>
+        )}
+        <button
+          type="button"
+          aria-label={`${f.title ?? "공고"} 관심 해제`}
+          onClick={() => void fav.toggle()}
+          className="rounded-control border-line-soft bg-brand-soft text-brand-strong flex size-[48px] shrink-0 cursor-pointer items-center justify-center border"
         >
-          {deadline.label}
-        </span>
-      )}
-      {!gone && f.targetType === "NOTICE" && href?.startsWith("/notices/") && (
-        <div className="order-last w-full lg:order-none lg:w-auto">
-          <PreparationButton noticeId={f.targetId} />
-        </div>
-      )}
-      <button
-        type="button"
-        aria-label={`${f.title ?? "공고"} 관심 해제`}
-        onClick={() => void fav.toggle()}
-        className="bg-fill text-brand flex size-[44px] flex-none cursor-pointer items-center justify-center rounded-sm border-0"
-      >
-        <Heart size={20} fill="currentColor" aria-hidden />
-      </button>
-    </div>
+          <Heart size={20} fill="currentColor" aria-hidden />
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -148,15 +148,20 @@ export function FavoriteList() {
   if (!USE_MOCKS && !loggedIn) return <LoginPrompt what="관심 공고" />;
   if (loading) return <span className="text-text-sub py-[24px] text-[15px]">불러오는 중…</span>;
   return (
-    <div className="flex flex-col">
-      <span className="text-text-sub pb-[6px] text-[14px]">
+    <div className="flex flex-col gap-[13px]">
+      <p className="text-text-sub text-[14px]">
         관심 공고의 마감 3일·1일 전과 정정·후속 안내를 알려 드려요
-      </span>
-      {items.map((f) => (
-        <FavoriteRow key={`${f.targetType}:${f.targetId}`} f={f} />
-      ))}
+      </p>
+      <p className="text-text text-[14px] font-bold tabular-nums">전체 {items.length}건</p>
+      {items.length > 0 && (
+        <ul className="m-0 flex list-none flex-col gap-[10px] p-0">
+          {items.map((f) => (
+            <FavoriteRow key={`${f.targetType}:${f.targetId}`} f={f} />
+          ))}
+        </ul>
+      )}
       {items.length === 0 && (
-        <div className="flex flex-col items-center gap-[12px] py-[40px] text-center">
+        <div className="rounded-card border-line-soft bg-surface flex flex-col items-center gap-[12px] border p-[20px] py-[40px] text-center">
           <span className="text-[17px] font-bold">관심 공고가 없어요</span>
           <span className="text-text-sub text-[15px]">
             공고 상세에서 하트를 누르면 여기에 모여요
@@ -183,71 +188,120 @@ const settingRows: { key: keyof NotificationSettings; label: string; desc: strin
   { key: "followUp", label: "후속 안내", desc: "관심 공고에 발표·추가 안내가 나오면" },
 ];
 
+const notificationCard =
+  "rounded-card border-line-soft bg-surface flex flex-col gap-[7px] border p-[15px] sm:p-[19px]";
+
 export function NotificationSettingsPanel() {
   const settings = useNotificationSettings();
   const push = usePush();
   if (!settings.loggedIn) return <LoginPrompt what="알림 설정" />;
+  const settingsDisabled = settings.loading || settings.readError || settings.saving;
   return (
-    <div className="flex flex-col gap-[22px]">
-      <div className="flex flex-col">
-        {settingRows.map((n) => (
-          <div
-            key={n.key}
-            className="border-line-soft flex items-center justify-between gap-[16px] border-b border-solid py-[14px]"
-          >
-            <span className="flex flex-col gap-[2px]">
-              <span className="text-[16px] font-bold">{n.label}</span>
-              <span className="text-text-sub text-[14px]">{n.desc}</span>
+    <div className="flex flex-col gap-[12px] sm:gap-[16px]">
+      <section aria-labelledby="notification-channels" className={notificationCard}>
+        <h2
+          id="notification-channels"
+          className="flex items-center gap-[7px] text-[17px] font-extrabold"
+        >
+          <Bell size={18} className="text-brand-strong" aria-hidden /> 수신 채널
+        </h2>
+        <div className="flex items-center justify-between gap-[9px] py-[5px]">
+          <span className="flex min-w-0 items-start gap-[8px]">
+            <span className="rounded-control bg-fill text-brand-strong flex size-[35px] shrink-0 items-center justify-center">
+              <Smartphone size={17} aria-hidden />
             </span>
-            <Toggle
-              checked={settings.value[n.key]}
-              onChange={(v) => settings.set({ [n.key]: v })}
-              label={n.label}
-            />
-          </div>
-        ))}
-        <div className="flex items-center justify-between gap-[16px] py-[14px]">
-          <span className="flex flex-col gap-[2px]">
-            <span className="text-[16px] font-bold">방해 금지 · 밤 10시 ~ 아침 8시</span>
-            <span className="text-text-sub text-[14px]">
-              이 시간에는 푸시를 보내지 않고 아침에 모아 보내요
+            <span className="flex flex-col gap-[3px]">
+              <span className="text-[15px] font-bold">이 브라우저 · 앱 알림</span>
+              <span className="text-text-sub text-[13px]">현재 기기로 푸시 알림을 받아요.</span>
+            </span>
+          </span>
+          <Toggle
+            checked={push.enabled}
+            disabled={push.pending || !push.checked}
+            onChange={(enabled) => void (enabled ? push.turnOn() : push.turnOff())}
+            label="이 브라우저 · 앱 알림"
+          />
+        </div>
+        {push.error && (
+          <p role="alert" className="text-danger-text text-[14px]">
+            {push.error}
+          </p>
+        )}
+        <EmailNotificationChannel />
+      </section>
+
+      {settings.readError && (
+        <p role="alert" className="text-danger-text text-[14px]">
+          설정을 불러오지 못했어요.{" "}
+          <button
+            type="button"
+            className="min-h-[44px] font-bold underline"
+            onClick={() => void settings.refresh()}
+          >
+            다시 불러오기
+          </button>
+        </p>
+      )}
+
+      <section aria-labelledby="notification-topics" className={notificationCard}>
+        <div className="flex flex-col gap-[4px]">
+          <h2
+            id="notification-topics"
+            className="flex items-center gap-[7px] text-[17px] font-extrabold"
+          >
+            <CalendarDays size={18} className="text-brand-strong" aria-hidden /> 공고 및 일정 알림
+          </h2>
+          <p className="text-text-sub text-[13px]">푸시를 꺼도 알림함에서 확인할 수 있어요.</p>
+        </div>
+        <div className="divide-line-soft divide-y">
+          {settingRows.map(({ key, label, desc }) => (
+            <div key={key} className="flex items-center justify-between gap-[13px] py-[9px]">
+              <span className="flex flex-col gap-[2px]">
+                <span className="text-[15px] font-bold">{label}</span>
+                <span className="text-text-sub text-[13px]">{desc}</span>
+              </span>
+              <Toggle
+                checked={settings.value[key]}
+                disabled={settingsDisabled}
+                onChange={(value) => settings.set({ [key]: value })}
+                label={label}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="notification-quiet" className={notificationCard}>
+        <h2
+          id="notification-quiet"
+          className="flex items-center gap-[7px] text-[17px] font-extrabold"
+        >
+          <Moon size={18} className="text-brand-strong" aria-hidden /> 방해 금지
+        </h2>
+        <div className="flex items-center justify-between gap-[12px] py-[3px]">
+          <span className="flex flex-col gap-[3px]">
+            <span className="text-[15px] font-bold">야간 푸시 모아 받기</span>
+            <span className="text-text-sub text-[13px]">
+              밤에 온 푸시는 아침에 모아서 알려드려요.
             </span>
           </span>
           <Toggle
             checked={settings.value.quietEnabled}
-            onChange={(v) => settings.set({ quietEnabled: v })}
+            disabled={settingsDisabled}
+            onChange={(quietEnabled) => settings.set({ quietEnabled })}
             label="방해 금지"
           />
         </div>
-        <span className="text-text-sub text-[13px]">
-          꺼도 알림함에는 남아요. 푸시는 발송하지 않아요
-        </span>
-        {settings.failed && (
-          <span role="alert" className="text-danger-text mt-[6px] text-[14px]">
-            저장하지 못했어요. 잠시 뒤 다시 해 주세요
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-[10px]">
-        <span className="text-[16px] font-extrabold">받는 방법</span>
-        <div role="group" aria-label="받는 방법" className="flex flex-wrap items-center gap-[8px]">
-          <button
-            type="button"
-            aria-pressed={push.enabled}
-            disabled={push.pending}
-            onClick={() => void (push.enabled ? push.turnOff() : push.turnOn())}
-            className={cn(outlineChip(push.enabled), "px-[18px]")}
-          >
-            이 브라우저 · 앱 알림 {push.enabled ? "켜짐" : "꺼짐"}
-          </button>
-        </div>
-        <EmailNotifications />
-        {push.error && (
-          <span role="alert" className="text-danger-text text-[14px]">
-            {push.error}
-          </span>
-        )}
-      </div>
+        <p className="rounded-control bg-fill text-text-sub self-start px-[10px] py-[6px] text-[13px]">
+          밤 10시 ~ 아침 8시
+        </p>
+      </section>
+
+      {settings.failed && (
+        <p role="alert" className="text-danger-text text-[14px]">
+          저장하지 못했어요. 잠시 뒤 다시 해 주세요.
+        </p>
+      )}
     </div>
   );
 }
