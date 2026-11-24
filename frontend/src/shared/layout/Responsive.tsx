@@ -24,8 +24,18 @@ export function Responsive({ web, mobile }: { web: React.ReactNode; mobile: Reac
 }
 
 /** PC 화면 바탕: 회색 페이지 + 본문 최대 1200px */
-export function WebPage({ children }: { children: React.ReactNode }) {
-  return <div className="bg-bg text-text flex min-h-screen w-full flex-col">{children}</div>;
+export function WebPage({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("bg-bg text-text flex min-h-screen w-full flex-col", className)}>
+      {children}
+    </div>
+  );
 }
 
 export function WebMain({
@@ -50,6 +60,10 @@ export function WebMain({
 }
 
 /** 모바일 화면 바탕 */
-export function MPage({ children }: { children: React.ReactNode }) {
-  return <div className="bg-bg text-text flex min-h-screen w-full flex-col">{children}</div>;
+export function MPage({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn("bg-bg text-text flex min-h-screen w-full flex-col", className)}>
+      {children}
+    </div>
+  );
 }

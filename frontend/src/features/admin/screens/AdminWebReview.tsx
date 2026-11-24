@@ -70,6 +70,9 @@ export function AdminWebReview() {
   const memberId = member?.id ?? row.id;
   // 대기열 아래 끝이 보이면 다음 20건을 받아요
   const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.scrollTo(0, 0);
+  }, [filter]);
   const endRef = useRef<HTMLDivElement>(null);
   const { more, loadMore } = queue;
   useEffect(() => {
@@ -216,6 +219,9 @@ export function AdminWebReview() {
           </div>
           <div
             ref={listRef}
+            role="region"
+            aria-label="검수 대기열 스크롤 영역"
+            tabIndex={0}
             className="flex min-h-0 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-wrap:anywhere]"
           >
             {shown.map((q) => {
@@ -348,7 +354,12 @@ export function AdminWebReview() {
                     </span>
                   </span>
                 </div>
-                <div className="-mr-[12px] flex min-h-0 flex-col gap-[12px] overflow-x-hidden overflow-y-auto overscroll-contain pr-[12px] [overflow-wrap:anywhere]">
+                <div
+                  role="region"
+                  aria-label="원문 스크롤 영역"
+                  tabIndex={0}
+                  className="-mr-[12px] flex min-h-0 flex-col gap-[12px] overflow-x-hidden overflow-y-auto overscroll-contain pr-[12px] [overflow-wrap:anywhere]"
+                >
                   {!ready && cur.id !== "empty" && (
                     <p className="text-text-sub m-0 text-[15px]">
                       {detail.isError
@@ -379,7 +390,12 @@ export function AdminWebReview() {
                   </h3>
                   <span className="text-text-sub text-[13px]">상태</span>
                 </div>
-                <div className="-mr-[12px] flex min-h-0 flex-col gap-[12px] overflow-x-hidden overflow-y-auto overscroll-contain py-[2px] pr-[12px] [overflow-wrap:anywhere]">
+                <div
+                  role="region"
+                  aria-label="추출 결과 스크롤 영역"
+                  tabIndex={0}
+                  className="-mr-[12px] flex min-h-0 flex-col gap-[12px] overflow-x-hidden overflow-y-auto overscroll-contain py-[2px] pr-[12px] [overflow-wrap:anywhere]"
+                >
                   {cur.fields.map((f) => {
                     // 신뢰도 숫자 대신 백엔드 칸 상태(보류·확인 필요)로 표시해요
                     const low = f.status ? true : f.conf < 0.7;

@@ -51,6 +51,9 @@ export function AdminWebReports({ head }: { head: React.ReactNode }) {
 
   // 목록 아래 끝이 보이면 다음 20건을 받아요. loadMore는 그릴 때마다 새로 만들어지니 ref로 들고 있어 감시를 다시 걸지 않아요
   const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.scrollTo(0, 0);
+  }, [tab]);
   const endRef = useRef<HTMLDivElement>(null);
   const loadMore = useRef(queue.loadMore);
   useEffect(() => {
@@ -130,6 +133,9 @@ export function AdminWebReports({ head }: { head: React.ReactNode }) {
         >
           <div
             ref={listRef}
+            role="region"
+            aria-label="제보 목록 스크롤 영역"
+            tabIndex={0}
             className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-wrap:anywhere]"
           >
             {list.length === 0 && (
@@ -178,6 +184,10 @@ export function AdminWebReports({ head }: { head: React.ReactNode }) {
 
         {cur && (
           <div
+            key={cur.id}
+            role="region"
+            aria-label="제보 상세 스크롤 영역"
+            tabIndex={0}
             className={cn(
               "flex min-w-0 flex-col gap-[16px] overflow-y-auto overscroll-contain",
               PANEL_HEIGHT,

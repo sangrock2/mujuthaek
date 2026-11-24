@@ -11,7 +11,7 @@ import {
   SectionTitle,
   Verdicts,
 } from "@/features/content/components/HowItWorksParts";
-import { MBackHeader } from "@/shared/layout/MBackHeader";
+import { CustomerCenterHeader } from "@/features/content/components/WebContentShell";
 import { MPage } from "@/shared/layout/Responsive";
 import { routes } from "@/shared/lib/routes";
 
@@ -19,13 +19,14 @@ import { routes } from "@/shared/lib/routes";
 export function MHowItWorks() {
   const web = false;
   return (
-    <MPage>
-      <MBackHeader title="어떻게 만들었나요" backHref={routes.me} />
+    <MPage className="stitch-surface">
+      <CustomerCenterHeader current={routes.howItWorks} />
       <main
         id="main-content"
         tabIndex={-1}
         className="flex flex-1 flex-col gap-[28px] px-[16px] pt-[20px] pb-[36px]"
       >
+        <h1 className="tracking-h1 m-0 text-[24px] font-extrabold">어떻게 만들었나요</h1>
         <div className="flex flex-col gap-[8px] px-[4px]">
           <span className="text-brand-strong text-[14px] font-bold">서비스 소개</span>
           <h2 className="tracking-h1 m-0 text-[26px] leading-[1.35] font-extrabold">

@@ -64,8 +64,11 @@ function timeOf(at: Date, now: Date) {
   return at.toLocaleDateString("ko-KR", { timeZone: KST, month: "long", day: "numeric" });
 }
 
-/** 혜택이면 「혜택」, 나머지(공고·사업공간)는 「공고」 */
-const typeOf = (i: InboxItem): AlertType => (i.target?.type === "BENEFIT" ? "혜택" : "공고");
+function typeOf(item: InboxItem): AlertType {
+  if (item.type === "REPORT_ANSWERED") return "공지";
+  if (item.target?.type === "BENEFIT" || item.type === "NEW_SUPPORT") return "혜택";
+  return item.target || item.type === "NEW_NOTICE" ? "공고" : "공지";
+}
 
 export function toAlert(i: InboxItem, now: Date): AlertItem & { linkPath: string | null } {
   const at = new Date(i.createdAt);

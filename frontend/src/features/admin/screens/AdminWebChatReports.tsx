@@ -77,6 +77,9 @@ export function AdminWebChatReports({ head }: { head: React.ReactNode }) {
 
   // 목록 아래 끝이 보이면 다음 20건을 받아요(검수·정보 제보와 같은 방식)
   const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.scrollTo(0, 0);
+  }, [tab]);
   const endRef = useRef<HTMLDivElement>(null);
   const loadMore = useRef(queue.loadMore);
   useEffect(() => {
@@ -154,6 +157,9 @@ export function AdminWebChatReports({ head }: { head: React.ReactNode }) {
         >
           <div
             ref={listRef}
+            role="region"
+            aria-label="신고 목록 스크롤 영역"
+            tabIndex={0}
             className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-wrap:anywhere]"
           >
             {isPending && (
@@ -217,6 +223,10 @@ export function AdminWebChatReports({ head }: { head: React.ReactNode }) {
 
         {cur && (
           <div
+            key={cur.messageId}
+            role="region"
+            aria-label="신고 상세 스크롤 영역"
+            tabIndex={0}
             className={cn(
               "flex min-w-0 flex-col gap-[16px] overflow-y-auto overscroll-contain",
               PANEL_HEIGHT,
