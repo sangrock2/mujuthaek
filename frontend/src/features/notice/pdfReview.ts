@@ -27,6 +27,24 @@ function locationOf(doc: NoticeDoc, evidence: NoticeEvidence): Location | undefi
   return { fileId: file.id, page, quote: quote?.trim() || undefined };
 }
 
+/** 판정 요약이 공고 조건 문구에 그대로 있고, 해당 조건의 같은 쪽 근거가 하나일 때만 원문 인용을 사용해요. */
+function sourceExcerpt(doc: NoticeDoc, text: string, page: number | undefined) {
+  if (text.length < 12 || page === undefined) return;
+  const candidates = doc.eligibility.filter((condition) => squash(condition.text).includes(text));
+  if (candidates.length !== 1) return;
+  const locations = (candidates[0].evidence ?? []).flatMap((evidence) => {
+    if (evidence.page !== page) return [];
+    const location = locationOf(doc, evidence);
+    return location?.quote ? [location] : [];
+  });
+  const [location] = locations;
+  if (
+    location &&
+    locations.every((other) => other.fileId === location.fileId && other.quote === location.quote)
+  )
+    return location;
+}
+
 export function pdfReviewItems(doc: NoticeDoc, judgment?: NoticeJudgment | null): PdfReviewItem[] {
   const saved = doc.eligibility.flatMap((condition) => condition.evidence ?? []);
   const judged =
@@ -55,7 +73,8 @@ export function pdfReviewItems(doc: NoticeDoc, judgment?: NoticeJudgment | null)
             location:
               matches.size > 1
                 ? undefined
-                : locationOf(doc, { page: item.page ?? null, fileId, quote }),
+                : ((matches.size === 0 ? sourceExcerpt(doc, text, item.page) : undefined) ??
+                  locationOf(doc, { page: item.page ?? null, fileId, quote })),
           };
         }),
     ) ?? [];

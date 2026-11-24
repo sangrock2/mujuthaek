@@ -8,6 +8,7 @@ export const endpoints = {
   authLogout: "/api/auth/logout",
   /** 내 정보. 로그인하지 않았으면 401 (로그인 여부 확인에도 써요) */
   usersMe: "/api/users/me",
+  usersMeNickname: "/api/users/me/nickname",
   /** 연락용 이메일 등록·변경(PUT {email, consentVersion}) · 삭제(DELETE). 둘 다 204 */
   usersMeEmail: "/api/users/me/email",
   /** 가입 필수 동의 기록 (POST {termsVersion, privacyVersion, ageOver14: true} → 204). 동의 전에는 내 정보 API가 403 TERMS_NOT_AGREED */

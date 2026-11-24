@@ -32,7 +32,8 @@ public class NotificationEmailRepository {
       boolean newNotice,
       boolean deadline,
       boolean reportAnswer,
-      String nonce) {
+      String nonce,
+      Integer codeAttempts) {
     public boolean allows(String type) {
       return enabled
           && verifiedAt != null
@@ -80,23 +81,39 @@ public class NotificationEmailRepository {
   }
 
   public void request(
-      UUID id, String email, String hash, String nonce, Instant now, LocalDate day, int count) {
+      UUID id,
+      String email,
+      String hash,
+      String nonce,
+      Instant now,
+      LocalDate day,
+      int count,
+      boolean code) {
     jdbc.sql(
             """
         insert into account.notification_emails(user_id,email,token_hash,expires_at,requested_at,
-          request_day,request_count,unsubscribe_nonce,collection_consent_version)
-        values (:u,:email,:hash,:expires,:now,:day,:count,:nonce,'email-verification-v1')
+          request_day,request_count,unsubscribe_nonce,collection_consent_version,
+          code_attempts,consent_version,consented_at)
+        values (:u,:email,:hash,:expires,:now,:day,:count,:nonce,
+          case when :code then 'email-verification-v2' else 'email-verification-v1' end,
+          case when :code then 0 else null end,
+          case when :code then 'email-notifications-v2' else null end,
+          case when :code then :now else null end)
         on conflict(user_id) do update set email=excluded.email,token_hash=excluded.token_hash,
           expires_at=excluded.expires_at,requested_at=excluded.requested_at,request_day=excluded.request_day,
           request_count=excluded.request_count,verified_at=null,enabled=false,new_notice=false,
-          deadline=false,report_answer=false,consent_version=null,consented_at=null,revoked_at=:now,
-          unsubscribe_nonce=excluded.unsubscribe_nonce,collection_consent_version=excluded.collection_consent_version
+          deadline=false,report_answer=false,consent_version=excluded.consent_version,
+          consented_at=case when :code and notification_emails.code_attempts is not null
+                            then notification_emails.consented_at else excluded.consented_at end,
+          revoked_at=:now, code_attempts=excluded.code_attempts, unsubscribe_nonce=excluded.unsubscribe_nonce,
+          collection_consent_version=excluded.collection_consent_version
         """)
         .param("u", id)
         .param("email", email)
         .param("hash", hash)
         .param("nonce", nonce)
-        .param("expires", now.plusSeconds(900).atOffset(ZoneOffset.UTC))
+        .param("expires", now.plusSeconds(code ? 300 : 900).atOffset(ZoneOffset.UTC))
+        .param("code", code)
         .param("now", now.atOffset(ZoneOffset.UTC))
         .param("day", day)
         .param("count", count)
@@ -108,6 +125,7 @@ public class NotificationEmailRepository {
                 """
             update account.notification_emails set verified_at=:now, token_hash=null, expires_at=null
              where token_hash=:hash and expires_at > :now and email is not null and verified_at is null
+               and code_attempts is null
                and (cast(:owner as uuid) is null or user_id=cast(:owner as uuid))
             """)
             .param("hash", hash)
@@ -117,13 +135,40 @@ public class NotificationEmailRepository {
         == 1;
   }
 
+  public boolean verifyCode(UUID id, String hash, Instant now) {
+    return jdbc.sql(
+                """
+            update account.notification_emails
+            set verified_at=:now, token_hash=null, expires_at=null, code_attempts=null, enabled=true,
+                new_notice=true, deadline=true, report_answer=true, revoked_at=null
+            where user_id=:u and token_hash=:hash and expires_at > :now and code_attempts is not null
+            """)
+            .param("u", id)
+            .param("hash", hash)
+            .param("now", now.atOffset(ZoneOffset.UTC))
+            .update()
+        == 1;
+  }
+
+  public void recordCodeFailure(UUID id, String hash) {
+    jdbc.sql(
+            """
+            update account.notification_emails set code_attempts=code_attempts+1
+            where user_id=:u and token_hash=:hash and code_attempts is not null
+            """)
+        .param("u", id)
+        .param("hash", hash)
+        .update();
+  }
+
   public void settings(
       UUID id, boolean enabled, boolean notices, boolean deadline, boolean reports, Instant now) {
     jdbc.sql(
             """
         update account.notification_emails set enabled=:enabled,new_notice=:notices,deadline=:deadline,
-          report_answer=:reports,consent_version=case when :enabled then 'email-notifications-v1' else consent_version end,
-          consented_at=case when :enabled then :now else consented_at end,
+          report_answer=:reports,
+          consent_version=case when :enabled and not enabled then 'email-notifications-v1' else consent_version end,
+          consented_at=case when :enabled and not enabled then :now else consented_at end,
           revoked_at=case when :enabled then null else :now end where user_id=:u
         """)
         .param("u", id)
@@ -140,7 +185,7 @@ public class NotificationEmailRepository {
     jdbc.sql(
             """
         update account.notification_emails set email=null,token_hash=null,expires_at=null,verified_at=null,
-          enabled=false,new_notice=false,deadline=false,report_answer=false,collection_consent_version=null,
+          enabled=false,new_notice=false,deadline=false,report_answer=false,collection_consent_version=null,code_attempts=null,
           revoked_at=:now
         where user_id=:u and email is not null
         """)
@@ -160,7 +205,7 @@ public class NotificationEmailRepository {
   public void expirePending(Instant before) {
     jdbc.sql(
             """
-        update account.notification_emails set email=null,token_hash=null,expires_at=null,collection_consent_version=null
+        update account.notification_emails set email=null,token_hash=null,expires_at=null,collection_consent_version=null,code_attempts=null
         where verified_at is null and email is not null and requested_at < :before
         """)
         .param("before", before.atOffset(ZoneOffset.UTC))
@@ -181,7 +226,8 @@ public class NotificationEmailRepository {
         rs.getBoolean("new_notice"),
         rs.getBoolean("deadline"),
         rs.getBoolean("report_answer"),
-        rs.getString("unsubscribe_nonce"));
+        rs.getString("unsubscribe_nonce"),
+        (Integer) rs.getObject("code_attempts"));
   }
 
   private static Instant instant(java.sql.ResultSet rs, String name) throws java.sql.SQLException {

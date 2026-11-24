@@ -7,17 +7,15 @@ import {
   BriefcaseBusiness,
   Building,
   ChevronRight,
-  CircleCheck,
   House,
   Landmark,
-  Lock,
-  Sparkles,
   Store,
   type LucideIcon,
 } from "lucide-react";
 import { Logo } from "@/shared/brand/Logo";
 import { cn } from "@/shared/lib/cn";
 import { useSession } from "@/features/auth/session";
+import { LandingIntro } from "@/features/main/LandingIntro";
 import { useStartLinks } from "@/features/main/start";
 import { faqs, howSteps, trust } from "@/features/main/landing";
 import { routes } from "@/shared/lib/routes";
@@ -103,8 +101,8 @@ export function WebMain() {
               <a href="#features" className={navLink}>
                 무엇을 찾아주나요
               </a>
-              <a href="#how" className={navLink}>
-                이렇게 찾아요
+              <a href="#judge" className={navLink}>
+                자격 판정
               </a>
               <a href="#sources" className={navLink}>
                 어디서 모으나요
@@ -137,85 +135,7 @@ export function WebMain() {
       </header>
 
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">
-        <section
-          aria-label="소개"
-          className={cn(wrap, "flex flex-wrap items-center gap-[56px] pt-[88px] pb-[64px]")}
-        >
-          <div className="flex min-w-0 flex-col gap-[24px]" style={{ flex: "999 1 480px" }}>
-            <span className="rounded-pill bg-brand-soft text-brand-strong inline-flex items-center gap-[6px] self-start px-[14px] py-[7px] text-[14px] font-bold">
-              <Sparkles size={16} aria-hidden />
-              무주택자를 위한 집 · 혜택 찾기
-            </span>
-            <h1 className="tracking-h1 m-0 text-[58px] leading-[1.22] font-extrabold">
-              내 조건으로 받을 수 있는
-              <br />
-              집과 혜택을 한 번에
-            </h1>
-            <p className="text-text-sub m-0 text-[20px] leading-[1.65]">
-              청약·공공임대 공고와 정부·지자체 주거 정책을 모아,
-              <br />
-              내가 지원할 수 있는지까지 판정해드려요
-            </p>
-            <div className="mt-[8px] flex flex-wrap gap-[10px]">
-              <Link
-                href={links.start.href}
-                className="rounded-control bg-brand inline-flex min-h-[60px] items-center gap-[8px] px-[26px] text-[18px] font-bold text-white no-underline hover:text-white"
-              >
-                {links.start.label}
-                <ArrowRight size={20} strokeWidth={2.2} aria-hidden />
-              </Link>
-              <a
-                href="#judge"
-                className="rounded-control bg-fill text-text hover:text-text inline-flex min-h-[60px] items-center px-[24px] text-[18px] font-semibold no-underline"
-              >
-                어떻게 판정하나요?
-              </a>
-            </div>
-            <div className="text-text-sub flex flex-wrap gap-x-[20px] gap-y-[8px] text-[15px]">
-              {!session && (
-                <span className="inline-flex items-center gap-[6px]">
-                  <CircleCheck size={18} className="text-brand" aria-hidden />
-                  가입 없이 바로
-                </span>
-              )}
-              <span className="inline-flex items-center gap-[6px]">
-                <Lock size={18} className="text-brand" aria-hidden />
-                금융 정보는 판정할 때만 사용해요
-              </span>
-            </div>
-          </div>
-        </section>
-
-        <section aria-label="찾는 공간 고르기" className={cn(wrap, "pb-[96px]")}>
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-[16px]">
-            <Link
-              href={links.homes}
-              className="rounded-card-lg bg-brand-soft text-text hover:text-text flex items-center gap-[20px] px-[32px] py-[30px] no-underline"
-            >
-              <span className="bg-surface text-brand flex size-[64px] flex-none items-center justify-center rounded-[20px]">
-                <House size={32} strokeWidth={1.8} aria-hidden />
-              </span>
-              <span className="flex flex-1 flex-col gap-[4px]">
-                <span className="tracking-title text-[24px] font-extrabold">살 곳을 찾아요</span>
-                <span className="text-text-sub text-[16px]">청약 · 공공임대 · 정부 혜택</span>
-              </span>
-              <ArrowRight size={26} strokeWidth={2.2} className="text-brand" aria-hidden />
-            </Link>
-            <Link
-              href={routes.business}
-              className="rounded-card-lg bg-bg text-text hover:text-text flex items-center gap-[20px] px-[32px] py-[30px] no-underline"
-            >
-              <span className="bg-surface text-text flex size-[64px] flex-none items-center justify-center rounded-[20px]">
-                <BriefcaseBusiness size={32} strokeWidth={1.8} aria-hidden />
-              </span>
-              <span className="flex flex-1 flex-col gap-[4px]">
-                <span className="tracking-title text-[24px] font-extrabold">일할 곳을 찾아요</span>
-                <span className="text-text-sub text-[16px]">창업 공간 · 회의실 · 사업 지원</span>
-              </span>
-              <ArrowRight size={26} strokeWidth={2.2} className="text-text" aria-hidden />
-            </Link>
-          </div>
-        </section>
+        <LandingIntro start={links.start} signedIn={Boolean(session)} />
 
         <section id="features" aria-label="무엇을 찾아주나요" className="bg-bg">
           <div className={cn(wrap, "flex flex-col gap-[40px] py-[104px]")}>

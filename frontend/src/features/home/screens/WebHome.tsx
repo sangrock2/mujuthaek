@@ -17,8 +17,8 @@ import { WebHeader } from "@/shared/layout/WebHeader";
 import { WebMain, WebPage } from "@/shared/layout/Responsive";
 import { VerdictBadge } from "@/shared/ui/Badge";
 import { DeadlineAlertPrompt } from "@/features/alerts/components/DeadlineAlertPrompt";
-import { WebNoConditionsState } from "@/shared/states/NoConditionsState";
 import { useConditionSummary } from "@/features/conditions/useConditionSummary";
+import { HomeConditionPrompt } from "@/features/home/HomeConditionPrompt";
 import { useHomeSummary } from "@/features/home/queries";
 import { cn } from "@/shared/lib/cn";
 import { routes } from "@/shared/lib/routes";
@@ -67,9 +67,9 @@ function SummaryCard({
 }
 
 export function WebHome() {
-  const { data, loading, error } = useHomeSummary();
-  const n = (v: number, unit: string) => (loading ? "…" : `${v}${unit}`);
   const conditions = useConditionSummary();
+  const personalized = conditions.status === "ready" && conditions.hasConditions;
+  const { data, loading, error, homes, benefits } = useHomeSummary(personalized);
 
   return (
     <WebPage>
@@ -77,94 +77,49 @@ export function WebHome() {
       <WebMain>
         {conditions.status === "loading" ? (
           <QueryFeedback label="저장한 조건" />
-        ) : !conditions.hasConditions ? (
-          <WebNoConditionsState />
-        ) : loading || error ? (
-          <QueryFeedback error={error} label="맞춤 결과" queryKey={["home"]} />
         ) : (
           <>
             <div className="flex flex-wrap items-end justify-between gap-[16px]">
               <div className="flex flex-col gap-[14px]">
                 <h1 className="tracking-h1 m-0 text-[32px] font-extrabold">
-                  내 조건으로 찾은 결과예요
+                  {personalized ? "내 조건으로 찾은 결과예요" : "내 홈"}
                 </h1>
-                <div className="flex flex-wrap items-center gap-[6px]">
-                  {conditions.chips.map((c) => (
-                    <span
-                      key={c}
-                      className="rounded-pill bg-surface text-text-sub px-[13px] py-[7px] text-[14px] font-semibold"
+                {personalized && (
+                  <div className="flex flex-wrap items-center gap-[6px]">
+                    {conditions.chips.map((c) => (
+                      <span
+                        key={c}
+                        className="rounded-pill bg-surface text-text-sub px-[13px] py-[7px] text-[14px] font-semibold"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                    <Link
+                      href={routes.profile}
+                      className="text-brand-strong inline-flex min-h-[36px] items-center gap-[2px] px-[8px] text-[14px] font-bold no-underline"
                     >
-                      {c}
-                    </span>
-                  ))}
-                  <Link
-                    href={routes.profile}
-                    className="text-brand-strong inline-flex min-h-[36px] items-center gap-[2px] px-[8px] text-[14px] font-bold no-underline"
-                  >
-                    조건 수정
-                    <ChevronRight size={16} strokeWidth={2.2} aria-hidden />
-                  </Link>
-                </div>
-              </div>
-              <div role="group" aria-label="관심 분야" className="flex flex-wrap gap-[6px]">
-                {["청약·공공임대", "정부 혜택"].map((label) => (
-                  <button
-                    key={label}
-                    type="button"
-                    aria-pressed="true"
-                    className="rounded-pill bg-brand min-h-[40px] cursor-pointer border-0 px-[16px] text-[14px] font-bold text-white"
-                  >
-                    {label}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  disabled
-                  className="rounded-pill bg-surface text-text-tertiary min-h-[40px] border-0 px-[16px] text-[14px] font-semibold"
-                >
-                  전월세 · 준비 중
-                </button>
+                      조건 수정
+                      <ChevronRight size={16} strokeWidth={2.2} aria-hidden />
+                    </Link>
+                  </div>
+                )}
               </div>
             </div>
+
+            {!personalized && <HomeConditionPrompt />}
 
             <section
               aria-label="요약"
               className="grid gap-[16px]"
               style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}
             >
-              <SummaryCard
-                href={routes.homes}
-                icon={House}
-                label="지원 가능한 청약·공공임대"
-                value={error ? "–" : n(data.homes.count, "곳")}
-                note={
-                  error
-                    ? "공고를 불러오지 못했어요"
-                    : `이번 주 새로 ${n(data.homes.newThisWeek, "곳")} · 마감 임박 ${n(data.homes.closingSoon, "곳")}`
-                }
-              />
-              <SummaryCard
-                href={routes.benefits}
-                icon={Wallet}
-                label="받을 수 있는 혜택"
-                value={
-                  error
-                    ? "–"
-                    : data.benefits
-                      ? `연 ${data.benefits.yearlyAmount}`
-                      : loading
-                        ? "…"
-                        : "–"
-                }
-                note={
-                  error
-                    ? "혜택을 불러오지 못했어요"
-                    : data.benefits
-                      ? `${data.benefits.count}개 · 확인 필요 ${data.benefits.needCheck}개`
-                      : "받을 수 있는 혜택을 판정하고 있어요"
-                }
-              />
+              <SummaryCard href={routes.homes} icon={House} {...homes} />
+              <SummaryCard href={routes.benefits} icon={Wallet} {...benefits} />
             </section>
+
+            {(loading || error) && (
+              <QueryFeedback error={error} label="공고·혜택 소식" queryKey={["home"]} />
+            )}
 
             <div className="flex flex-wrap items-start gap-[24px]">
               <section
@@ -174,9 +129,11 @@ export function WebHome() {
               >
                 <div className="flex items-center justify-between px-[26px] pt-[18px] pb-[10px]">
                   <h2 className="tracking-title m-0 text-[20px] font-extrabold">이번 주 새 소식</h2>
-                  <span className="text-text-tertiary text-[14px]">내 조건에 맞는 것만</span>
+                  {personalized && (
+                    <span className="text-text-tertiary text-[14px]">내 조건에 맞는 것만</span>
+                  )}
                 </div>
-                {!loading && data.news.length === 0 && (
+                {!loading && !error && data.news.length === 0 && (
                   <p className="text-text-sub m-0 px-[26px] py-[20px] text-[15px]">
                     이번 주에 새로 올라온 공고가 없어요
                   </p>
@@ -198,7 +155,7 @@ export function WebHome() {
                       </span>
                       <span className="flex flex-none items-center gap-[10px]">
                         <span className="text-text-sub text-[14px] font-bold">{item.due}</span>
-                        <VerdictBadge verdict={item.verdict} />
+                        {personalized && <VerdictBadge verdict={item.verdict} />}
                       </span>
                     </Link>
                   );
@@ -213,7 +170,7 @@ export function WebHome() {
               </section>
 
               <aside className="flex min-w-0 flex-col gap-[16px]" style={{ flex: "1 1 320px" }}>
-                {data.suggestedBenefit && (
+                {personalized && data.suggestedBenefit && (
                   <Link
                     href={routes.benefit(data.suggestedBenefit.id)}
                     className="rounded-card bg-brand-soft text-text hover:text-text flex flex-col gap-[10px] p-[24px] no-underline"
@@ -250,7 +207,7 @@ export function WebHome() {
                       전체
                     </Link>
                   </div>
-                  {!loading && data.deadlines.length === 0 && (
+                  {!loading && !error && data.deadlines.length === 0 && (
                     <span className="text-text-sub text-[14px]">
                       2주 안에 마감하는 공고가 없어요
                     </span>
@@ -277,7 +234,7 @@ export function WebHome() {
                   ))}
                 </section>
 
-                <DeadlineAlertPrompt variant="web" />
+                {personalized && <DeadlineAlertPrompt variant="web" />}
               </aside>
             </div>
           </>

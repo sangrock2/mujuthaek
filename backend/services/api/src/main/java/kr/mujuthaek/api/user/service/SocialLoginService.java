@@ -67,7 +67,7 @@ public class SocialLoginService {
     var existing =
         socialAccounts
             .findByProviderAndProviderUserId(profile.provider(), profile.providerUserId())
-            .flatMap(account -> users.findById(account.getUserId()));
+            .flatMap(account -> users.lockById(account.getUserId()));
     existing.ifPresent(
         user -> {
           user.loggedIn(profile.nickname(), now);
@@ -83,7 +83,7 @@ public class SocialLoginService {
    * 따라가요(loggedIn).
    */
   private void replaceRealName(User user, SocialProfile profile, Instant now) {
-    if (profile.nickname() != null) {
+    if (user.hasCustomizedNickname() || profile.nickname() != null) {
       return;
     }
     String current = user.getNickname();

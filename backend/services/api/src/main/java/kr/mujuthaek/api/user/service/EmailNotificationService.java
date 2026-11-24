@@ -4,9 +4,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Collection;
 import java.util.HexFormat;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import javax.crypto.Mac;
@@ -28,6 +30,8 @@ import org.springframework.web.client.RestClientException;
 @Service
 public class EmailNotificationService {
   private static final SecureRandom RANDOM = new SecureRandom();
+  private static final int MAX_CODE_ATTEMPTS = 5;
+  private static final int RESEND_SECONDS = 60;
   private final NotificationEmailRepository emails;
   private final EmailVerificationSender mail;
   private final Clock clock;
@@ -71,7 +75,11 @@ public class EmailNotificationService {
       boolean enabled,
       boolean newNotice,
       boolean deadline,
-      boolean reportAnswer) {}
+      boolean reportAnswer,
+      Verification verification) {}
+
+  public record Verification(
+      Instant expiresAt, Instant resendAt, Instant serverTime, int attemptsRemaining) {}
 
   public record Settings(
       boolean enabled,
@@ -85,7 +93,7 @@ public class EmailNotificationService {
     return emails
         .find(id)
         .map(this::status)
-        .orElse(new Status(null, false, false, false, false, false));
+        .orElse(new Status(null, false, false, false, false, false, null));
   }
 
   /**
@@ -96,8 +104,19 @@ public class EmailNotificationService {
    * 실패해도 시도는 남고(1분·하루 5회 제한이 그대로 적용), 늦게 도착한 메일의 링크도 쓸 수 있어요.
    */
   public Status request(UUID id, String input) {
+    return request(id, input, false);
+  }
+
+  public Status requestCode(UUID id, String input) {
+    return request(id, input, true);
+  }
+
+  private Status request(UUID id, String input, boolean code) {
     String address = ContactEmailService.normalize(input);
-    String token = randomToken();
+    String token =
+        code ? String.format(Locale.ROOT, "%06d", RANDOM.nextInt(1_000_000)) : randomToken();
+    String nonce = randomToken();
+    String tokenHash = code ? codeHash(id, nonce, token) : hash(token);
     transactions.executeWithoutResult(
         status -> {
           emails.lock(id);
@@ -112,10 +131,11 @@ public class EmailNotificationService {
           int count =
               previous != null && day.equals(previous.requestDay()) ? previous.requestCount() : 0;
           if (count >= 5
-              || previous != null && previous.requestedAt().plusSeconds(60).isAfter(now)) {
+              || previous != null
+                  && previous.requestedAt().plusSeconds(RESEND_SECONDS).isAfter(now)) {
             throw new CustomException(ErrorCode.RATE_LIMITED);
           }
-          emails.request(id, address, hash(token), randomToken(), now, day, count + 1);
+          emails.request(id, address, tokenHash, nonce, now, day, count + 1, code);
         });
     try {
       mail.sendEmailVerification(address, token);
@@ -134,6 +154,39 @@ public class EmailNotificationService {
   public Status verify(UUID id, String token) {
     consumeLink(token, id);
     return get(id);
+  }
+
+  public Status verifyCode(UUID id, String code) {
+    ErrorCode error =
+        transactions.execute(
+            status -> {
+              emails.lock(id);
+              Saved saved = emails.find(id).orElseThrow(EmailNotificationService::invalid);
+              var now = clock.instant();
+              if (saved.codeAttempts() == null
+                  || saved.expiresAt() == null
+                  || !saved.expiresAt().isAfter(now)) {
+                return ErrorCode.EMAIL_CODE_EXPIRED;
+              }
+              if (saved.codeAttempts() >= MAX_CODE_ATTEMPTS) return ErrorCode.EMAIL_CODE_EXHAUSTED;
+              String expected = codeHash(id, saved.nonce(), code);
+              if (!equal(expected, saved.tokenHash())) {
+                emails.recordCodeFailure(id, saved.tokenHash());
+                return saved.codeAttempts() + 1 == MAX_CODE_ATTEMPTS
+                    ? ErrorCode.EMAIL_CODE_EXHAUSTED
+                    : ErrorCode.EMAIL_CODE_INVALID;
+              }
+              return emails.verifyCode(id, expected, now) ? null : ErrorCode.EMAIL_CODE_EXPIRED;
+            });
+    // 실패 횟수까지 커밋한 뒤 응답해요.
+    if (error != null) throw new CustomException(error);
+    return get(id);
+  }
+
+  private String codeHash(UUID id, String nonce, String code) {
+    String key = unsubscribeKey.isBlank() ? secret : unsubscribeKey;
+    if (key.isBlank()) throw new CustomException(ErrorCode.EMAIL_DELIVERY_UNAVAILABLE);
+    return hmac(key, "email-verification-code:" + id + ":" + nonce + ":" + code);
   }
 
   private void consumeLink(String token, UUID owner) {
@@ -299,7 +352,14 @@ public class EmailNotificationService {
         s.enabled(),
         s.newNotice(),
         s.deadline(),
-        s.reportAnswer());
+        s.reportAnswer(),
+        s.codeAttempts() == null
+            ? null
+            : new Verification(
+                s.expiresAt(),
+                s.requestedAt().plusSeconds(RESEND_SECONDS),
+                clock.instant(),
+                MAX_CODE_ATTEMPTS - s.codeAttempts()));
   }
 
   private static String randomToken() {

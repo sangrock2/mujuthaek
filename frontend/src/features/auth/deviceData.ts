@@ -4,7 +4,7 @@
 // 로그아웃·탈퇴하면 지우고, 다른 계정으로 로그인하면 앞 계정이 남긴 값을 지워요. 공용 PC에서 다음 사람의 판정에 쓰이지 않게요.
 // 로그인하지 않은 사람은 지금처럼 이 기기에 저장해요
 import { clearConditions } from "@/features/conditions/store";
-import { clearRecentSearches } from "@/features/search/recent";
+import { clearRecentSearches, RECENT_PREFERENCE_KEY } from "@/features/search/recent";
 
 /** 이 기기의 조건·사업 정보·최근 검색어가 어느 계정 것인지. 계정 ID를 줄인 값이라 ID 그대로는 남지 않아요 */
 const OWNER_KEY = "mujuthaek:owner";
@@ -16,12 +16,14 @@ const WITHDRAWAL_TTL_MS = 60 * 60 * 1000;
 /**
  * 지우지 않고 두는 값. 사람의 정보가 아니라 이 브라우저의 설정이에요
  * - analytics-consent: 방문 통계 허용 여부 (GA 쿠키처럼 브라우저 단위로 정해요)
+ * - save-recent-searches: 최근 검색어를 저장할지 정한 이 브라우저의 설정
  * - save-on-device: 「이 기기에 조건 저장」을 켰는지 (값이 아니라 저장 방식이에요)
  * - demo-notice-hidden: 시연 안내를 이번 탭에서 닫았는지
  */
 export const KEPT_DEVICE_KEYS: readonly string[] = [
   "mujuthaek:analytics-consent",
   "mujuthaek:save-on-device",
+  RECENT_PREFERENCE_KEY,
   "mujuthaek:demo-notice-hidden",
 ];
 

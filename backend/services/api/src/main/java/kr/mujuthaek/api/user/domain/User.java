@@ -8,10 +8,12 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UuidGenerator;
 
 /** 회원. 소득·자산·나이는 저장하지 않아요 (판정할 때만 받아요). */
 @Entity
+@DynamicUpdate
 @Table(schema = "account", name = "users")
 public class User {
 
@@ -21,6 +23,9 @@ public class User {
 
   @Column(length = 50)
   private String nickname;
+
+  @Column(nullable = false)
+  private boolean nicknameCustomized;
 
   @Enumerated(EnumType.STRING)
   @Column(nullable = false, length = 20)
@@ -67,9 +72,9 @@ public class User {
     return new User(trim(nickname), now);
   }
 
-  /** 로그인할 때마다: 닉네임은 소셜 계정에서 바뀌었으면 따라가고, 마지막 로그인 시각을 남겨요. */
+  /** 로그인할 때마다: 직접 설정한 닉네임이 없으면 소셜 닉네임을 반영하고, 마지막 로그인 시각을 남겨요. */
   public void loggedIn(String nickname, Instant now) {
-    if (nickname != null && !nickname.isBlank()) {
+    if (!nicknameCustomized && nickname != null && !nickname.isBlank()) {
       this.nickname = trim(nickname);
     }
     this.lastLoginAt = now;
@@ -92,6 +97,15 @@ public class User {
   public void rename(String nickname, Instant now) {
     this.nickname = trim(nickname);
     this.updatedAt = now;
+  }
+
+  public void chooseNickname(String nickname, Instant now) {
+    rename(nickname, now);
+    this.nicknameCustomized = true;
+  }
+
+  public boolean hasCustomizedNickname() {
+    return nicknameCustomized;
   }
 
   /** 저장할 때와 같은 방식으로 다듬은 닉네임 (앞뒤 공백, 50자) */

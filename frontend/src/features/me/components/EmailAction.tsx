@@ -72,15 +72,15 @@ export function EmailAction({ action }: { action: "verify" | "unsubscribe" }) {
       {status === "done" && (
         <p role="status">
           {verify
-            ? "이메일 주소를 인증했어요. 알림 설정에서 받을 종류를 선택하고 수신에 동의해 주세요."
+            ? "이메일 주소를 인증했어요. 개인정보 설정에서 받을 종류를 선택하고 수신에 동의해 주세요."
             : "이메일 알림 동의를 철회했어요."}
         </p>
       )}
       {status === "invalid" && (
         <p role="alert">
           {verify
-            ? "인증 링크가 만료됐거나 이미 사용됐어요. 알림 설정에서 새 인증 메일을 요청해 주세요."
-            : "이 링크로 동의를 철회할 수 없어요. 알림 설정에서 확인해 주세요."}
+            ? "인증 링크가 만료됐거나 이미 사용됐어요. 개인정보 설정에서 인증번호를 받아 주세요."
+            : "이 링크로 동의를 철회할 수 없어요. 개인정보 설정에서 확인해 주세요."}
         </p>
       )}
       {status === "retry" && <p role="alert">일시적으로 처리하지 못했어요. 다시 시도해 주세요.</p>}
@@ -94,7 +94,7 @@ export function EmailAction({ action }: { action: "verify" | "unsubscribe" }) {
           {status === "retry" ? "다시 시도하기" : "동의 철회"}
         </button>
       )}
-      <Link href="/me/notifications">알림 설정으로 이동</Link>
+      <Link href="/me/privacy">개인정보 설정으로 이동</Link>
     </main>
   );
 }

@@ -15,7 +15,7 @@ import {
 } from "@/features/chat/components/NoticeChat";
 import { NoticeSections, NoticeToc } from "@/features/notice/components/NoticeSections";
 import { NoticeTags } from "@/features/notice/components/NoticeTags";
-import { NOTICE_PDF_PANEL_WIDTH, PdfViewer } from "@/features/notice/components/PdfViewer";
+import { PdfViewer } from "@/features/notice/components/PdfViewer";
 import { WebRankCard } from "@/features/notice/components/RankCard";
 import { WebUnitFilter } from "@/features/notice/components/UnitFilter";
 import { dueText } from "@/features/notice/format";
@@ -53,45 +53,40 @@ export function WebDetailUnits({ id }: { id: string }) {
     track("notice_source_open", { ...noticeParams(n), via }),
   );
   const openOriginal = original.openOriginal;
-  const pdfUrl = original.viewer?.src;
-  const pdfSpace = pdf.open && pdfUrl ? NOTICE_PDF_PANEL_WIDTH : undefined;
 
   return (
     <WebPage>
-      <div
-        className="flex flex-1 flex-col [overflow-anchor:none]"
-        style={{ paddingRight: pdfSpace }}
-      >
+      <div className="flex flex-1 flex-col">
         <WebHeader mode="home" current={routes.homes} />
-        <WebMain
-          className={cn("gap-[16px] pt-[24px] pb-[80px]", pdfSpace && "max-w-[760px] px-6 pt-4")}
-        >
+        <WebMain className={"gap-[16px] pt-[22px] pb-[64px]"}>
           <nav
             aria-label="위치"
-            className="text-text-tertiary flex items-center gap-[4px] text-[14px]"
+            className="text-text-tertiary flex min-w-0 items-center gap-[6px] text-[14px]"
           >
             <Link
               href={routes.homes}
-              className="text-text-sub hover:text-text-sub inline-flex min-h-[36px] items-center font-semibold no-underline"
+              className="text-text-sub hover:text-text-sub inline-flex min-h-[36px] shrink-0 items-center font-semibold no-underline"
             >
-              내 집
+              주거 공고
             </Link>
-            <ChevronRight size={16} aria-hidden />
-            <span aria-current="page">{n.title}</span>
+            <ChevronRight size={16} className="shrink-0" aria-hidden />
+            <span aria-current="page" className="truncate">
+              {n.title}
+            </span>
           </nav>
 
           <div
             className={cn(
               "grid items-start gap-[24px]",
-              pdf.open || chatOpen ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_320px]",
+              chatOpen ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_320px]",
             )}
           >
             <div className="flex min-w-0 flex-col gap-[16px]">
               <section
                 aria-label="공고 요약"
                 className={cn(
-                  "rounded-card-lg bg-surface flex flex-wrap items-end justify-between",
-                  pdfSpace ? "gap-4 px-5 py-5" : "gap-[24px] px-[30px] py-[28px]",
+                  "rounded-card-lg border-line-soft bg-surface flex flex-wrap items-end justify-between border",
+                  "gap-[20px] px-[26px] py-[23px]",
                 )}
               >
                 <div className="flex flex-col gap-[10px]">
@@ -105,7 +100,7 @@ export function WebDetailUnits({ id }: { id: string }) {
                   <h1
                     className={cn(
                       "tracking-h1 m-0 font-extrabold",
-                      pdfSpace ? "text-[26px]" : "text-[34px]",
+                      "text-[34px] leading-[1.23] break-keep",
                     )}
                   >
                     {n.title}
@@ -368,7 +363,7 @@ export function WebDetailUnits({ id }: { id: string }) {
                   className="flex min-w-0 flex-col gap-[16px]"
                   style={{ flex: `999 1 ${chatOpen ? DETAIL_MAIN_BASIS_WITH_CHAT : 560}px` }}
                 >
-                  <NoticeChat noticeId={n.id} variant="web" rightOffset={pdfSpace} />
+                  <NoticeChat noticeId={n.id} variant="web" />
                 </div>
               </div>
             </div>
@@ -431,7 +426,13 @@ export function WebDetailUnits({ id }: { id: string }) {
           </div>
         </WebMain>
       </div>
-      {original.viewer && <PdfViewer {...original.viewer} variant="web" />}
+      {original.viewer && (
+        <PdfViewer
+          {...original.viewer}
+          notice={{ title: n.title, summary: doc.summary }}
+          variant="web"
+        />
+      )}
     </WebPage>
   );
 }

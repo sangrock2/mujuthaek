@@ -71,6 +71,23 @@ class SocialLoginServiceTest {
   }
 
   @Test
+  void savedNicknameSurvivesSocialLogin() {
+    var profile = new SocialProfile(SocialProvider.KAKAO, "custom-name", "소셜 닉네임");
+    var original = socialLoginService.login(profile);
+
+    assertThat(userService.changeNickname(original.userId(), "  새 이름 🏡  ")).isEqualTo("새 이름 🏡");
+    users.flush();
+    entityManager.clear();
+
+    var again =
+        socialLoginService.login(
+            new SocialProfile(profile.provider(), profile.providerUserId(), "다른 소셜 이름"));
+    assertThat(again.userId()).isEqualTo(original.userId());
+    assertThat(again.nickname()).isEqualTo("새 이름 🏡");
+    assertThat(userService.getNickname(original.userId())).isEqualTo("새 이름 🏡");
+  }
+
+  @Test
   void adminRoleIsKeptOnLogin() {
     LoginUser first =
         socialLoginService.login(new SocialProfile(SocialProvider.KAKAO, "333", "관리자"));

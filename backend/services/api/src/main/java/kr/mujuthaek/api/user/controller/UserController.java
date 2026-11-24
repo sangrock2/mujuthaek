@@ -4,9 +4,11 @@ import jakarta.validation.Valid;
 import java.util.Locale;
 import kr.mujuthaek.api.user.controller.spec.UserApiSpec;
 import kr.mujuthaek.api.user.dto.request.ContactEmailRequest;
+import kr.mujuthaek.api.user.dto.request.NicknameRequest;
 import kr.mujuthaek.api.user.dto.request.TermsAgreementRequest;
 import kr.mujuthaek.api.user.dto.response.MeResponse;
 import kr.mujuthaek.api.user.dto.response.MyReportsResponse;
+import kr.mujuthaek.api.user.dto.response.NicknameResponse;
 import kr.mujuthaek.api.user.dto.response.WithdrawalResponse;
 import kr.mujuthaek.api.user.service.ContactEmailService;
 import kr.mujuthaek.api.user.service.LoginUser;
@@ -79,6 +81,13 @@ class UserController implements UserApiSpec {
   @GetMapping("/me")
   public MeResponse me(@AuthenticationPrincipal LoginUser user) {
     return userService.getMe(user.userId());
+  }
+
+  @Override
+  @PutMapping("/me/nickname")
+  public NicknameResponse changeNickname(
+      @AuthenticationPrincipal LoginUser user, @RequestBody NicknameRequest request) {
+    return new NicknameResponse(userService.changeNickname(user.userId(), request.nickname()));
   }
 
   @Override
