@@ -84,17 +84,19 @@ public class AdminBenefitReviewService {
         edits.add(one);
       }
     }
-    client.benefitDecide(id, "approve", note(request, false), reviewer, edits);
+    JsonNode decision = client.benefitDecide(id, "approve", note(request, false), reviewer, edits);
     countsCache.clear();
-    return new AdminReviewDecisionResponse(id, "APPROVED", remaining());
+    return new AdminReviewDecisionResponse(
+        id, "APPROVED", decision == null ? null : text(decision.path("eventId")));
   }
 
   /** 반려: 서비스에 안 보이게 다시 내보내요. 사유가 있으면 메모 앞에 붙여 정제 결과의 relevanceReason에 남아요. */
   public AdminReviewDecisionResponse reject(
       String id, AdminReviewDecisionRequest request, String reviewer) {
-    client.benefitDecide(id, "reject", note(request, true), reviewer, null);
+    JsonNode decision = client.benefitDecide(id, "reject", note(request, true), reviewer, null);
     countsCache.clear();
-    return new AdminReviewDecisionResponse(id, "REJECTED", remaining());
+    return new AdminReviewDecisionResponse(
+        id, "REJECTED", decision == null ? null : text(decision.path("eventId")));
   }
 
   private static String note(AdminReviewDecisionRequest request, boolean withReason) {

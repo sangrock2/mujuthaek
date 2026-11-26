@@ -1,9 +1,4 @@
-import {
-  type InfiniteData,
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAdminMe } from "@/features/admin/components/AdminGuard";
 import { useCallback } from "react";
 import { mockQuery } from "@/features/mock-query";
@@ -30,6 +25,7 @@ import {
   liveReportQueuePage,
   liveReports,
   liveReviewDetail,
+  liveReviewPublication,
   liveReviewQueuePage,
   liveSources,
   liveBotTraffic,
@@ -153,7 +149,6 @@ type QueuePage = Awaited<ReturnType<typeof liveReviewQueuePage>>;
  * 화면을 떠나면 받아 둔 페이지를 버려요(돌아왔을 때 수천 건을 페이지마다 다시 받지 않게 첫 페이지부터).
  */
 export function useReviewQueue(reason: ReviewReason | null) {
-  const queryClient = useQueryClient();
   const permissions = useAdminMe().data?.permissions;
   const kinds = [
     ...(permissions?.includes("NOTICE_REVIEW") ? ["NOTICE"] : []),
@@ -184,7 +179,7 @@ export function useReviewQueue(reason: ReviewReason | null) {
       fetching: false,
       reload: () => {},
       loadMore: () => {},
-      refreshTotal: async () => {},
+      refreshAfterDecision: async () => false,
     };
   }
   const items = q.data?.pages.flatMap((p) => p.items) ?? [];
@@ -214,17 +209,15 @@ export function useReviewQueue(reason: ReviewReason | null) {
     },
     /** 대기열 아래 끝이 보이면 다음 20건 */
     loadMore: () => {
-      if (q.hasNextPage && !q.isFetchingNextPage && !q.isFetchNextPageError) void q.fetchNextPage();
+      if (q.hasNextPage && !q.isFetching && !q.isFetchNextPageError) void q.fetchNextPage();
     },
-    refreshTotal: async () => {
-      const { total } = await liveReviewQueuePage(kinds, reason, null);
-      queryClient.setQueryData<InfiniteData<QueuePage>>(
-        queryKey,
-        (data) =>
-          data && {
-            ...data,
-            pages: data.pages.map((page, i) => (i === 0 ? { ...page, total } : page)),
-          },
+    refreshAfterDecision: async (id: string) => {
+      const result = await q.refetch();
+      if (result.isError || !result.data) return false;
+      return !result.data.pages.some((page) =>
+        page.items.some(
+          (item) => item.id === id || item.reviewMembers?.some((member) => member.id === id),
+        ),
       );
     },
   };
@@ -241,9 +234,19 @@ export function useReviewDetail(id: string) {
   });
 }
 
+export function useReviewPublication(kind?: "notice" | "benefit", eventId?: string | null) {
+  return useQuery({
+    queryKey: ["review-publication", kind, eventId],
+    queryFn: () => liveReviewPublication(kind!, eventId!),
+    enabled: LIVE && !!kind && !!eventId,
+    refetchInterval: ({ state }) =>
+      state.data?.outcome === "PENDING" && state.dataUpdateCount < 15 ? 4_000 : false,
+    retry: false,
+  });
+}
+
 /**
- * 승인·반려 뒤에 사이드바 건수를 다시 받아요. 대기열 건수는 현재 필터의 첫 페이지로 확인합니다.
- * 처리한 건은 「승인함·반려함」으로 남았다가 화면을 다시 열면 빠져요. 관리자 화면 전체({@link useSetAdminCounts})는 다시 받지 않아요
+ * 승인·반려 뒤에 사이드바 건수를 다시 받아요.
  */
 export function useReviewDecided() {
   const queryClient = useQueryClient();

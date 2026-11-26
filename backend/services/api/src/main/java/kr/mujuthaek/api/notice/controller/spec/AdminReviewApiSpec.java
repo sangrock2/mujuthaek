@@ -110,7 +110,7 @@ public interface AdminReviewApiSpec {
       description =
           "본문은 비워도 돼요. edits가 있으면 그 칸만 고쳐서 승인해요(path는 상세의 fields[].path). 검수 API가 공고 형식을 다시 "
               + "검사하고 결과를 다시 발행해요. 승인에서는 reason을 무시해요. 처리 기록의 검수자는 로그인 계정 ID예요. "
-              + "응답의 pendingCount는 처리 뒤 남은 대기 건수예요.")
+              + "응답의 eventId로 공개 반영을 조회할 수 있어요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",
@@ -134,7 +134,7 @@ public interface AdminReviewApiSpec {
       summary = "공고 검수 반려",
       description =
           "본문은 비워도 돼요. 발행하지 않아요. reason(반려 사유)이 있으면 메모 앞에 [사유]로 붙여 남기고, 반려에서는 edits를 무시해요. "
-              + "처리 기록의 검수자는 로그인 계정 ID예요. 응답의 pendingCount는 처리 뒤 남은 대기 건수예요.")
+              + "처리 기록의 검수자는 로그인 계정 ID예요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",

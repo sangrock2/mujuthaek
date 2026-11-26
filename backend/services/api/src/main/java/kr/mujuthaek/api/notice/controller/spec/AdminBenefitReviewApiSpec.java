@@ -43,7 +43,7 @@ public interface AdminBenefitReviewApiSpec {
       description =
           "본문은 비워도 돼요. edits가 있으면 그 칸만 고친 뒤(path 예: /conditions/0/value) 확인 필요를 풀어 다시 내보내요. "
               + "사용자 알림은 보내지 않아요. 승인에서는 reason을 무시해요. 처리 기록의 검수자는 로그인 계정 ID예요. "
-              + "응답의 pendingCount는 처리 뒤 남은 혜택 검수 대기 건수예요.")
+              + "응답의 eventId로 공개 반영을 조회할 수 있어요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",
@@ -69,7 +69,7 @@ public interface AdminBenefitReviewApiSpec {
       description =
           "본문은 비워도 돼요. relevant=false로 다시 내보내 서비스에 안 보이게 해요. 사용자 알림은 보내지 않아요. "
               + "reason(반려 사유)이 있으면 메모 앞에 [사유]로 붙여 남기고, 반려에서는 edits를 무시해요. "
-              + "처리 기록의 검수자는 로그인 계정 ID예요. 응답의 pendingCount는 처리 뒤 남은 혜택 검수 대기 건수예요.")
+              + "처리 기록의 검수자는 로그인 계정 ID예요. 응답의 eventId로 숨김 반영을 조회할 수 있어요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",

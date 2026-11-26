@@ -37,6 +37,42 @@ public class BenefitRepository {
   /** 저장된 혜택의 ID, 반영한 수집 버전, 범위 안(보이는 혜택)인지. */
   public record Saved(UUID id, int version, boolean relevant) {}
 
+  public record ReviewPublication(String outcome, UUID publicId, int version) {}
+
+  public Optional<ReviewPublication> reviewPublication(UUID eventId) {
+    return jdbc.sql(
+            """
+            select r.outcome,
+                   case when r.outcome = 'PUBLISHED' and b.relevant then b.id end as public_id,
+                   r.source_version
+              from benefit.review_publications r
+              left join benefit.benefits b on b.id = r.benefit_id
+             where r.event_id = :event
+            """)
+        .param("event", eventId)
+        .query(
+            (rs, i) ->
+                new ReviewPublication(
+                    rs.getString("outcome"),
+                    rs.getObject("public_id", UUID.class),
+                    rs.getInt("source_version")))
+        .optional();
+  }
+
+  public void recordReviewPublication(UUID eventId, UUID benefitId, int version, String outcome) {
+    jdbc.sql(
+            """
+            insert into benefit.review_publications (event_id, outcome, benefit_id, source_version)
+              values (:event, :outcome, :benefit, :version)
+              on conflict (event_id) do nothing
+            """)
+        .param("event", eventId)
+        .param("outcome", outcome)
+        .param("benefit", benefitId)
+        .param("version", version)
+        .update();
+  }
+
   /** 다른 모듈(알림)에 주는 혜택 요약 한 줄. */
   public record SummaryRow(
       UUID id,
