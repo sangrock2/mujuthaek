@@ -74,8 +74,7 @@ public class AdminReviewService {
   static final Duration URGENT_TTL = Duration.ofMinutes(1);
 
   /**
-   * 검수 대기열 첫 페이지는 5초 동안 다시 써요. 관리자 여럿이 검수 화면을 열 때마다 추출 DB에 같은 첫 페이지를 묻지 않게(2026-10-30 부하 시험: 대기열 첫
-   * 페이지가 추출 DB 시간의 대부분). 이 서버에서 공고 검수를 처리하면 바로 비우고, 혜택 검수 처리는 5초 안에 반영돼요.
+   * 검수 대기열 첫 페이지는 5초 동안 다시 써요. 관리자 여럿이 검수 화면을 열 때마다 추출 DB에 같은 첫 페이지를 묻지 않게 해요. 검수 결정을 저장하면 바로 비워요.
    */
   static final Duration QUEUE_FIRST_PAGE_TTL = Duration.ofSeconds(5);
 
@@ -112,6 +111,10 @@ public class AdminReviewService {
             QUEUE_FIRST_PAGE_TTL,
             clock,
             k -> queuePage(k.kinds(), k.reason(), ReviewQueueCursor.decode(null), k.size()));
+  }
+
+  public void clearQueueCache() {
+    queueFirstPageCache.clear();
   }
 
   /**
@@ -458,11 +461,13 @@ public class AdminReviewService {
         edits.add(one);
       }
     }
-    client.approve(id, request == null ? null : blankToNull(request.note()), reviewer, edits);
+    JsonNode decision =
+        client.approve(id, request == null ? null : blankToNull(request.note()), reviewer, edits);
     urgentCache.clear();
     queueFirstPageCache.clear();
     countsCache.clear();
-    return new AdminReviewDecisionResponse(id, "APPROVED", remaining());
+    return new AdminReviewDecisionResponse(
+        id, "APPROVED", decision == null ? null : text(decision.path("eventId")));
   }
 
   /** 반려. 사유가 있으면 메모 앞에 [사유]로 붙여 남겨요(검수 API는 메모 칸 하나만 있어요). */
@@ -472,7 +477,7 @@ public class AdminReviewService {
     urgentCache.clear();
     queueFirstPageCache.clear();
     countsCache.clear();
-    return new AdminReviewDecisionResponse(id, "REJECTED", remaining());
+    return new AdminReviewDecisionResponse(id, "REJECTED", null);
   }
 
   static String rejectNote(AdminReviewDecisionRequest request) {
@@ -693,11 +698,6 @@ public class AdminReviewService {
     if (value != null && !value.isBlank() && !list.contains(value)) {
       list.add(value);
     }
-  }
-
-  private int remaining() {
-    return ExtractionReviewClient.total(
-        client.pendingHead(noticeQueries.publishedHousingReviewStates()));
   }
 
   private static List<Item> items(JsonNode list) {

@@ -12,6 +12,7 @@ import kr.mujuthaek.api.notice.dto.response.AdminReviewCountsResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDecisionResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewListResponse;
+import kr.mujuthaek.api.notice.dto.response.AdminReviewPublicationResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewQueueResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewStatsResponse;
 import tools.jackson.databind.JsonNode;
@@ -30,8 +31,8 @@ public interface AdminReviewApiSpec {
               + "이어서 받아요(null이면 끝). total은 첫 페이지(cursor 없이)에서만 정확해요. "
               + "reason이 FORMAT이면 혜택은 없고, MUST면 혜택은 정책 제보로 다시 연 건만이에요. "
               + "첫 페이지(cursor 없이)는 5초가 지난 뒤 부르면 지난 값을 먼저 주고 뒤에서 새로 받아요. 그래서 마지막으로 받은 지 최대 50초 된 값이 나올 수 있어요. "
-              + "줄 값이 없으면(같은 kinds·reason·size로 처음, 이 서버에서 공고 검수를 승인·반려한 직후, 마지막으로 받은 지 50초가 지남) 그 자리에서 받고, 실패하면 503이에요. "
-              + "혜택 검수 처리는 첫 페이지에 바로 반영되지 않아요. 다음 페이지(cursor 있음)는 늘 그 자리에서 받아요.")
+              + "줄 값이 없으면(같은 kinds·reason·size로 처음, 이 서버에서 공고·혜택 검수를 승인·반려한 직후, 마지막으로 받은 지 50초가 지남) 그 자리에서 받고, 실패하면 503이에요. "
+              + "다음 페이지(cursor 있음)는 늘 그 자리에서 받아요.")
   @ApiResponse(responseCode = "200", description = "대기열 한 페이지")
   @ApiResponse(
       responseCode = "400",
@@ -106,11 +107,18 @@ public interface AdminReviewApiSpec {
   JsonNode trace(@Parameter(description = "추출 작업 ID(검수 작업 ID와 같아요)") UUID id);
 
   @Operation(
+      summary = "공고 검수 공개 반영 조회",
+      description = "승인 응답의 이벤트 ID로 사용자 화면에 반영된 결과와 공개 공고 버전을 조회해요. 아직 수신 처리 기록이 없으면 PENDING이에요.")
+  @ApiResponse(responseCode = "200", description = "검수 결과의 공개 반영 상태")
+  AdminReviewPublicationResponse publication(
+      @Parameter(description = "검수 결정 응답의 이벤트 ID") UUID eventId);
+
+  @Operation(
       summary = "공고 검수 승인",
       description =
           "본문은 비워도 돼요. edits가 있으면 그 칸만 고쳐서 승인해요(path는 상세의 fields[].path). 검수 API가 공고 형식을 다시 "
               + "검사하고 결과를 다시 발행해요. 승인에서는 reason을 무시해요. 처리 기록의 검수자는 로그인 계정 ID예요. "
-              + "응답의 pendingCount는 처리 뒤 남은 대기 건수예요.")
+              + "응답의 eventId로 공개 반영을 조회할 수 있어요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",
@@ -134,7 +142,7 @@ public interface AdminReviewApiSpec {
       summary = "공고 검수 반려",
       description =
           "본문은 비워도 돼요. 발행하지 않아요. reason(반려 사유)이 있으면 메모 앞에 [사유]로 붙여 남기고, 반려에서는 edits를 무시해요. "
-              + "처리 기록의 검수자는 로그인 계정 ID예요. 응답의 pendingCount는 처리 뒤 남은 대기 건수예요.")
+              + "처리 기록의 검수자는 로그인 계정 ID예요.")
   @ApiResponse(responseCode = "200", description = "처리 결과")
   @ApiResponse(
       responseCode = "400",

@@ -635,7 +635,7 @@ export async function decideReview(
     body.reason = REJECT[rejectReason] ?? null;
   }
   const action = approve ? "approve" : "reject";
-  return api.post<{ pendingCount: number }>(
+  return api.post<{ eventId?: string | null }>(
     meta.kind === "notice"
       ? apiPath`/api/admin/reviews/${meta.id}/${action}`
       : apiPath`/api/admin/benefit-reviews/${meta.id}/${action}`,
@@ -649,6 +649,14 @@ const REJECT: Record<string, string> = {
   "서비스 대상 아님": "OUT_OF_SCOPE",
   "마감된 공고": "CLOSED",
 };
+
+export function liveReviewPublication(kind: "notice" | "benefit", eventId: string) {
+  return api.get<{ outcome: string; publicId: string | null; version: number | null }>(
+    kind === "notice"
+      ? apiPath`/api/admin/reviews/publication/${eventId}`
+      : apiPath`/api/admin/benefit-reviews/publication/${eventId}`,
+  );
+}
 
 // ---------- 제보 ----------
 const reportTargetLabel: Record<string, string> = {

@@ -10,8 +10,10 @@ import kr.mujuthaek.api.notice.dto.response.AdminReviewCountsResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDecisionResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewListResponse;
+import kr.mujuthaek.api.notice.dto.response.AdminReviewPublicationResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewQueueResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewStatsResponse;
+import kr.mujuthaek.api.notice.repository.ExtractionResultRepository;
 import kr.mujuthaek.api.notice.service.internal.AdminReviewService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,9 +30,19 @@ import tools.jackson.databind.JsonNode;
 class AdminReviewController implements AdminReviewApiSpec {
 
   private final AdminReviewService reviews;
+  private final ExtractionResultRepository results;
 
-  AdminReviewController(AdminReviewService reviews) {
+  AdminReviewController(AdminReviewService reviews, ExtractionResultRepository results) {
     this.reviews = reviews;
+    this.results = results;
+  }
+
+  @Override
+  @GetMapping("/publication/{eventId}")
+  public AdminReviewPublicationResponse publication(@PathVariable UUID eventId) {
+    return results
+        .findApprovedPublication(eventId)
+        .orElseGet(AdminReviewPublicationResponse::pending);
   }
 
   @Override

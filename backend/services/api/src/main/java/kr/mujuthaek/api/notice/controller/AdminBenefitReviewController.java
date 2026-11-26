@@ -3,12 +3,15 @@ package kr.mujuthaek.api.notice.controller;
 import jakarta.validation.Valid;
 import java.security.Principal;
 import java.util.UUID;
+import kr.mujuthaek.api.benefit.service.BenefitQueryService;
 import kr.mujuthaek.api.notice.controller.spec.AdminBenefitReviewApiSpec;
 import kr.mujuthaek.api.notice.dto.request.AdminReviewDecisionRequest;
 import kr.mujuthaek.api.notice.dto.response.AdminBenefitReviewCountsResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminBenefitReviewDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDecisionResponse;
+import kr.mujuthaek.api.notice.dto.response.AdminReviewPublicationResponse;
 import kr.mujuthaek.api.notice.service.internal.AdminBenefitReviewService;
+import kr.mujuthaek.api.notice.service.internal.AdminReviewService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,9 +25,26 @@ import org.springframework.web.bind.annotation.RestController;
 class AdminBenefitReviewController implements AdminBenefitReviewApiSpec {
 
   private final AdminBenefitReviewService reviews;
+  private final AdminReviewService queue;
+  private final BenefitQueryService benefits;
 
-  AdminBenefitReviewController(AdminBenefitReviewService reviews) {
+  AdminBenefitReviewController(
+      AdminBenefitReviewService reviews, AdminReviewService queue, BenefitQueryService benefits) {
     this.reviews = reviews;
+    this.queue = queue;
+    this.benefits = benefits;
+  }
+
+  @Override
+  @GetMapping("/publication/{eventId}")
+  public AdminReviewPublicationResponse publication(@PathVariable UUID eventId) {
+    return benefits
+        .reviewPublication(eventId)
+        .map(
+            result ->
+                new AdminReviewPublicationResponse(
+                    result.outcome(), result.publicId(), result.version()))
+        .orElseGet(AdminReviewPublicationResponse::pending);
   }
 
   @Override
@@ -45,7 +65,9 @@ class AdminBenefitReviewController implements AdminBenefitReviewApiSpec {
       @PathVariable UUID id,
       @Valid @RequestBody(required = false) AdminReviewDecisionRequest request,
       Principal principal) {
-    return reviews.approve(id.toString(), request, reviewer(principal));
+    var result = reviews.approve(id.toString(), request, reviewer(principal));
+    queue.clearQueueCache();
+    return result;
   }
 
   @Override
@@ -54,7 +76,9 @@ class AdminBenefitReviewController implements AdminBenefitReviewApiSpec {
       @PathVariable UUID id,
       @Valid @RequestBody(required = false) AdminReviewDecisionRequest request,
       Principal principal) {
-    return reviews.reject(id.toString(), request, reviewer(principal));
+    var result = reviews.reject(id.toString(), request, reviewer(principal));
+    queue.clearQueueCache();
+    return result;
   }
 
   private static String reviewer(Principal principal) {
