@@ -1,4 +1,4 @@
-// 화면용 예시 데이터 (디자인 WebNotices · MNotices · WebFaq · MFaq · WebStates · MStates). 실제 값은 API에서 받아요.
+// 화면용 예시 데이터 (디자인 WebNotices · MNotices · FaqScreen · WebStates · MStates). 실제 값은 API에서 받아요.
 import type { NearMiss } from "@/shared/states/NoMatchState";
 import { routes } from "@/shared/lib/routes";
 
