@@ -25,6 +25,15 @@ public class BenefitQueryService {
     this.benefits = benefits;
   }
 
+  public record ReviewPublication(String outcome, UUID publicId, int version) {}
+
+  public Optional<ReviewPublication> reviewPublication(UUID eventId) {
+    return benefits
+        .reviewPublication(eventId)
+        .map(
+            result -> new ReviewPublication(result.outcome(), result.publicId(), result.version()));
+  }
+
   /** 신청할 수 있거나 곧 열리는 주거 혜택. regionCodes가 비면 전체, 있으면 전국 + 그 지역과 겹치는 혜택. */
   public List<BenefitForJudgment> openForJudgment(Collection<String> regionCodes) {
     return benefits.openBenefits(regionCodes).stream()

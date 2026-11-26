@@ -14,24 +14,24 @@ import {
 import { CustomerCenterHeader } from "@/features/content/components/WebContentShell";
 import { MPage } from "@/shared/layout/Responsive";
 import { routes } from "@/shared/lib/routes";
+import { ScrollToTop } from "@/shared/ui/ScrollToTop";
 
 /** 「무주택자들은 어떻게 만들었나요」 (모바일) */
 export function MHowItWorks() {
   const web = false;
   return (
     <MPage className="stitch-surface">
-      <CustomerCenterHeader current={routes.howItWorks} />
+      <CustomerCenterHeader current={routes.howItWorks} sticky />
       <main
         id="main-content"
         tabIndex={-1}
         className="flex flex-1 flex-col gap-[28px] px-[16px] pt-[20px] pb-[36px]"
       >
-        <h1 className="tracking-h1 m-0 text-[24px] font-extrabold">어떻게 만들었나요</h1>
         <div className="flex flex-col gap-[8px] px-[4px]">
           <span className="text-brand-strong text-[14px] font-bold">서비스 소개</span>
-          <h2 className="tracking-h1 m-0 text-[26px] leading-[1.35] font-extrabold">
+          <h1 className="tracking-h1 m-0 text-[26px] leading-[1.35] font-extrabold">
             무주택자들은 어떻게 만들었나요
-          </h2>
+          </h1>
           <p className="text-text-sub m-0 text-[15px] leading-[1.7]">
             여러 기관에 흩어진 공고를 모으고, 첨부 원문에서 자격 · 일정 · 서류를 뽑아, 내 조건으로
             지원할 수 있는지 알려 드리기까지의 과정을 보여 드려요.
@@ -55,7 +55,7 @@ export function MHowItWorks() {
               sub="섹션을 나눠 맡은 AI 담당이 값을 넣고, 코드의 검증 결과를 받아 스스로 고쳐요"
             />
           </div>
-          <AgentLoop web={web} />
+          <AgentLoop />
           <Roles web={web} />
         </section>
 
@@ -88,28 +88,28 @@ export function MHowItWorks() {
           <Verdicts web={web} />
         </section>
 
-        <section
-          aria-label="시작하기"
-          className="bg-brand-deep flex flex-col gap-[10px] rounded-[22px] p-[20px] text-white"
-        >
+        <section aria-label="시작하기" className="rounded-card bg-surface flex flex-col gap-2 p-5">
           <span className="text-[17px] font-extrabold">내 조건으로 확인해 보세요</span>
-          <span className="text-brand-deep-text text-[14px]">
+          <span className="text-text-sub text-sm">
             가입 없이 조건만 넣으면 지원할 수 있는 집과 혜택을 보여 드려요
           </span>
-          <Link
-            href={routes.home}
-            className="rounded-control text-brand-strong hover:text-brand-strong flex min-h-[50px] items-center justify-center bg-white text-[15px] font-extrabold no-underline"
-          >
-            서비스로 가기
-          </Link>
-          <Link
-            href={routes.faq}
-            className="text-brand-deep-text hover:text-brand-deep-text inline-flex min-h-[44px] items-center justify-center text-[14px] font-bold no-underline"
-          >
-            자주 묻는 질문
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={routes.home}
+              className="rounded-pill bg-brand flex min-h-11 items-center justify-center px-4 text-sm font-bold text-white no-underline hover:text-white"
+            >
+              서비스로 가기
+            </Link>
+            <Link
+              href={routes.faq}
+              className="rounded-pill bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-11 items-center justify-center px-4 text-sm font-bold no-underline"
+            >
+              자주 묻는 질문
+            </Link>
+          </div>
         </section>
       </main>
+      <ScrollToTop />
     </MPage>
   );
 }

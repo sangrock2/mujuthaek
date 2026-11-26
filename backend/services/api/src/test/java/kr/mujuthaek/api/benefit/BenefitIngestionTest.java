@@ -266,6 +266,37 @@ class BenefitIngestionTest {
   }
 
   @Test
+  void 검수_이벤트의_공개와_숨김_반영을_따로_기록한다() {
+    UUID raw = UUID.randomUUID();
+    String approved =
+        BenefitFixture.event(raw, 1, p -> p.withObject("quality").put("reviewed", true));
+    UUID approvedId =
+        UUID.fromString(BenefitFixture.JSON.readTree(approved).path("eventId").asString());
+    assertThat(f.queries.reviewPublication(approvedId)).isEmpty();
+    f.ingest.apply(approved);
+    UUID benefitId = f.repository.findByRawPolicyId(raw).orElseThrow().id();
+    var published = f.queries.reviewPublication(approvedId).orElseThrow();
+    assertThat(published.outcome()).isEqualTo("PUBLISHED");
+    assertThat(published.publicId()).isEqualTo(benefitId);
+
+    String rejected =
+        BenefitFixture.event(
+            raw,
+            1,
+            p -> {
+              p.put("relevant", false);
+              p.withObject("quality").put("reviewed", true);
+            });
+    f.ingest.apply(rejected);
+    UUID rejectedId =
+        UUID.fromString(BenefitFixture.JSON.readTree(rejected).path("eventId").asString());
+    var hidden = f.queries.reviewPublication(rejectedId).orElseThrow();
+    assertThat(hidden.outcome()).isEqualTo("HIDDEN");
+    assertThat(hidden.publicId()).isNull();
+    assertThat(f.queries.reviewPublication(approvedId).orElseThrow().publicId()).isNull();
+  }
+
+  @Test
   void 같은_버전의_검수_결과는_고치고_검수_아닌_같은_버전은_버린다() {
     // 2026-11-10 코드 검토: 검수 승인·반려가 검수 전 결과와 같은 버전으로 와서 버려졌음
     UUID raw = UUID.randomUUID();

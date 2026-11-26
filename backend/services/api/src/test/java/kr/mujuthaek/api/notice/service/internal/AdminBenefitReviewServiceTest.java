@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.node.JsonNodeFactory;
@@ -70,7 +69,7 @@ class AdminBenefitReviewServiceTest {
 
   @Test
   void countsAreReusedBrieflyAndRefetchedAfterADecision() {
-    // 받을 요청 차례: 건수 → 반려 → 남은 건수 → (처리했으니) 건수 다시. 더 받으면 가짜 서버가 실패시켜요
+    // 건수 → 반려 → 건수 다시. 반려 응답 중에는 건수를 조회하지 않아요.
     server
         .expect(requestTo(BASE + "/benefit-reviews?status=PENDING&limit=1"))
         .andRespond(withSuccess("{\"total\":2,\"items\":[]}", MediaType.APPLICATION_JSON));
@@ -78,7 +77,7 @@ class AdminBenefitReviewServiceTest {
         .expect(requestTo(BASE + "/benefit-reviews/" + REVIEW + "/reject"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
     server
-        .expect(ExpectedCount.times(2), requestTo(BASE + "/benefit-reviews?status=PENDING&limit=1"))
+        .expect(requestTo(BASE + "/benefit-reviews?status=PENDING&limit=1"))
         .andRespond(withSuccess("{\"total\":1,\"items\":[]}", MediaType.APPLICATION_JSON));
 
     assertThat(service.counts().benefitPending()).isEqualTo(2);
@@ -111,7 +110,7 @@ class AdminBenefitReviewServiceTest {
   }
 
   @Test
-  void approveSendsEditsAndReturnsTheRemainingCount() {
+  void approveSendsEditsAndReturnsTheEventWithoutReadingTheQueue() {
     server
         .expect(requestTo(BASE + "/benefit-reviews/" + REVIEW + "/approve"))
         .andExpect(method(HttpMethod.POST))
@@ -120,16 +119,16 @@ class AdminBenefitReviewServiceTest {
                 .json(
                     "{\"note\":\"확인\",\"reviewer\":\"admin-1\","
                         + "\"edits\":[{\"path\":\"/summary\",\"value\":\"고친 요약\"}]}"))
-        .andRespond(withSuccess("{\"reviewStatus\":\"APPROVED\"}", MediaType.APPLICATION_JSON));
-    server
-        .expect(requestTo(BASE + "/benefit-reviews?status=PENDING&limit=1"))
-        .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+        .andRespond(
+            withSuccess(
+                "{\"reviewStatus\":\"APPROVED\",\"eventId\":\"" + REVIEW + "\"}",
+                MediaType.APPLICATION_JSON));
     var edit = new FieldEdit("/summary", JsonNodeFactory.instance.stringNode("고친 요약"));
     var result =
         service.approve(
             REVIEW, new AdminReviewDecisionRequest(null, "확인", List.of(edit)), "admin-1");
     assertThat(result.reviewStatus()).isEqualTo("APPROVED");
-    assertThat(result.pendingCount()).isZero();
+    assertThat(result.eventId()).isEqualTo(REVIEW);
     server.verify();
   }
 
@@ -138,16 +137,17 @@ class AdminBenefitReviewServiceTest {
     server
         .expect(requestTo(BASE + "/benefit-reviews/" + REVIEW + "/reject"))
         .andExpect(content().json("{\"note\":\"[서비스 대상 아님] 주거 지원 아님\"}"))
-        .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
-    server
-        .expect(requestTo(BASE + "/benefit-reviews?status=PENDING&limit=1"))
-        .andRespond(withSuccess("{\"items\":[" + ITEM + "]}", MediaType.APPLICATION_JSON));
+        .andRespond(
+            withSuccess(
+                "{\"reviewStatus\":\"REJECTED\",\"eventId\":\"" + REVIEW + "\"}",
+                MediaType.APPLICATION_JSON));
     var result =
         service.reject(
             REVIEW,
             new AdminReviewDecisionRequest(RejectReason.OUT_OF_SCOPE, "주거 지원 아님", null),
             null);
-    assertThat(result.pendingCount()).isEqualTo(1);
+    assertThat(result.eventId()).isEqualTo(REVIEW);
+    server.verify();
   }
 
   @Test

@@ -58,6 +58,9 @@ public class BenefitIngestionService {
     boolean reviewOfSaved =
         saved.isPresent() && saved.get().version() == e.version() && e.reviewed();
     if (saved.isPresent() && saved.get().version() >= e.version() && !reviewOfSaved) {
+      if (e.reviewed()) {
+        benefits.recordReviewPublication(e.eventId(), null, e.version(), "STALE");
+      }
       log.info(
           "이미 같거나 새 버전이 있어 버려요 rawPolicyId={} version={} saved={}",
           e.rawPolicyId(),
@@ -79,6 +82,10 @@ public class BenefitIngestionService {
         wasVisible ? benefits.find(saved.get().id()) : Optional.empty();
     var id =
         benefits.save(saved.map(s -> s.id()).orElse(null), e, category, status, clock.instant());
+    if (e.reviewed()) {
+      benefits.recordReviewPublication(
+          e.eventId(), id, e.version(), e.relevant() ? "PUBLISHED" : "HIDDEN");
+    }
     log.info(
         "혜택 반영 eventId={} rawPolicyId={} version={} benefitId={} status={}",
         e.eventId(),

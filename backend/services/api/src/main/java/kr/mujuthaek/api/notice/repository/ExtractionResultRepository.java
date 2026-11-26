@@ -3,9 +3,11 @@ package kr.mujuthaek.api.notice.repository;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import kr.mujuthaek.api.notice.domain.IngestionOutcome;
 import kr.mujuthaek.api.notice.domain.ReviewStatus;
+import kr.mujuthaek.api.notice.dto.response.AdminReviewPublicationResponse;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -50,6 +52,32 @@ public class ExtractionResultRepository {
         .param("id", eventId)
         .query(Boolean.class)
         .single();
+  }
+
+  public Optional<AdminReviewPublicationResponse> findApprovedPublication(UUID eventId) {
+    return jdbc.sql(
+            """
+            select r.outcome, r.notice_id, v.version
+              from notice.extraction_results r
+              left join lateral (
+                select version from notice.notice_versions
+                 where notice_id = r.notice_id
+                   and (source_event_id = r.event_id
+                        or (r.outcome = 'APPROVAL_RECORDED'
+                            and raw_post_id = r.raw_post_id and raw_version = r.raw_version
+                            and created_at <= r.received_at))
+                 order by version desc limit 1
+              ) v on true
+             where r.event_id = :id and r.review_status = 'APPROVED'
+            """)
+        .param("id", eventId)
+        .query(
+            (rs, i) ->
+                new AdminReviewPublicationResponse(
+                    rs.getString("outcome"),
+                    rs.getObject("notice_id", UUID.class),
+                    rs.getObject("version", Integer.class)))
+        .optional();
   }
 
   public void insert(

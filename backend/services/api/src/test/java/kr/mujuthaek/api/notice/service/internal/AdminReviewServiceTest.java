@@ -121,12 +121,11 @@ class AdminReviewServiceTest {
   @Test
   void countsAreReusedBrieflyAndRefetchedAfterADecision() {
     var service = service();
-    // 받을 요청 차례: 건수 → 반려 → 남은 건수 → (처리했으니) 건수 다시. 더 받으면 가짜 서버가 실패시켜요
+    // 건수 → 반려 → 건수 다시. 반려 응답 중에는 건수를 조회하지 않아요.
     expectHead();
     server
         .expect(requestTo(BASE + "/reviews/" + B + "/reject"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
-    expectHead();
     expectHead();
 
     var first = service.counts();
@@ -166,21 +165,21 @@ class AdminReviewServiceTest {
   }
 
   @Test
-  void rejectPutsReasonLabelBeforeNoteAndReturnsRemaining() {
+  void rejectPutsReasonLabelBeforeNoteWithoutQueryingRemaining() {
     var service = service();
     server
         .expect(requestTo(BASE + "/reviews/" + B + "/reject"))
         .andExpect(
             content().json("{\"note\":\"[원문과 다름 · 다시 추출] 표가 잘렸어요\",\"reviewer\":\"admin-1\"}"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
-    expectHead();
     var result =
         service.reject(
             B,
             new AdminReviewDecisionRequest(RejectReason.SOURCE_MISMATCH, " 표가 잘렸어요 ", null),
             "admin-1");
     assertThat(result.reviewStatus()).isEqualTo("REJECTED");
-    assertThat(result.pendingCount()).isEqualTo(3);
+    assertThat(result.eventId()).isNull();
+    server.verify();
   }
 
   @Test
@@ -273,8 +272,10 @@ class AdminReviewServiceTest {
             content()
                 .json(
                     "{\"note\":\"원문 4쪽\",\"reviewer\":\"admin-7\",\"edits\":[{\"path\":\"/eligibility/1/description\",\"value\":\"가상 새 설명\"}]}"))
-        .andRespond(withSuccess("{\"reviewStatus\":\"APPROVED\"}", MediaType.APPLICATION_JSON));
-    expectHead();
+        .andRespond(
+            withSuccess(
+                "{\"reviewStatus\":\"APPROVED\",\"eventId\":\"" + B + "\"}",
+                MediaType.APPLICATION_JSON));
     var request =
         new AdminReviewDecisionRequest(
             null,
@@ -282,7 +283,9 @@ class AdminReviewServiceTest {
             java.util.List.of(
                 new AdminReviewDecisionRequest.FieldEdit(
                     "/eligibility/1/description", mapper.readTree("\"가상 새 설명\""))));
-    assertThat(service.approve(A, request, "admin-7").reviewStatus()).isEqualTo("APPROVED");
+    var result = service.approve(A, request, "admin-7");
+    assertThat(result.reviewStatus()).isEqualTo("APPROVED");
+    assertThat(result.eventId()).isEqualTo(B);
     server.verify();
   }
 
@@ -317,12 +320,11 @@ class AdminReviewServiceTest {
   @Test
   void urgentIsReusedForAMinuteAndRecomputedAfterADecision() {
     var service = service();
-    // 받을 요청 차례: 목록 한 번 → 반려 → 남은 건수 → (처리했으니) 목록 다시. 더 받으면 가짜 서버가 실패시켜요
+    // 목록 한 번 → 반려 → 목록 다시. 대기 건수는 반려 중에 요청하지 않아요.
     expectList(1);
     server
         .expect(requestTo(BASE + "/reviews/" + B + "/reject"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
-    expectHead();
     expectList(1);
 
     var first = service.urgent(3);
