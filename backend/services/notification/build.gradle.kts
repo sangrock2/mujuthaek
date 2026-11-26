@@ -31,7 +31,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus") // 성능 테스트 지표 (/actuator/prometheus, 서버 안에서만)
     implementation("org.flywaydb:flyway-database-postgresql")
-    implementation(platform("software.amazon.awssdk:bom:2.55.9")) // api와 같은 버전
+    implementation(platform("software.amazon.awssdk:bom:2.59.4")) // api와 같은 버전
     implementation("software.amazon.awssdk:sesv2") // 이메일 발송
     runtimeOnly("org.postgresql:postgresql")
 
