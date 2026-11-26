@@ -35,6 +35,7 @@ class AdminBenefitReviewController implements AdminBenefitReviewApiSpec {
     this.benefits = benefits;
   }
 
+  @Override
   @GetMapping("/publication/{eventId}")
   public AdminReviewPublicationResponse publication(@PathVariable UUID eventId) {
     return benefits

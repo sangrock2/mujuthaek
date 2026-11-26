@@ -37,6 +37,7 @@ class AdminReviewController implements AdminReviewApiSpec {
     this.results = results;
   }
 
+  @Override
   @GetMapping("/publication/{eventId}")
   public AdminReviewPublicationResponse publication(@PathVariable UUID eventId) {
     return results

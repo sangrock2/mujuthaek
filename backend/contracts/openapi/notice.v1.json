@@ -715,6 +715,49 @@
         }
       }
     },
+    "/api/admin/reviews/publication/{eventId}": {
+      "get": {
+        "tags": [
+          "admin-review"
+        ],
+        "operationId": "getAdminReviewPublication",
+        "summary": "공고 검수 공개 반영 조회",
+        "description": "승인 응답의 이벤트 ID로 사용자 화면에 반영된 결과와 공개 공고 버전을 조회해요. 아직 수신 처리 기록이 없으면 PENDING이에요.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "description": "검수 결정 응답의 이벤트 ID",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "검수 결과의 공개 반영 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReviewPublication"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
     "/api/admin/reviews/{id}/approve": {
       "post": {
         "tags": [
@@ -1785,6 +1828,49 @@
           },
           "503": {
             "$ref": "#/components/responses/ReviewUnavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/benefit-reviews/publication/{eventId}": {
+      "get": {
+        "tags": [
+          "admin-benefit-review"
+        ],
+        "operationId": "getAdminBenefitReviewPublication",
+        "summary": "혜택 검수 공개·숨김 반영 조회",
+        "description": "승인 또는 반려 응답의 이벤트 ID로 공개·숨김 반영 결과를 조회해요. 아직 수신 처리 기록이 없으면 PENDING이에요.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "description": "검수 결정 응답의 이벤트 ID",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "검수 결과의 공개 반영 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReviewPublication"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
           }
         }
       }
@@ -4292,7 +4378,7 @@
         "required": [
           "id",
           "reviewStatus",
-          "pendingCount"
+          "eventId"
         ],
         "properties": {
           "id": {
@@ -4306,10 +4392,42 @@
               "REJECTED"
             ]
           },
-          "pendingCount": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "처리 뒤 남은 대기 건수"
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "공개 반영 조회에 사용하는 발행 이벤트 ID. 이벤트를 발행하지 않으면 null."
+          }
+        }
+      },
+      "AdminReviewPublication": {
+        "type": "object",
+        "required": [
+          "outcome",
+          "publicId",
+          "version"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "공개 반영 결과. 아직 수신 처리 기록이 없으면 PENDING."
+          },
+          "publicId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "반영된 공고 또는 공개된 혜택의 ID."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "공고 공개 버전 또는 혜택의 수집 버전."
           }
         }
       },

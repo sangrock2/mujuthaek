@@ -10,6 +10,7 @@ import kr.mujuthaek.api.notice.dto.request.AdminReviewDecisionRequest;
 import kr.mujuthaek.api.notice.dto.response.AdminBenefitReviewCountsResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminBenefitReviewDetailResponse;
 import kr.mujuthaek.api.notice.dto.response.AdminReviewDecisionResponse;
+import kr.mujuthaek.api.notice.dto.response.AdminReviewPublicationResponse;
 
 @Tag(
     name = "관리자 혜택 검수",
@@ -37,6 +38,13 @@ public interface AdminBenefitReviewApiSpec {
   @ApiResponse(responseCode = "404", description = "NOTICE_REVIEW_NOT_FOUND — 없는 혜택 검수 항목이에요")
   @ApiResponse(responseCode = "503", description = "NOTICE_REVIEW_UNAVAILABLE — 검수 서버에 연결하지 못했어요")
   AdminBenefitReviewDetailResponse detail(@Parameter(description = "혜택 검수 ID") UUID id);
+
+  @Operation(
+      summary = "혜택 검수 공개·숨김 반영 조회",
+      description = "승인 또는 반려 응답의 이벤트 ID로 공개·숨김 반영 결과를 조회해요. 아직 수신 처리 기록이 없으면 PENDING이에요.")
+  @ApiResponse(responseCode = "200", description = "검수 결과의 공개 반영 상태")
+  AdminReviewPublicationResponse publication(
+      @Parameter(description = "검수 결정 응답의 이벤트 ID") UUID eventId);
 
   @Operation(
       summary = "혜택 검수 승인",

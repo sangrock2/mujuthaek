@@ -188,14 +188,11 @@ class AdminReviewQueueTest {
   @Test
   void firstPageIsReusedBrieflyAndRefetchedAfterADecision() {
     var service = service();
-    // 받을 요청 차례: 첫 페이지(공고만) → 반려 → 남은 건수 → (처리했으니) 첫 페이지 다시. 더 받으면 가짜 서버가 실패시켜요
+    // 받을 요청 차례: 첫 페이지(공고만) → 반려 → 첫 페이지 다시. 더 받으면 가짜 서버가 실패시켜요
     respond("/reviews", notices(1, false, notice(N1, "2026-10-29 01:00:00+00:00")));
     server
         .expect(requestTo(BASE + "/reviews/" + N1 + "/reject"))
         .andRespond(withSuccess("{\"reviewStatus\":\"REJECTED\"}", MediaType.APPLICATION_JSON));
-    server
-        .expect(requestTo(BASE + "/reviews?status=PENDING&limit=1&groupBy=notice"))
-        .andRespond(withSuccess(notices(0, false), MediaType.APPLICATION_JSON));
     respond("/reviews", notices(0, false));
 
     var first = service.queue("NOTICE", null, null, 2);
