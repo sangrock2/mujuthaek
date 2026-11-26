@@ -1,8 +1,9 @@
 "use client";
 
-import { useId } from "react";
 import {
+  ArrowRight,
   Bell,
+  CircleCheck,
   Download,
   FileText,
   ListChecks,
@@ -58,28 +59,25 @@ const steps: Step[] = [
 export function Principles({ web }: Variant) {
   const items = [
     {
+      icon: CircleCheck,
       title: "틀린 값은 게시하지 않아요",
       desc: "확실하지 않으면 값을 지어내지 않고 「확인 필요」로 둬요. 사람이 원문을 보고 확인한 뒤에 보여 드려요.",
     },
     {
+      icon: FileText,
       title: "모든 값에 원문 근거가 있어요",
       desc: "AI가 뽑은 값마다 원문의 어느 줄 · 어느 표 칸에서 왔는지 남겨요. 인용 글은 AI가 옮겨 적지 않고 코드가 원문에서 그대로 꺼내요.",
     },
   ];
   return (
-    <section
-      aria-label="핵심 원칙"
-      className={cn(
-        "rounded-card-lg bg-brand-deep grid gap-[16px] text-white",
-        web ? "grid-cols-2 px-[32px] py-[28px]" : "grid-cols-1 px-[22px] py-[24px]",
-      )}
-    >
-      {items.map((p) => (
-        <div key={p.title} className="flex flex-col gap-[6px]">
-          <span className={cn("font-extrabold", web ? "text-[20px]" : "text-[18px]")}>
-            {p.title}
-          </span>
-          <span className="text-brand-deep-text text-[15px] leading-[1.65]">{p.desc}</span>
+    <section aria-label="핵심 원칙" className={cn("grid gap-3", web && "grid-cols-2")}>
+      {items.map(({ title, desc, icon: Icon }) => (
+        <div key={title} className="rounded-card bg-surface flex flex-col gap-2 p-5 lg:p-6">
+          <h2 className="m-0 flex items-center gap-2 text-base font-extrabold lg:text-lg">
+            <Icon size={18} className="text-brand-strong shrink-0" aria-hidden />
+            {title}
+          </h2>
+          <p className="text-text-sub m-0 text-sm leading-relaxed lg:text-[15px]">{desc}</p>
         </div>
       ))}
     </section>
@@ -89,38 +87,24 @@ export function Principles({ web }: Variant) {
 /** 전체 흐름: PC는 3칸 × 2줄, 모바일은 세로 줄 */
 export function FlowSteps({ web }: Variant) {
   return (
-    <ol className={cn("m-0 list-none p-0", web ? "grid grid-cols-3 gap-[16px]" : "flex flex-col")}>
+    <ol className={cn("m-0 list-none p-0", web ? "grid grid-cols-3 gap-3" : "flex flex-col gap-2")}>
       {steps.map((s, i) => {
         const Icon = s.icon;
-        const last = i === steps.length - 1;
         return (
           <li
             key={s.title}
             className={cn(
-              "relative flex",
-              web
-                ? "rounded-card bg-surface flex-col gap-[10px] px-[22px] py-[20px]"
-                : "gap-[14px] pb-[18px]",
+              "rounded-card bg-surface flex gap-3 p-4",
+              web ? "flex-col lg:p-5" : "items-start",
             )}
           >
-            {!web && !last && (
-              <span
-                aria-hidden
-                className="bg-line absolute top-[40px] bottom-0 left-[19px] w-[2px]"
-              />
-            )}
-            <span
-              className={cn(
-                "flex items-center gap-[10px]",
-                !web && "relative z-[1] flex-none self-start",
-              )}
-            >
-              <span className="rounded-pill bg-brand-soft text-brand-strong flex size-[40px] flex-none items-center justify-center">
-                <Icon size={20} aria-hidden />
+            <span className={cn("flex items-center gap-[10px]", !web && "flex-none self-start")}>
+              <span className="rounded-pill bg-brand-soft text-brand-strong flex size-8 flex-none items-center justify-center">
+                <Icon size={17} aria-hidden />
               </span>
               {web && <StepTitle step={s} n={i + 1} web />}
             </span>
-            <span className={cn("flex min-w-0 flex-col gap-[6px]", !web && "pt-[8px]")}>
+            <span className={"flex min-w-0 flex-col gap-1.5"}>
               {!web && <StepTitle step={s} n={i + 1} web={false} />}
               <span className="text-text-body-long text-[15px] leading-[1.65]">{s.desc}</span>
               {s.title === "코드 검증" && (
@@ -144,7 +128,7 @@ export function FlowSteps({ web }: Variant) {
 function StepTitle({ step, n, web }: { step: Step; n: number; web: boolean }) {
   return (
     <span className="flex flex-wrap items-center gap-[6px]">
-      <span className="text-brand-strong text-[14px] font-extrabold">{n}</span>
+      <span className="sr-only">{n}.</span>
       <span className={cn("tracking-title font-extrabold", web ? "text-[18px]" : "text-[17px]")}>
         {step.title}
       </span>
@@ -157,265 +141,43 @@ function StepTitle({ step, n, web }: { step: Step; n: number; web: boolean }) {
   );
 }
 
-/* ---------- 그림: AI 담당이 넣고 · 검증받고 · 고치는 고리 ---------- */
+const verificationSteps = [
+  { title: "원문", detail: "줄 · 표 칸 번호" },
+  { title: "AI 섹션 담당", detail: "일정 · 자격 · 선정 · 서류" },
+  { title: "값과 근거 입력", detail: "원문 위치를 함께 기록" },
+  { title: "코드 검증", detail: "근거 · 형식 · 금액" },
+];
 
-/** SVG 상자 하나 (색은 모두 사이트 색 토큰 클래스라 테마를 따라가요) */
-function Box({
-  x,
-  y,
-  w,
-  h,
-  lines,
-  tone = "plain",
-}: {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  lines: string[];
-  tone?: "plain" | "brand" | "ok" | "check";
-}) {
-  const box = {
-    plain: "fill-surface stroke-line",
-    brand: "fill-brand-soft stroke-brand",
-    ok: "fill-ok-bg stroke-ok-text",
-    check: "fill-check-bg stroke-check-text",
-  }[tone];
-  const text = {
-    plain: "fill-text",
-    brand: "fill-brand-strong",
-    ok: "fill-ok-text",
-    check: "fill-check-text",
-  }[tone];
-  const lineH = 19;
-  const top = y + h / 2 - ((lines.length - 1) * lineH) / 2;
+export function AgentLoop() {
   return (
-    <g>
-      <rect x={x} y={y} width={w} height={h} rx={14} className={box} strokeWidth={1.5} />
-      {lines.map((l, i) => (
-        <text
-          key={l}
-          x={x + w / 2}
-          y={top + i * lineH}
-          textAnchor="middle"
-          dominantBaseline="central"
-          fontSize={i === 0 ? 15 : 13}
-          fontWeight={i === 0 ? 800 : 600}
-          className={i === 0 ? text : "fill-text-sub"}
-        >
-          {l}
-        </text>
-      ))}
-    </g>
-  );
-}
-
-function Arrow({ d, marker, dashed }: { d: string; marker: string; dashed?: boolean }) {
-  return (
-    <path
-      d={d}
-      fill="none"
-      className="stroke-text-tertiary"
-      strokeWidth={1.8}
-      strokeDasharray={dashed ? "5 4" : undefined}
-      markerEnd={`url(#${marker})`}
-    />
-  );
-}
-
-function ArrowHead({ id }: { id: string }) {
-  return (
-    <defs>
-      <marker
-        id={id}
-        viewBox="0 0 10 10"
-        refX="9"
-        refY="5"
-        markerWidth="7"
-        markerHeight="7"
-        orient="auto-start-reverse"
-      >
-        <path d="M0,0 L10,5 L0,10 z" className="fill-text-tertiary" />
-      </marker>
-    </defs>
-  );
-}
-
-const agents = ["일정", "자격", "선정", "서류"];
-
-function AgentChips({ x, y, cols }: { x: number; y: number; cols: number }) {
-  const w = 52;
-  const h = 26;
-  const gap = 8;
-  return (
-    <g>
-      {agents.map((a, i) => {
-        const cx = x + (i % cols) * (w + gap);
-        const cy = y + Math.floor(i / cols) * (h + gap);
-        return (
-          <g key={a}>
-            <rect x={cx} y={cy} width={w} height={h} rx={8} className="fill-surface" />
-            <text
-              x={cx + w / 2}
-              y={cy + h / 2}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={13}
-              fontWeight={700}
-              className="fill-brand-strong"
+    <figure className="rounded-card bg-surface m-0 flex flex-col gap-3 p-4 lg:p-6">
+      <ol className="bg-fill rounded-card m-0 grid list-none grid-cols-2 gap-3 p-2.5 lg:grid-cols-4 lg:gap-5">
+        {verificationSteps.map(({ title, detail }, index) => {
+          const last = index === verificationSteps.length - 1;
+          return (
+            <li
+              key={title}
+              className={cn(
+                "rounded-tile relative flex min-w-0 flex-col justify-center gap-1 px-3 py-2.5 text-center",
+                last ? "bg-brand-soft text-brand-strong" : "bg-surface",
+              )}
             >
-              {a}
-            </text>
-          </g>
-        );
-      })}
-    </g>
-  );
-}
-
-const loopTitle = "AI 담당이 넣고, 검증받고, 스스로 고치는 고리";
-const loopDesc =
-  "원문(줄 · 표 칸 번호) → AI 섹션 담당 4개(일정 · 자격 · 선정 · 서류) → 값과 원문 근거 넣기 → 코드 검증(근거 · 형식 · 금액). 고칠 것이 있으면 담당에게 알려 다시 고치고, 확실한 값은 게시, 확실하지 않은 값은 확인 필요로 사람 검수에 보내요.";
-
-/** PC: 가로 그림 (896 × 300, 본문 폭에서 1:1) */
-function LoopWide() {
-  const m = `loop${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  return (
-    <svg
-      viewBox="0 0 896 300"
-      role="img"
-      aria-labelledby={`${m}-t ${m}-d`}
-      className="h-auto w-full"
-    >
-      <title id={`${m}-t`}>{loopTitle}</title>
-      <desc id={`${m}-d`}>{loopDesc}</desc>
-      <ArrowHead id={m} />
-      <Box x={0} y={78} w={140} h={74} lines={["원문", "줄 · 표 칸 번호"]} />
-      <Arrow d="M140,115 L172,115" marker={m} />
-      <rect
-        x={176}
-        y={40}
-        width={196}
-        height={150}
-        rx={18}
-        className="fill-brand-soft stroke-brand"
-        strokeWidth={1.5}
-      />
-      <text
-        x={274}
-        y={68}
-        textAnchor="middle"
-        fontSize={15}
-        fontWeight={800}
-        className="fill-brand-strong"
-      >
-        AI 섹션 담당
-      </text>
-      <AgentChips x={218} y={90} cols={2} />
-      <Arrow d="M372,115 L404,115" marker={m} />
-      <Box x={408} y={78} w={150} h={74} lines={["값 넣기", "+ 원문 근거 번호"]} />
-      <Arrow d="M558,115 L590,115" marker={m} />
-      <Box x={594} y={78} w={150} h={74} lines={["코드 검증", "근거 · 형식 · 금액"]} />
-      <Arrow d="M744,108 C764,108 764,58 780,58" marker={m} />
-      <Arrow d="M744,122 C764,122 764,172 780,172" marker={m} />
-      <Box x={784} y={30} w={112} h={56} lines={["게시", "확실한 값"]} tone="ok" />
-      <Box x={784} y={144} w={112} h={56} lines={["확인 필요", "사람 검수"]} tone="check" />
-      <Arrow d="M669,152 L669,244 L274,244 L274,194" marker={m} dashed />
-      <text
-        x={471}
-        y={234}
-        textAnchor="middle"
-        fontSize={14}
-        fontWeight={700}
-        className="fill-text"
-      >
-        고칠 것 · 확인할 것을 알려 줘요
-      </text>
-      <text
-        x={471}
-        y={262}
-        textAnchor="middle"
-        fontSize={13}
-        fontWeight={600}
-        className="fill-text-sub"
-      >
-        담당이 스스로 고치고, 그래도 남은 문제는 사람 확인으로 넘겨요
-      </text>
-    </svg>
-  );
-}
-
-/** 모바일: 세로 그림 (340 × 520). 좁은 폭(320px)에서도 글자가 11px 아래로 줄지 않아요 */
-function LoopTall() {
-  const m = `loop${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  return (
-    <svg
-      viewBox="0 0 340 520"
-      role="img"
-      aria-labelledby={`${m}-t ${m}-d`}
-      className="mx-auto h-auto w-full max-w-[420px]"
-    >
-      <title id={`${m}-t`}>{loopTitle}</title>
-      <desc id={`${m}-d`}>{loopDesc}</desc>
-      <ArrowHead id={m} />
-      <Box x={60} y={0} w={240} h={58} lines={["원문", "줄 · 표 칸 번호"]} />
-      <Arrow d="M180,58 L180,82" marker={m} />
-      <rect
-        x={60}
-        y={86}
-        width={240}
-        height={128}
-        rx={18}
-        className="fill-brand-soft stroke-brand"
-        strokeWidth={1.5}
-      />
-      <text
-        x={180}
-        y={112}
-        textAnchor="middle"
-        fontSize={15}
-        fontWeight={800}
-        className="fill-brand-strong"
-      >
-        AI 섹션 담당
-      </text>
-      <AgentChips x={124} y={132} cols={2} />
-      <Arrow d="M180,214 L180,238" marker={m} />
-      <Box x={60} y={242} w={240} h={58} lines={["값 넣기", "+ 원문 근거 번호"]} />
-      <Arrow d="M180,300 L180,324" marker={m} />
-      <Box x={60} y={328} w={240} h={58} lines={["코드 검증", "근거 · 형식 · 금액"]} />
-      <Arrow d="M60,357 L22,357 L22,150 L56,150" marker={m} dashed />
-      <text
-        x={14}
-        y={254}
-        textAnchor="middle"
-        fontSize={12}
-        fontWeight={700}
-        className="fill-text"
-        transform="rotate(-90 14 254)"
-      >
-        고칠 것을 알려 줘요
-      </text>
-      <Arrow d="M140,386 L100,430" marker={m} />
-      <Arrow d="M220,386 L260,430" marker={m} />
-      <Box x={36} y={434} w={128} h={60} lines={["게시", "확실한 값"]} tone="ok" />
-      <Box x={176} y={434} w={128} h={60} lines={["확인 필요", "사람 검수"]} tone="check" />
-    </svg>
-  );
-}
-
-export function AgentLoop({ web }: Variant) {
-  return (
-    <figure
-      className={cn(
-        "rounded-card bg-surface m-0 flex flex-col gap-[14px]",
-        web ? "px-[32px] py-[28px]" : "px-[16px] py-[20px]",
-      )}
-    >
-      {web ? <LoopWide /> : <LoopTall />}
-      <figcaption className="text-text-sub text-[14px] leading-[1.6]">
-        담당 넷이 같은 원문을 읽고 각자 맡은 섹션만 넣어요. 값을 넣을 때마다 코드가 바로 검사해
-        「고칠 것」을 돌려주고, 담당은 그걸 보고 고쳐요. 게시할지는 AI가 아니라 코드 관문이 정해요.
+              <strong className="text-sm">{title}</strong>
+              <span className="text-text-sub text-xs leading-relaxed">{detail}</span>
+              {!last && (
+                <ArrowRight
+                  size={14}
+                  className="text-text-sub absolute top-1/2 -right-[17px] hidden -translate-y-1/2 lg:block"
+                  aria-hidden
+                />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <figcaption className="text-text-sub text-sm leading-relaxed">
+        코드가 검증 결과를 돌려주면 AI 담당이 값을 고쳐요. 검증을 통과한 값은 게시하고, 확인이
+        필요한 값은 사람이 원문을 다시 봐요.
       </figcaption>
     </figure>
   );
@@ -512,17 +274,14 @@ export function ReviewCases({ web }: Variant) {
   return (
     <ul
       className={cn(
-        "rounded-card bg-surface m-0 flex list-none flex-col p-0",
-        web ? "px-[28px] py-[8px]" : "px-[18px] py-[4px]",
+        "rounded-card bg-surface m-0 flex list-none flex-col gap-2 p-0",
+        web ? "p-5" : "p-3",
       )}
     >
-      {reviewCases.map((c, i) => (
+      {reviewCases.map((c) => (
         <li
           key={c}
-          className={cn(
-            "flex items-start gap-[10px] py-[14px] text-[15px] leading-[1.6]",
-            i > 0 && "border-line-soft border-t border-solid",
-          )}
+          className="rounded-tile bg-fill flex items-start gap-2.5 px-3 py-2.5 text-sm leading-relaxed"
         >
           <span className="rounded-badge bg-check-bg text-check-text mt-[2px] flex-none px-[7px] py-[2px] text-[12px] font-bold">
             확인 필요
@@ -559,7 +318,7 @@ function Bar({ value, tone, label }: { value: number; tone: "old" | "new"; label
         <span
           className={cn(
             "absolute inset-y-0 left-0 rounded-[6px]",
-            tone === "new" ? "bg-brand" : "bg-off",
+            tone === "new" ? "bg-brand/70" : "bg-off",
           )}
           style={{ width: `${value}%` }}
         />

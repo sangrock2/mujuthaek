@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
+import { cn } from "@/shared/lib/cn";
 import { CustomerCenterHeader } from "@/features/content/components/WebContentShell";
 import { FilterChip } from "@/shared/ui/Chip";
 import { useAnnouncements } from "@/features/content/queries";
@@ -26,12 +28,22 @@ export function MNotices() {
   };
 
   return (
-    <div className="stitch-surface bg-surface text-text flex min-h-screen w-full flex-col">
-      <CustomerCenterHeader current={routes.announcements} />
-      <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col pt-[12px] pb-[24px]">
-        <h1 className="tracking-h1 m-0 px-4 pt-4 text-[24px] font-extrabold">공지사항</h1>
+    <div className="stitch-surface bg-bg text-text flex min-h-screen w-full flex-col">
+      <CustomerCenterHeader current={routes.announcements} sticky />
+      <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col gap-4 px-4 py-6">
+        <div>
+          <h1 className="tracking-h1 m-0 text-[26px] font-extrabold">공지사항</h1>
+          {!current && (
+            <p className="text-text-sub mt-1 mb-0 text-sm">
+              새 기능, 점검, 정책 변경 소식을 알려드려요
+            </p>
+          )}
+        </div>
         {current ? (
-          <article className="flex flex-col gap-[16px] px-[20px] py-[8px]">
+          <article
+            aria-label="공지 상세"
+            className="rounded-card bg-surface flex flex-col gap-4 p-5 [overflow-wrap:anywhere]"
+          >
             <button
               type="button"
               onClick={() => open(null)}
@@ -97,19 +109,27 @@ export function MNotices() {
             )}
           </article>
         ) : (
-          <div className="flex flex-col">
-            <div role="group" aria-label="공지 종류" className="flex gap-[6px] px-[16px] pb-[8px]">
-              {announcementCategories.map((c) => (
-                <FilterChip
-                  key={c}
-                  selected={c === category}
-                  onCard
-                  onClick={() => setCategory(c)}
-                  className="min-h-[38px] px-[14px] font-bold"
-                >
-                  {c}
-                </FilterChip>
-              ))}
+          <section aria-label="공지 목록" className="flex flex-col gap-2">
+            <div className="rounded-card bg-surface flex flex-wrap items-center justify-between gap-x-2 p-2">
+              <div role="group" aria-label="공지 종류" className="flex flex-wrap gap-1">
+                {announcementCategories.map((c) => (
+                  <FilterChip
+                    key={c}
+                    selected={c === category}
+                    onCard
+                    onClick={() => setCategory(c)}
+                    className={cn(
+                      "px-2.5 text-[13px] font-bold",
+                      c === category && "bg-brand-soft text-brand-strong",
+                    )}
+                  >
+                    {c}
+                  </FilterChip>
+                ))}
+              </div>
+              <span aria-live="polite" className="text-text-sub px-2 text-xs tabular-nums">
+                총 {shown.length}건
+              </span>
             </div>
             {shown.length === 0 && (
               <p className="text-text-sub px-[24px] py-[20px]">등록된 공지사항이 없어요</p>
@@ -119,22 +139,25 @@ export function MNotices() {
                 key={n.id}
                 type="button"
                 onClick={() => open(n.id)}
-                className="border-line-soft bg-surface text-text flex cursor-pointer flex-col gap-[6px] border-0 border-b border-solid px-[20px] py-[16px] text-left"
+                className="rounded-card bg-surface text-text flex cursor-pointer items-center gap-2 px-4 py-3.5 text-left"
               >
-                <span className="flex w-full items-center gap-[8px]">
-                  {n.pinned && (
-                    <span className="rounded-tag bg-check-bg text-check-text px-[7px] py-[2px] text-[12px] font-extrabold">
-                      중요
-                    </span>
-                  )}
-                  <span className="text-brand-strong text-[13px] font-bold">{n.category}</span>
-                  <span className="flex-1" />
-                  <span className="text-text-sub text-[12px]">{n.date}</span>
+                <span className="flex min-w-0 flex-1 flex-col gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
+                    {n.pinned && (
+                      <span className="rounded-tag bg-check-bg text-check-text px-[7px] py-[2px] text-[12px] font-extrabold">
+                        중요
+                      </span>
+                    )}
+                    <span className="text-brand-strong text-[13px] font-bold">{n.category}</span>
+                    <span className="flex-1" />
+                    <span className="text-text-sub text-[12px]">{n.date}</span>
+                  </span>
+                  <span className="text-[16px] leading-[1.45] font-bold">{n.title}</span>
                 </span>
-                <span className="text-[16px] leading-[1.45] font-bold">{n.title}</span>
+                <ChevronRight className="text-text-sub shrink-0" size={16} aria-hidden />
               </button>
             ))}
-          </div>
+          </section>
         )}
       </main>
     </div>

@@ -14,19 +14,20 @@ import {
 } from "@/features/content/components/HowItWorksParts";
 import { WebContentMain, WebContentShell } from "@/features/content/components/WebContentShell";
 import { routes } from "@/shared/lib/routes";
+import { ScrollToTop } from "@/shared/ui/ScrollToTop";
 
 /** 「무주택자들은 어떻게 만들었나요」 (PC) */
 export function WebHowItWorks() {
   const web = true;
   return (
     <WebContentShell current={routes.howItWorks}>
-      <WebContentMain className="max-w-[960px] gap-[40px] pt-[48px]">
+      <WebContentMain className="max-w-[960px] gap-7 lg:pt-8">
         <div className="flex flex-col gap-[10px]">
           <span className="text-brand-strong text-[15px] font-bold">서비스 소개</span>
-          <h1 className="tracking-h1 m-0 text-[34px] leading-[1.3] font-extrabold">
+          <h1 className="tracking-h1 m-0 text-[34px] leading-[1.25] font-extrabold">
             무주택자들은 어떻게 만들었나요
           </h1>
-          <p className="text-text-sub m-0 text-[17px] leading-[1.7]">
+          <p className="text-text-sub m-0 max-w-[720px] text-base leading-relaxed">
             여러 기관에 흩어진 공고를 모으고, 첨부 원문에서 자격 · 일정 · 서류를 뽑아, 내 조건으로
             지원할 수 있는지 알려 드리기까지의 과정을 보여 드려요.
           </p>
@@ -53,7 +54,7 @@ export function WebHowItWorks() {
               sub="AI를 한 번 불러 결과를 받는 데서 끝나지 않아요. 섹션을 나눠 맡은 AI 담당이 값을 넣고, 코드의 검증 결과를 받아 스스로 고쳐요"
             />
           </div>
-          <AgentLoop web={web} />
+          <AgentLoop />
           <Roles web={web} />
         </section>
 
@@ -103,13 +104,13 @@ export function WebHowItWorks() {
           <span className="flex flex-wrap gap-[8px]">
             <Link
               href={routes.faq}
-              className="rounded-control bg-fill text-text hover:text-text inline-flex min-h-[52px] items-center px-[18px] text-[15px] font-bold no-underline"
+              className="rounded-pill bg-brand-soft text-brand-strong hover:text-brand-strong inline-flex min-h-11 items-center px-4 text-sm font-bold no-underline"
             >
               자주 묻는 질문
             </Link>
             <Link
               href={routes.home}
-              className="rounded-control bg-brand inline-flex min-h-[52px] items-center gap-[4px] px-[20px] text-[16px] font-extrabold text-white no-underline hover:text-white"
+              className="rounded-pill bg-brand inline-flex min-h-11 items-center gap-1 px-4 text-sm font-extrabold text-white no-underline hover:text-white"
             >
               서비스로 가기
               <ChevronRight size={18} strokeWidth={2.2} aria-hidden />
@@ -117,6 +118,7 @@ export function WebHowItWorks() {
           </span>
         </section>
       </WebContentMain>
+      <ScrollToTop />
     </WebContentShell>
   );
 }
